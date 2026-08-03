@@ -1,0 +1,14 @@
+# Contexto de build = raíz del repo (lo comparten ambos Dockerfiles).
+# Excluir lo pesado y los secretos; el código fuente SÍ entra.
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.git
+*.log
+
+# Secretos: nunca hornear en la imagen (se montan en runtime).
+.env
+config/bq_credentials.json

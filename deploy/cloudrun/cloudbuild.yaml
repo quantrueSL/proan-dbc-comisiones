@@ -1,0 +1,40 @@
+# Construye las dos imágenes del servicio. Contexto = raíz del repo, que es
+# lo que esperan los dos Dockerfiles.
+#
+#   gcloud builds submit . --config=deploy/cloudrun/cloudbuild.yaml \
+#     --substitutions=_REPO=...,_TAG=...
+#
+# DOCKER_BUILDKIT=1 es obligatorio: el Dockerfile de comisionesbi usa
+# `RUN --mount=type=cache`, que el constructor clásico no entiende.
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: frontend
+    env: ["DOCKER_BUILDKIT=1"]
+    args:
+      - build
+      - -f
+      - apps/frontend/Dockerfile.prod
+      - -t
+      - ${_REPO}/dbc-frontend:${_TAG}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    id: comisionesbi
+    env: ["DOCKER_BUILDKIT=1"]
+    args:
+      - build
+      - -f
+      - apps/comisionesbi/Dockerfile
+      - -t
+      - ${_REPO}/dbc-comisionesbi:${_TAG}
+      - .
+
+images:
+  - ${_REPO}/dbc-frontend:${_TAG}
+  - ${_REPO}/dbc-comisionesbi:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1800s

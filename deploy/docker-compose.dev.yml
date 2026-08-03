@@ -1,0 +1,110 @@
+# =============================================================================
+# Comisiones DBC — stack LOCAL de DESARROLLO
+#
+# Patrón calcado de proan-hidrocarburos (que a su vez viene de Maka, recortado
+# a lo imprescindible). 3 contenedores:
+#   dbc-nginx-dev         reverse proxy (http :8080)
+#   dbc-frontend-dev      Next.js (Comisiones DBC, login Google + .htpasswd)
+#   dbc-comisionesbi-dev  backend FastAPI (BigQuery)
+#
+# Sin gateway, auth-service, postgres, redis, celery, workers, weaviate.
+#
+# Arranque (desde la raíz del repo):
+#   # coloca la service-account BigQuery en config/bq_credentials.json
+#   docker compose -f deploy/docker-compose.dev.yml up --build
+#   # → http://localhost:8080
+# =============================================================================
+
+name: dbc-comisiones
+
+services:
+  dbc-comisionesbi-dev:
+    container_name: dbc-comisionesbi-dev
+    image: dbc-comisionesbi:dev
+    build:
+      context: ..
+      dockerfile: apps/comisionesbi/Dockerfile
+    expose:
+      - "8091"
+    env_file:
+      - ../config/comisionesbi.env
+    environment:
+      - ENV=development
+    volumes:
+      # Hot-reload: monta solo el paquete (preserva la .venv de la imagen).
+      - ../apps/comisionesbi/comisionesbi:/app/apps/comisionesbi/comisionesbi
+      # Credenciales BigQuery (config/bq_credentials.json → BQ_CREDENTIALS_PATH).
+      - ../config:/app/config:ro
+    command: >
+      uvicorn comisionesbi.app:app --host 0.0.0.0 --port 8091
+      --reload --reload-dir /app/apps/comisionesbi/comisionesbi
+    networks:
+      - dbc_comisiones_net
+    restart: unless-stopped
+
+  dbc-frontend-dev:
+    container_name: dbc-frontend-dev
+    image: dbc-frontend:dev
+    build:
+      context: ..
+      dockerfile: apps/frontend/Dockerfile
+    expose:
+      - "3000"
+    depends_on:
+      - dbc-comisionesbi-dev
+    environment:
+      - COMISIONESBI_SERVICE_URL=http://dbc-comisionesbi-dev:8091
+      - HTPASSWD_PATH=/etc/dbc/.htpasswd
+      - SESSION_COOKIE_NAME=dbc_comisiones_session
+      - SESSION_COOKIE_SECURE=false
+      # Firma de la cookie de sesión. En desarrollo vale cualquier cosa; en
+      # producción es obligatorio y va en Secret Manager (ver LOGIN.md).
+      - SESSION_SECRET=dbc-comisiones-dev-session-secret-no-usar-en-produccion
+      # Lectura de la lista de acceso en Firestore (LOGIN.md Capa 1). En Cloud
+      # Run lo resuelve la identidad del servicio; en local hay que darle la
+      # misma service account que usa el backend.
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/config/bq_credentials.json
+      - GCP_PROJECT=proan-quantrue
+      - FIRESTORE_DATABASE_ID=proan-lista-mails
+      - ACCESS_LIST_ID=dbc_comisiones_acceso
+      # Firebase Authentication (LOGIN.md Capa 2). Mismo proyecto Firebase que
+      # proan-hidrocarburos (proan-quantrue) — TODO: registrar una app web
+      # propia "comisiones-dbc-frontend" en la consola de Firebase y sustituir
+      # estos valores (hoy son los de referencia de hidrocarburos, no válidos
+      # para este servicio hasta que se registre la app real).
+      - FIREBASE_API_KEY=TODO_registrar_app_web_en_firebase
+      - FIREBASE_AUTH_DOMAIN=proan-quantrue.firebaseapp.com
+      - FIREBASE_APP_ID=TODO_registrar_app_web_en_firebase
+      # Bind mounts en Windows no propagan eventos de fichero → sin polling
+      # next dev no recompila los cambios.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ../apps/frontend/app:/app/apps/frontend/app
+      - ../apps/frontend/src:/app/apps/frontend/src
+      - ../apps/frontend/client.config.ts:/app/apps/frontend/client.config.ts
+      - ../apps/frontend/next.config.mjs:/app/apps/frontend/next.config.mjs
+      # Usuarios (bcrypt) — editable en caliente sin rebuild.
+      - ./nginx/.htpasswd:/etc/dbc/.htpasswd:ro
+      # Service account (la misma que el backend) para leer Firestore.
+      - ../config:/app/config:ro
+    networks:
+      - dbc_comisiones_net
+    restart: unless-stopped
+
+  dbc-nginx-dev:
+    container_name: dbc-nginx-dev
+    image: nginx:latest
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - dbc-frontend-dev
+    networks:
+      - dbc_comisiones_net
+    restart: unless-stopped
+
+networks:
+  dbc_comisiones_net:
+    name: dbc_comisiones_net

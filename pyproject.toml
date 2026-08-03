@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------------------
+# uv workspace root — Comisiones DBC
+# ---------------------------------------------------------------------------
+# Patrón calcado de proan-hidrocarburos (derivado a su vez del monorepo de
+# Maka, recortado a lo imprescindible): solo el servicio comisionesbi. El
+# frontend (apps/frontend) es Node/pnpm y NO forma parte de este workspace de
+# Python.
+#
+#   uv sync                        → instala todos los miembros
+#   uv sync --package comisionesbi → instala solo el backend y sus deps
+#   uv lock                        → regenera uv.lock tras cambiar dependencias
+# ---------------------------------------------------------------------------
+
+[project]
+name = "dbc-comisiones-workspace"
+version = "0.0.0"
+requires-python = ">=3.11,<3.12"
+
+[tool.uv.workspace]
+members = [
+    "apps/comisionesbi",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.uv]

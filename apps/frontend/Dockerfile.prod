@@ -1,0 +1,42 @@
+# Dockerfile de PRODUCCIÓN del frontend (Next.js standalone).
+# Contexto de build: RAÍZ del repo. Rutas apps/frontend/...
+#   docker build -f apps/frontend/Dockerfile.prod -t dbc-frontend-prod .
+#
+# Compila un build standalone: el contenedor final no lleva el árbol completo
+# de node_modules ni el TypeScript fuente. A diferencia de Maka, aquí hay un
+# único cliente (Proan) — no existe la build-arg NEXT_PUBLIC_CLIENT.
+
+FROM node:20-alpine AS deps
+WORKDIR /app/apps/frontend
+RUN corepack enable
+COPY apps/frontend/package.json apps/frontend/pnpm-lock.yaml ./
+RUN corepack pnpm install --frozen-lockfile
+
+FROM node:20-alpine AS builder
+WORKDIR /app/apps/frontend
+RUN corepack enable
+COPY --from=deps /app/apps/frontend/node_modules ./node_modules
+COPY apps/frontend/package.json apps/frontend/pnpm-lock.yaml ./
+COPY apps/frontend/app ./app
+COPY apps/frontend/src ./src
+COPY apps/frontend/client.config.ts ./client.config.ts
+COPY apps/frontend/next.config.mjs ./next.config.mjs
+COPY apps/frontend/tsconfig.json ./tsconfig.json
+COPY apps/frontend/next-env.d.ts ./next-env.d.ts
+COPY apps/frontend/.eslintrc.json ./.eslintrc.json
+RUN corepack pnpm build
+
+FROM node:20-alpine AS runner
+WORKDIR /app/apps/frontend
+ENV NODE_ENV=production
+# Cloud Run inyecta $PORT; el server.js de Next lee PORT/HOSTNAME.
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+# Salida standalone: server.js autocontenido + node_modules podado.
+COPY --from=builder /app/apps/frontend/.next/standalone ./
+COPY --from=builder /app/apps/frontend/.next/static ./.next/static
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

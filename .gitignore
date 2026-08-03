@@ -1,0 +1,27 @@
+# Credenciales y secretos — nunca deben acabar comiteados.
+.env
+.env.*
+!.env.example
+config/bq_credentials.json
+deploy/nginx/.htpasswd
+*.key
+*.pem
+
+# Python (apps/comisionesbi)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node / Next.js (apps/frontend ya trae su propio .gitignore; esto es red
+# de seguridad para el resto del repo).
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Salidas y logs locales.
+*.log
+backup/

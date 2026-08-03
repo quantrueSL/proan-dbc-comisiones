@@ -1,0 +1,112 @@
+# Servicio Cloud Run de Comisiones DBC: UN servicio con DOS contenedores.
+#
+#   frontend (Next.js)     ← única entrada, recibe el tráfico HTTP
+#   comisionesbi (FastAPI) ← sidecar, escucha en localhost:8091
+#
+# Por qué sidecar y no dos servicios: el backend queda sin URL pública, así que
+# no hay nada que proteger con IAM ni tokens de identidad entre servicios, y
+# `COMISIONESBI_SERVICE_URL=http://localhost:8091` sigue siendo cierto igual
+# que en el compose de desarrollo — cero cambios de código. A cambio escalan y
+# se despliegan juntos, que para esta herramienta no es problema.
+#
+# Patrón calcado de proan-hidrocarburos/deploy/cloudrun/service.yaml.
+#
+# Los placeholders __REPO__, __TAG__ y __SERVICE_ACCOUNT__ los rellena deploy.sh.
+# No se despliega con `gcloud run deploy`: los sidecars solo se describen en YAML.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: plataforma-comisiones-dbc
+spec:
+  template:
+    metadata:
+      annotations:
+        # El frontend arranca después del backend, para que la primera petición
+        # no llegue con el sidecar a medio levantar.
+        run.googleapis.com/container-dependencies: '{"frontend":["comisionesbi"]}'
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "2"
+    spec:
+      serviceAccountName: __SERVICE_ACCOUNT__
+      containerConcurrency: 20
+      timeoutSeconds: 300
+      containers:
+        # ── Entrada ──────────────────────────────────────────────────────
+        - name: frontend
+          image: __REPO__/dbc-frontend:__TAG__
+          ports:
+            - name: http1
+              containerPort: 3000
+          env:
+            - name: COMISIONESBI_SERVICE_URL
+              value: http://localhost:8091
+            - name: SESSION_COOKIE_SECURE
+              value: "true"
+            - name: SESSION_COOKIE_NAME
+              value: dbc_comisiones_session
+            - name: HTPASSWD_PATH
+              value: /etc/dbc/.htpasswd
+            - name: GCP_PROJECT
+              value: proan-quantrue
+            - name: FIRESTORE_DATABASE_ID
+              value: proan-lista-mails
+            - name: ACCESS_LIST_ID
+              value: dbc_comisiones_acceso
+            # Configuración pública del SDK web de Firebase — TODO: registrar
+            # una app web propia "comisiones-dbc-frontend" en Firebase Console
+            # (mismo proyecto proan-quantrue) y sustituir estos valores.
+            - name: FIREBASE_API_KEY
+              value: TODO_registrar_app_web_en_firebase
+            - name: FIREBASE_AUTH_DOMAIN
+              value: proan-quantrue.firebaseapp.com
+            - name: FIREBASE_APP_ID
+              value: TODO_registrar_app_web_en_firebase
+            # Sin este secreto la sesión no se firma: el arranque falla a propósito.
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dbc-comisiones-session-secret
+                  key: latest
+          volumeMounts:
+            - name: htpasswd
+              mountPath: /etc/dbc
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+
+        # ── Sidecar ──────────────────────────────────────────────────────
+        - name: comisionesbi
+          image: __REPO__/dbc-comisionesbi:__TAG__
+          env:
+            # Explícito: Cloud Run solo inyecta PORT en el contenedor de entrada.
+            - name: PORT
+              value: "8091"
+            - name: BQ_PROJECT_ID
+              value: proan-quantrue
+            - name: BQ_LOCATION
+              value: us-west4
+            # Sin BQ_CREDENTIALS_PATH a propósito: db.py cae a las credenciales
+            # de aplicación, que aquí son la identidad del servicio.
+          startupProbe:
+            tcpSocket:
+              port: 8091
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            limits:
+              cpu: "1"
+              # pandas + pyarrow + bigquery: 512Mi se queda corto.
+              memory: 2Gi
+
+      volumes:
+        # El .htpasswd llega como fichero desde Secret Manager. Añadir un
+        # usuario técnico es crear una versión nueva del secreto y redesplegar,
+        # sin reconstruir imágenes y sin que los hashes vivan en el repositorio.
+        - name: htpasswd
+          secret:
+            secretName: dbc-comisiones-htpasswd
+            items:
+              - key: latest
+                path: .htpasswd

@@ -1,0 +1,25 @@
+# Qué NO se sube a Cloud Build. Sin este fichero, gcloud deriva uno del
+# .gitignore, pero conviene ser explícito. Espejo del .dockerignore, más lo
+# que no interviene en ningún build.
+
+.git
+.gcloudignore
+
+# Dependencias y artefactos: los reconstruye la imagen.
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+*.log
+
+# Secretos: nunca deben viajar al build ni acabar en una imagen.
+.env
+.env.*
+config/bq_credentials.json
+deploy/nginx/.htpasswd
+
+# Material que no participa en los builds (documentación de descubrimiento de
+# datos, no código de la app).
+.claude/
