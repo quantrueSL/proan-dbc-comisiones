@@ -13,12 +13,12 @@ from __future__ import annotations
 
 from comisionesbi.db import get_bq_client
 
-# TODO: verificar el nombre exacto de la(s) columna(s) descriptiva(s) de
-# dm_business_area contra el esquema real en BigQuery — solo se confirmó en
-# la exploración de datos que `sales_division` es la llave de cruce (100% de
-# cobertura). SELECT * de momento para no asumir un nombre de columna.
+# Confirmado contra el esquema real: la llave de cruce de dm_business_area es
+# business_area_code (NO sales_division -- ese es el nombre del campo en las
+# tablas de origen tipo sap_2lis_13_vditm_billing_document_item, no en esta
+# tabla de dimensión), y business_area_name es la descripción.
 _DIVISIONES_SQL = """
-SELECT *
+SELECT business_area_code, business_area_name
 FROM `proan-quantrue.D20_DIMENSION.dm_business_area`
 """
 

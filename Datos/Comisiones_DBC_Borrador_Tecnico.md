@@ -17,11 +17,11 @@ DBC opera como distribuidor: recibe producto y lo distribuye a través de sus CE
 
 Los datos viven en BigQuery, proyecto `proan-quantrue` (región `us-west4`) — compartido por todo el grupo (Proan, DBC, Superdoña, Malta, entre otros), no solo por DBC.
 
-**Filtro maestro:** `company_code = 'DBC'` en la tabla de facturación aísla correctamente los datos de DBC. Las plantas (`receiving_plant` / `WERKS`) bajo este código:
+**Filtro maestro:** `company_code = 'DBC'` en la tabla de facturación aísla correctamente los datos de DBC (confirmado también en `sap_pago` — no en `sap_VBAK`/`sap_VBAP`, que no tienen este campo). Las plantas (`receiving_plant` / `WERKS`) bajo este código — lista corregida contra `SELECT DISTINCT receiving_plant WHERE company_code = 'DBC'` (la versión original de esta lista no traía `H7DU` ni `H7TX`, lo que dejaba fuera datos reales de "vendido", que depende de esta lista al no tener `company_code` propio):
 
 ```
 DBCF, DBC1, DBC3, H7LA, H7L1, H7L2, H7SL, H7SI, H7AG, H7SM,
-H7QU, H7CE, H7SA, H7MI, H7MO, H7UR, H7ZA, H7IR, H7SJ
+H7QU, H7CE, H7SA, H7MI, H7MO, H7UR, H7ZA, H7IR, H7SJ, H7DU, H7TX
 ```
 
 Nota de calidad de datos: sin este filtro, la tabla mezcla divisiones ajenas a DBC. También hay `billing_date` con años inválidos (2201, 2202) que deben excluirse con un rango de fecha razonable.
@@ -158,22 +158,30 @@ El reporte cierra con **Factura Proveedor (comisionista)**: factura + documento 
 
 Un comisionista agrupa varias oficinas de venta (ej. `0019-0092`, `0005-0071`, `0012-0145`). El propio reporte del cliente marca esto como pendiente ("PENDIENTE NOMBRE OFICINA DE VENTAS") — no lo tienen resuelto ni ellos. Nuestra fuente `proan_TVKBT_20260728` (oficina + nombre) más `dm_cedis` puede ayudar a reconstruir la relación, pero falta la agrupación por comisionista específicamente.
 
-## 8. Conversión de unidades a caja (CJ)
+## 8. Conversión de unidades a caja (CJ) — RESUELTO
 
-La comisión se paga por caja, pero `invoiced_quantity` en facturación viene en unidades mixtas (`CS`, `PZA`, `PAQ`, `SAC`). Existen `denominator_conversion_sku` (en facturación) y `MEINS_base_unit`/`MEINH_alternative_unit` (en el maestro) como candidatos para la conversión. **Pendiente, se revisará más adelante con detenimiento** — no bloquea el avance actual.
+La comisión se paga por caja, pero `invoiced_quantity` en facturación viene en unidades mixtas (`CS`, `PZA`, `PAQ`, `SAC`, `KG`, entre otras). El monto facturado en `CS` es solo 50.6% del total DBC 2026 (V12 de `v1_verificaciones.sql`) — el resto (`PAQ` 31.2%, `KG` 9.3%, `PZA` 5.5%, `SAC` 3.0%) sí necesitaba conversión, no era un tema marginal.
+
+Se probaron dos candidatos ya presentes en `sap_2lis_13_vditm_billing_document_item` (confirmados vía la consulta de referencia del senior + `INFORMATION_SCHEMA`):
+
+- `denominator_conversion_sku` — **descartado**. En la muestra de `PAQ`/`PZA` es literalmente `1` en todas las filas sin importar material ni cantidad; en `KG` no guarda relación consistente con `invoiced_quantity` (razones 100/50/25/20/4/3.57 sin patrón). No es un factor de conversión confiable.
+- `stockkeeping_units` — **confirmado como la solución**. `invoiced_quantity / stockkeeping_units` da un factor constante por material a través de miles de filas (ej. ~18.00 kg/caja para un material, factor exacto 1.0 para la mayoría de materiales en `PAQ`/`SAC`/`PZA`), validado sobre los 50 casos de peor varianza de todo el dataset (V14) — y sin NULLs ni ceros en ninguna unidad (V15). Únicas excepciones: la unidad `COM` completa (213 filas, 0.20% del monto) y un puñado de materiales `CUT`/`KG` de muestra chica muestran el factor inconsistente — impacto marginal (<0.5% del monto total), se dejan como están.
+
+Ya incorporado en `Datos/sql/v1_flujo_producto_dbc.sql` (sección 14) como columna `cantidad_cajas`, disponible solo para "facturado" (no hay campo equivalente confirmado en `sap_VBAP` para "vendido", y `sap_pago` no llega a nivel material para "cobrado").
 
 ## 9. Pendientes y riesgos abiertos (internos)
 
 | # | Tema | Detalle |
 |---|---|---|
-| 1 | Duplicados en el cruce con `dm_cedis` | Algunas combinaciones de almacén + oficina tienen más de un "sector" asociado, generando filas duplicadas (fan-out). Falta regla de desempate. |
+| 1 | Duplicados en el cruce con `dm_cedis` | Medido: de 187 combinaciones almacén+oficina con más de una fila, 151 son duplicados inofensivos (mismo sector repetido) y 36 sí son un conflicto real — siempre entre los mismos dos sectores: "Huevo (H) y Croqueta (IA)" vs. "Tortilla (A)" (parecen almacenes/oficinas compartidos entre esas divisiones). Falta que el negocio confirme cómo repartir esos 36 casos; hoy `dim_cedis_v1` usa una regla provisional (primer sector alfabético). |
 | 2 | DERIVADOS DE GANADO no cruza | Planta DBC1 / almacén DG01 no encontró registro en `dm_cedis`. |
 | 3 | Campo de importe oficial en facturado | Confirmar cuál columna de monto es "lo facturado" ante Hacienda. |
 | 4 | Calidad de fechas | `billing_date` con años inválidos (2201, 2202) — filtrar rango razonable. |
 | 5 | Datasets por explorar | `D40_EDW`, `D60_REPORTING`, `D62_STREAMLIT` — no se pudo listar su contenido, confirmar si es tema de permisos. |
 | 6 | Proxy de SET por texto — **descartado** | Probado en división Huevo: 32.6% sin clasificar, "Rancho" con 0 matches, marca "Campiña" no contemplada. No es viable ni como interino (ver sección 5). Se avanza con SET como dimensión pendiente/nula hasta GS03. |
-| 7 | Conversión a CJ | Ver sección 8 — pendiente de revisar. |
+| 7 | Conversión a CJ | **Resuelto** — ver sección 8. `stockkeeping_units` (facturado) es la cantidad ya convertida a caja, validado con datos reales; ya incorporado como `cantidad_cajas` en `v1_flujo_producto_dbc.sql`. Excepción de bajo impacto (<0.5% del monto) en `COM`/algunos materiales `CUT`/`KG`. |
 | 8 | Validar traspasos vía `sap_mseg` | Confirmar que reproduce los totales de `MB51` (sección 4.0). |
+| 9 | Facturas repartidas entre 2 almacenes | Confirmado con datos reales: hay `billing_document` con mismo centro y oficina pero 2 `storage_location` distintos. `v1_flujo_producto_dbc` hoy reparte esto con una regla provisional (se queda con un almacén al heredar el sitio para "cobrado") — falta que el negocio confirme cómo repartir el monto cobrado entre los almacenes reales de esas facturas. |
 
 ## 10. Preguntas pendientes para el cliente
 
@@ -181,6 +189,8 @@ La comisión se paga por caja, pero `invoiced_quantity` en facturación viene en
 2. **Tabla oficial de tarifas de comisión** (TX `ZSDFI_001`) — por ahora solo tenemos tarifas derivadas empíricamente de los reportes (sección 6.1), no la fuente oficial.
 3. **Relación comisionista ↔ oficinas de venta**, con nombre — el cliente mismo lo marca como pendiente en su reporte.
 4. **Rango de número de proveedor** que identifica comisionistas en SAP, y su **frecuencia de liquidación** (semanal/mensual).
+
+_Ver sección 15 para el estado consolidado de estas preguntas (qué ya contestó el cliente, qué falta) y la lista actualizada de dudas a futuro._
 
 ## 11. Propuesta de arquitectura (borrador)
 
@@ -221,3 +231,56 @@ La comisión se paga por caja, pero `invoiced_quantity` en facturación viene en
 ### 13.4 Lectura general
 
 El modelo de datos (4 capas), la estructura de tarifa y el diseño de reglas están validados contra reportes reales del cliente — la arquitectura de fondo está alineada con el objetivo. Lo que falta para completar los 3 módulos no es diseño ni exploración de datos propios, es **información que solo puede dar el cliente**: GS03 (SETs), `ZSDFI_001` (tarifa oficial), comisionista↔oficinas, y rango de proveedor/frecuencia. El área que sí depende de nosotros y sigue abierta es conciliación documental (módulo 3), casi sin explorar todavía, y la validación de traspasos.
+
+## 14. v1 de datos — vista de flujo de producto
+
+Primera versión de la capa de datos propuesta en la sección 11, ya escrita como SQL: [`Datos/sql/v1_flujo_producto_dbc.sql`](./sql/v1_flujo_producto_dbc.sql).
+
+Une vendido + facturado + cobrado (las 3 capas ya resueltas y validadas de la sección 4) en una sola vista `v1_flujo_producto_dbc` (un renglón por evento, columna `fase` para distinguir), más una vista agregada `v1_flujo_producto_dbc_resumen_diario` (por fecha × división × CEDIS × tipo_venta × fase) lista para KPIs. Deja fuera a propósito traspasos (sin validar contra `MB51`, pendiente #8) y el SET de producto (bloqueado por GS03, sección 5) — expone `material_number` en su lugar, que ya alcanza para el detalle de producto del dashboard. Incluye `cantidad_cajas` (solo en "facturado" — sección 8, pendiente #7 resuelto), la cantidad ya normalizada a caja, lista para cruzarse contra la tarifa $/caja de la sección 6.1 en cuanto exista el mapeo a SET.
+
+Incluye también `dim_cedis_v1`, que resuelve el fan-out de la sección 9 (pendiente #1) con una regla de desempate provisional (primer sector en orden alfabético) — ajustar cuando el negocio defina la regla real.
+
+**Sin validar contra BigQuery real todavía** — se escribió a partir de los nombres de tabla/columna ya documentados en este borrador, pero sin correrlo (sin acceso a BigQuery desde el entorno donde se escribió). Antes de conectarlo al dashboard: correr el script, confirmar nombres de columna exactos (marcados con TODO en el archivo) y ajustar tipos si hace falta.
+
+## 15. Dudas al cliente — estado consolidado
+
+Consolida en un solo lugar el correo ya enviado al cliente (`Dudas Senior a cliente (a tener en cuenta).md`) contra lo que sus 6 excels de ejemplo (semana 19-25 jul 2025: `DBC-BO`, `DBC-IA`, `DBC-A`, `DBC-H`, `PAN-H`, y el reporte completo de referencia con hojas `Reporte`/`Traspasos`/`Inventarios`/`Comision`) ya contestaron, y lo que sigue abierto. Sustituye la necesidad de reconstruir esto cada vez — las secciones 3-10 tienen el detalle de origen de cada hallazgo.
+
+### 15.1 Estado de las 6 preguntas del correo
+
+| # | Tema | Estado | Detalle |
+|---|---|---|---|
+| 1 | Relación centro-almacén por CEDIS (todas las divisiones) | **Parcial** | Los reportes recibidos solo cubren las 4 divisiones de DBC (H, BO, A, IA) — nada de L, DG, CE, CP, CM. Para esas 4 ya lo tenemos resuelto por cuenta propia vía `dm_cedis` (~92.5% cobertura, sección 3). Hueco conocido sin resolver: planta `DBC1`/almacén `DG01` no cruza con `dm_cedis` (pendiente #2, sección 9) — posible "Derivados de Ganado" de DBC sin mapear. |
+| 2 | Oficinas de venta (clave + nombre) | **Resuelto — por cuenta propia** | El cliente no lo respondió (su columna de oficina viene vacía, marcada "PENDIENTE NOMBRE OFICINA DE VENTAS"). Lo resolvimos solos con `D00_SANDBOX.proan_TVKBT_20260728` (VKBUR+BEZEI), más completo que lo que tiene el propio cliente (sección 3). |
+| 3 | Transacción/ejemplo de compensados (la que usaba Alejandro) | **Resuelto — por el cliente** | Los excels que mandó SON la respuesta: hoja "Traspasos" con TX `MB51` + ejemplo real de resultado; hoja "Inventarios" con TX `MB5B`; hoja "Comision" con TX `ZSDFI_001`; hoja "Reporte" confirma TX `FBL1N` para la factura del comisionista. No hace falta pedir nada más de este punto. |
+| 4 | Tabla de equivalencia unidad↔comisión + categorización de producto | **Parcial** | El cliente confirmó la transacción fuente (`ZSDFI_001`, hoja "Comision"), pero no mandó el export de esa tabla — solo un reporte semanal con tarifas ya calculadas (columnas `COM_*`), de donde derivamos tarifas empíricas $/caja por SET × CEDIS × oficina (sección 6.1), no la fuente oficial. La categorización de producto (SET) sigue sin contestar — depende de GS03 (sección 5). |
+| 5 | Identificación del comisionista (rango proveedor, frecuencia, origen CFDIs) | **Parcial** | El reporte de referencia trae nombre del comisionista y su agrupación de oficinas en columnas sin encabezado formal (ej. Martha Leticia → oficina `0019-0092`; Jorge Machain → `0121`; Leon1 → `0005-0071`; Leon2 → `0088-0073`), y confirma `FBL1N` como fuente de la factura — pero el propio reporte marca esa columna "PENDIENTE": ni ellos lo tienen resuelto del todo. Rango de número de proveedor y frecuencia de liquidación: sin respuesta, en ningún documento. |
+| 6 | Inventarios (¿se consultan al día desde centro-almacén?) | **Resuelto — por el cliente** | Confirmado vía TX `MB5B`, misma estructura centro-almacén. Fuera de alcance por ahora (sección 1), pero técnicamente contestado. |
+| 7 | "¿Nos falta algo?" | **Sin respuesta** | No hay nada en ningún documento — sigue siendo pregunta abierta. |
+
+### 15.2 Dudas a futuro (para el próximo correo/reunión)
+
+Reemplaza la lista de la sección 10, con el detalle ya afinado:
+
+1. **Export real de GS03** (SETs de producto por división) — igual que antes, nada nuevo.
+2. **Export real de la tabla `ZSDFI_001`** — ya sabemos que es la transacción correcta (lo confirmó el cliente en su propio reporte); lo que falta es el dato en sí, no el nombre de la fuente.
+3. **Agrupación comisionista ↔ oficinas de venta, completa y confirmada** — tenemos ejemplos parciales del reporte de referencia (sección 15.1, punto 5), pero el cliente mismo la marca como pendiente; hace falta la tabla completa y confirmada, no solo estos casos.
+4. **Rango de número de proveedor** que identifica comisionistas en SAP, y su **frecuencia de liquidación** (semanal/mensual) — sin ninguna pista todavía.
+5. **Confirmar si L, DG, CE, CP, CM aplican a DBC** en algún CEDIS/almacén, o si son de otras empresas del grupo y quedan fuera de alcance — los reportes recibidos solo cubren H/BO/A/IA.
+6. **Resolver el cruce faltante `DBC1`/`DG01`** contra `dm_cedis` — posible "Derivados de Ganado" de DBC no mapeado (pendiente #2, sección 9).
+7. **Validar `sap_mseg` contra el resultado real de `MB51`** — ya tenemos un ejemplo real de MB51 en el reporte de referencia; usarlo como caso de prueba para la validación (pendiente #8, sección 9).
+8. **Repetir "¿nos falta algo?"** — nadie la ha contestado todavía.
+9. **Cómo repartir los 36 casos de almacén+oficina compartidos entre "Huevo (H) y Croqueta (IA)" y "Tortilla (A)"** — confirmado con datos reales (pendiente #1, sección 9); hoy `v1_flujo_producto_dbc` los resuelve con una regla provisional (arbitraria), no una decisión de negocio.
+10. **Cómo repartir el monto cobrado de facturas que abarcan 2 almacenes** — confirmado con datos reales (pendiente #9, sección 9); mismo tipo de decisión que el punto 9, para la rama "cobrado".
+
+### 15.3 Cobertura real de `v1_flujo_producto_dbc` (corrida final v1)
+
+Cifras vigentes, ya con los dos fixes de la rama "cobrado" aplicados: `company_code = 'DBC'` directo sobre `sap_pago` (en vez de heredarlo del match con la factura), y `document_category = 'M'` (V7/V8 de `v1_verificaciones.sql`) para excluir compensaciones/ajustes internos sin factura asociada (26,311 filas, $0, ver sección 9 y `Datos/sql/v1_flujo_producto_dbc.sql`).
+
+| Fase | Filas | Monto total | Rango de fechas | Filas sin CEDIS resuelto |
+|---|---|---|---|---|
+| Vendido | 1,506,006 | $1,867,026,840.65 | 2026-01-01 a 2026-07-20 | 87,472 (5.8%) |
+| Facturado | 1,745,163 | $1,903,510,061.80 | 2026-01-01 a 2026-08-02 | 121,406 (7.0%) |
+| Cobrado | 51,763 | $1,758,736,858.44 | 2026-01-02 a 2026-07-31 | 12,822 (24.8%) |
+
+El hueco de CEDIS en vendido/facturado (~6-7%) es consistente con la cobertura de `dm_cedis` ya documentada en la sección 3 (~92.5%). El de cobrado bajó de un pico intermedio de 50.2% (39,203 de 78,146, cuando el filtro de `company_code` ya estaba directo pero `document_category` todavía no) a 24.8% — ahora consistente con el resto del flujo, y también con el 75% de cobertura ya documentado en la sección 3 para "Momento de cobro" (son la misma relación medida en direcciones opuestas: aquí es pago→CEDIS heredado de la factura, allá es facturado→pago). El monto total no cambió en ningún punto de este proceso ($1,758,736,858.44 en las tres corridas), confirmando que las filas descartadas en cada fix nunca representaron dinero real, solo movimientos contables sin sitio/factura asociados.

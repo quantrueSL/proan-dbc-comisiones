@@ -52,7 +52,8 @@ const EJEMPLO: ReportResponse = {
 };
 
 function divisionLabel(row: DivisionRow): string {
-  const candidate = row.division_name ?? row.business_area_name ?? row.name ?? row.sales_division;
+  // Confirmado contra el esquema real de dm_business_area: business_area_name.
+  const candidate = row.business_area_name;
   return candidate === null || candidate === undefined ? JSON.stringify(row) : String(candidate);
 }
 
