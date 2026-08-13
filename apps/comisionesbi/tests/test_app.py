@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 from fastapi.testclient import TestClient
 
@@ -73,6 +74,57 @@ def test_catalog_con_mala_configuracion_no_expone_el_motivo(monkeypatch, caplog)
     # El motivo exacto sí queda en el log, que es donde hace falta.
     assert "BQ_PROJECT_ID" in caplog.text
     assert caplog.records[-1].levelno == logging.CRITICAL
+
+
+# ─── POST /flujo ─────────────────────────────────────────────────────────
+
+FLUJO_URL = "/v1/comisionesbi/flujo"
+RANGO = {"start_date": "2026-01-01", "end_date": "2026-08-31"}
+
+
+def test_flujo_devuelve_el_resultado_del_motor(monkeypatch):
+    monkeypatch.setattr(app_module, "build_flujo", lambda **_: {"resumen": [], "cobertura": {}})
+
+    response = client.post(FLUJO_URL, json=RANGO)
+
+    assert response.status_code == 200
+    assert response.json() == {"resumen": [], "cobertura": {}}
+
+
+def test_flujo_pasa_los_filtros_al_motor_como_fechas(monkeypatch):
+    recibido = {}
+    monkeypatch.setattr(app_module, "build_flujo", lambda **kwargs: recibido.update(kwargs) or {})
+
+    client.post(FLUJO_URL, json={**RANGO, "division": "H", "cedis": "Leon 1"})
+
+    assert recibido["division"] == "H"
+    assert recibido["cedis"] == "Leon 1"
+    # Fechas de verdad, no cadenas: la tabla gold es diaria.
+    assert recibido["start_date"] == date(2026, 1, 1)
+    assert recibido["end_date"] == date(2026, 8, 31)
+
+
+def test_flujo_rechaza_una_fecha_que_no_lo_es():
+    response = client.post(FLUJO_URL, json={"start_date": "ayer", "end_date": "2026-08-31"})
+    assert response.status_code == 422
+
+
+def test_flujo_rechaza_un_rango_al_reves():
+    # Devolvería vacío sin explicación; mejor decir que el rango está mal.
+    response = client.post(FLUJO_URL, json={"start_date": "2026-08-31", "end_date": "2026-01-01"})
+    assert response.status_code == 422
+
+
+def test_flujo_devuelve_503_si_falla_bigquery(monkeypatch):
+    def _falla(**_):
+        raise BigQueryQueryError("No se pudo consultar el flujo de producto.")
+
+    monkeypatch.setattr(app_module, "build_flujo", _falla)
+
+    response = client.post(FLUJO_URL, json=RANGO)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "No se pudo consultar el flujo de producto."}
 
 
 def test_health_no_toca_bigquery(monkeypatch):

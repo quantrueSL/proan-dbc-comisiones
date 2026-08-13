@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from comisionesbi.catalog_engine import catalog as build_catalog
 from comisionesbi.comisiones_engine import build_report
 from comisionesbi.conciliacion_engine import build_reconciliation
 from comisionesbi.db import BigQueryConfigError, BigQueryQueryError
+from comisionesbi.flujo_engine import build_flujo
 
 # uvicorn configura sus propios loggers, no el raíz: sin esto los mensajes de
 # los motores se perderían por debajo de WARNING. En Cloud Run todo lo que sale
@@ -62,6 +64,25 @@ class ReconciliationQuery(BaseModel):
     end_period: str
 
 
+class FlujoQuery(BaseModel):
+    """Fechas de verdad, no cadenas: la tabla gold es diaria.
+
+    Pydantic ya rechaza con 422 lo que no sea una fecha ISO, así que aquí solo
+    queda comprobar que el rango tiene sentido.
+    """
+
+    division: str | None = None
+    cedis: str | None = None
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def _rango_coherente(self) -> "FlujoQuery":
+        if self.start_date > self.end_date:
+            raise ValueError("start_date no puede ser posterior a end_date.")
+        return self
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -71,6 +92,22 @@ def health() -> dict[str, str]:
 def get_catalog() -> dict:
     """Catálogo de división/CEDIS/tipo de venta (ya resuelto y validado)."""
     return build_catalog()
+
+
+@app.post("/v1/comisionesbi/flujo")
+def post_flujo(body: FlujoQuery) -> dict:
+    """Flujo de producto: vendido, facturado y cobrado — ver flujo_engine.py.
+
+    Devuelve también `cobertura`, la fecha de corte de cada fase. Hoy no
+    coinciden y eso no es un detalle menor: sin ese dato la pantalla dibujaría
+    ceros donde solo faltan datos.
+    """
+    return build_flujo(
+        division=body.division,
+        cedis=body.cedis,
+        start_date=body.start_date,
+        end_date=body.end_date,
+    )
 
 
 @app.post("/v1/comisionesbi/report")

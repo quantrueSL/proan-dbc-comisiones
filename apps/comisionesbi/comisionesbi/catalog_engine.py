@@ -21,10 +21,7 @@ import threading
 import time
 from typing import NamedTuple
 
-from google.api_core.exceptions import GoogleAPIError  # type: ignore
-from google.auth.exceptions import GoogleAuthError  # type: ignore
-
-from comisionesbi.db import BigQueryError, BigQueryQueryError, get_bq_client
+from comisionesbi.db import BigQueryError, run_query
 
 log = logging.getLogger(__name__)
 
@@ -44,31 +41,12 @@ ORDER BY cedis, oficina
 """
 
 
-def _run_query(sql: str, nombre: str) -> list[dict]:
-    """Ejecuta una consulta de catálogo y traduce los fallos de BigQuery.
-
-    La lectura de filas va DENTRO del try: `result()` devuelve un iterador que
-    pagina de forma perezosa, así que un error de permisos sobre la tabla no
-    salta al llamar, sino al recorrer las filas.
-
-    Al llamante le llega un mensaje propio, no el de Google: el crudo puede
-    incluir nombres de tabla, proyecto o de la cuenta de servicio. Ese va al log.
-    """
-    client = get_bq_client()
-    try:
-        rows = client.query(sql).result()
-        return [dict(row.items()) for row in rows]
-    except (GoogleAPIError, GoogleAuthError) as exc:
-        log.exception("Fallo consultando el catálogo de %s en BigQuery", nombre)
-        raise BigQueryQueryError(f"No se pudo consultar el catálogo de {nombre}.") from exc
-
-
 def divisiones() -> list[dict]:
-    return _run_query(_DIVISIONES_SQL, "divisiones")
+    return run_query(_DIVISIONES_SQL, "el catálogo de divisiones")
 
 
 def cedis() -> list[dict]:
-    return _run_query(_CEDIS_SQL, "CEDIS")
+    return run_query(_CEDIS_SQL, "el catálogo de CEDIS")
 
 
 # ─── Caché en memoria del catálogo ───────────────────────────────────────

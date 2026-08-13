@@ -101,3 +101,43 @@ def get_bq_client():
     )
     _bq_client = client
     return _bq_client
+
+
+def run_query(sql: str, nombre: str, parametros: dict | None = None) -> list[dict]:
+    """Ejecuta una consulta y traduce cualquier fallo de BigQuery.
+
+    `parametros` es {nombre: (tipo_bigquery, valor)}, por ejemplo
+    {"start": ("DATE", date(2026, 1, 1))}. Se convierten a parametros de
+    consulta reales (`@nombre`): los valores NUNCA se interpolan en el SQL,
+    que seria una via de inyeccion. Un valor None viaja como NULL tipado, que
+    es lo que permite el patron `(@x IS NULL OR columna = @x)` para filtros
+    opcionales.
+
+    La lectura de filas va DENTRO del try: `result()` devuelve un iterador que
+    pagina de forma perezosa, asi que un error de permisos sobre la tabla no
+    salta al llamar, sino al recorrer las filas.
+
+    Al llamante le llega un mensaje propio, no el de Google: el crudo puede
+    incluir nombres de tabla, proyecto o de la cuenta de servicio. Ese va al log.
+    """
+    from google.api_core.exceptions import GoogleAPIError  # type: ignore
+    from google.auth.exceptions import GoogleAuthError  # type: ignore
+    from google.cloud import bigquery  # type: ignore
+
+    client = get_bq_client()
+
+    job_config = None
+    if parametros:
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter(clave, tipo, valor)
+                for clave, (tipo, valor) in parametros.items()
+            ]
+        )
+
+    try:
+        rows = client.query(sql, job_config=job_config).result()
+        return [dict(row.items()) for row in rows]
+    except (GoogleAPIError, GoogleAuthError) as exc:
+        log.exception("Fallo consultando %s en BigQuery", nombre)
+        raise BigQueryQueryError(f"No se pudo consultar {nombre}.") from exc
