@@ -25,3 +25,4 @@ node_modules/
 # Salidas y logs locales.
 *.log
 backup/
+data/sql
