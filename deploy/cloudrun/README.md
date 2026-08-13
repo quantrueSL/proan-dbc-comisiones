@@ -11,6 +11,9 @@ Patrón calcado de `proan-hidrocarburos/deploy/cloudrun/`.
 
 ## Preparación (solo la primera vez)
 
+> Estado a 2026-08-13: los pasos 1 y 2 ya están hechos en `proan-quantrue` — los
+> dos secretos existen con su versión 1. Repetirlos daría `ALREADY_EXISTS`.
+
 **1. Secreto de firma de sesión.** Sin él el frontend no arranca, a propósito:
 una sesión sin firmar sería falsificable.
 
@@ -29,13 +32,27 @@ gcloud secrets create dbc-comisiones-htpasswd --data-file=deploy/nginx/.htpasswd
   --project=proan-quantrue --replication-policy=automatic
 ```
 
-**3. Permiso de lectura de secretos** para la identidad del servicio:
+**3. Permiso de lectura de secretos: no hay que hacer nada.** La identidad del
+servicio (`272166156031-compute@`) tiene `roles/secretmanager.secretAccessor`
+concedido **a nivel de proyecto**, así que lee cualquier secreto de
+`proan-quantrue` sin necesidad de un binding por secreto.
+
+Comprobado, no supuesto: los secretos de `proan-hidrocarburos`
+(`carb-session-secret`, `carb-htpasswd`) tienen la política IAM vacía y el
+servicio los lee igualmente. Si lo intentas de todas formas, el comando falla con
+`403 Permission 'secretmanager.secrets.setIamPolicy' denied` — hace falta
+`secretmanager.admin` para conceder un permiso que ya está concedido.
+
+Ojo con una trampa relacionada: el rol *Editor* **no** incluye leer el contenido
+de un secreto. Aquí funciona por el `secretAccessor` de proyecto, no por Editor.
+Si algún día se estrena una cuenta de servicio dedicada, entonces sí habrá que
+concederle el permiso secreto a secreto:
 
 ```bash
 for s in dbc-comisiones-session-secret dbc-comisiones-htpasswd; do
   gcloud secrets add-iam-policy-binding "$s" \
-    --member=serviceAccount:272166156031-compute@developer.gserviceaccount.com \
-    --role=roles/secretmanager.secretAccessor --project=proan-quantrue
+    --member=serviceAccount:LA-CUENTA-NUEVA@proan-quantrue.iam.gserviceaccount.com \
+    --role=roles/secretmanager.secretAccessor --condition=None --project=proan-quantrue
 done
 ```
 
