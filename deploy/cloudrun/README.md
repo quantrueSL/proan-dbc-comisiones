@@ -56,11 +56,10 @@ for s in dbc-comisiones-session-secret dbc-comisiones-htpasswd; do
 done
 ```
 
-**4. App web de Firebase.** Registrar una app web nueva "comisiones-dbc-frontend"
-en Firebase Console (mismo proyecto `proan-quantrue` que ya usa
-`proan-hidrocarburos`) y sustituir los valores `FIREBASE_API_KEY`/`FIREBASE_APP_ID`
-en `service.yaml` y en `deploy/docker-compose.dev.yml` — hoy son placeholders sin
-configurar. Ver `LOGIN.md` para el detalle del patrón.
+**4. App web de Firebase: ya está hecho.** La app `comisiones-dbc-frontend` está
+registrada en `proan-quantrue` y sus valores puestos en `service.yaml` y en
+`deploy/docker-compose.dev.yml`. Van como valores planos porque son públicos:
+viajan en el JavaScript del navegador. Ver `LOGIN.md` §2.
 
 ## Desplegar
 
