@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,6 +20,14 @@ def _failing_client(exc):
     client = MagicMock()
     client.query.side_effect = exc
     return client
+
+
+@pytest.fixture(autouse=True)
+def _cache_limpia():
+    """`catalog()` cachea: sin esto un test dejaría el catálogo del anterior."""
+    catalog_engine.invalidate_catalog_cache()
+    yield
+    catalog_engine.invalidate_catalog_cache()
 
 
 def test_divisiones_devuelve_filas_del_cliente(monkeypatch):
@@ -119,3 +129,169 @@ def test_catalog_propaga_el_fallo_en_vez_de_devolver_medio_catalogo(monkeypatch)
 
     with pytest.raises(BigQueryQueryError):
         catalog_engine.catalog()
+
+
+# ─── Caché del catálogo ──────────────────────────────────────────────────
+
+
+class _ClienteContador:
+    """Cliente falso que cuenta las consultas lanzadas. Un catálogo = 2."""
+
+    def __init__(self, demora: float = 0.0):
+        self.consultas: list[str] = []
+        self._demora = demora
+
+    def query(self, sql):
+        self.consultas.append(sql)
+        time.sleep(self._demora)
+        resultado = MagicMock()
+        resultado.result.return_value = [{"fila": len(self.consultas)}]
+        return resultado
+
+
+@pytest.fixture
+def reloj(monkeypatch):
+    """Reloj monotónico fijo y avanzable, para no dormir en los tests del TTL."""
+    actual = [1000.0]
+    monkeypatch.setattr(catalog_engine, "_now", lambda: actual[0])
+    return actual
+
+
+def test_la_segunda_peticion_no_vuelve_a_consultar(monkeypatch, reloj):
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    primero = catalog_engine.catalog()
+    segundo = catalog_engine.catalog()
+
+    assert len(cliente.consultas) == 2  # divisiones + cedis, una sola vez
+    assert segundo == primero
+
+
+def test_al_vencer_el_ttl_vuelve_a_consultar(monkeypatch, reloj):
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    catalog_engine.catalog()
+    reloj[0] += 3599
+    catalog_engine.catalog()
+    assert len(cliente.consultas) == 2
+
+    reloj[0] += 2  # ya pasó la hora
+    catalog_engine.catalog()
+    assert len(cliente.consultas) == 4
+
+
+def test_ttl_cero_desactiva_la_cache(monkeypatch, reloj):
+    monkeypatch.setenv("CATALOG_CACHE_TTL_SECONDS", "0")
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    catalog_engine.catalog()
+    catalog_engine.catalog()
+
+    assert len(cliente.consultas) == 4
+
+
+def test_con_ttl_cero_un_fallo_no_sirve_copia_caducada(monkeypatch, reloj):
+    # Desactivada significa desactivada: no se guarda nada, así que no hay copia
+    # vieja de la que tirar. Sin este test es fácil "arreglarlo" sin darse cuenta.
+    monkeypatch.setenv("CATALOG_CACHE_TTL_SECONDS", "0")
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+    catalog_engine.catalog()
+
+    monkeypatch.setattr(
+        catalog_engine, "get_bq_client", lambda: _failing_client(ServiceUnavailable("caído"))
+    )
+
+    with pytest.raises(BigQueryQueryError):
+        catalog_engine.catalog()
+
+
+def test_ttl_ilegible_cae_al_valor_por_defecto(monkeypatch):
+    monkeypatch.setenv("CATALOG_CACHE_TTL_SECONDS", "una-hora")
+    assert catalog_engine._cache_ttl_seconds() == 3600
+
+    monkeypatch.delenv("CATALOG_CACHE_TTL_SECONDS")
+    assert catalog_engine._cache_ttl_seconds() == 3600
+
+    # Un negativo se trata como desactivada, no como caché eterna.
+    monkeypatch.setenv("CATALOG_CACHE_TTL_SECONDS", "-5")
+    assert catalog_engine._cache_ttl_seconds() == 0
+
+
+def test_si_bigquery_falla_se_sirve_la_copia_caducada(monkeypatch, reloj, caplog):
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+    bueno = catalog_engine.catalog()
+
+    reloj[0] += 4000  # caducada
+    monkeypatch.setattr(
+        catalog_engine, "get_bq_client", lambda: _failing_client(ServiceUnavailable("caído"))
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert catalog_engine.catalog() == bueno
+
+    # Sirve la copia vieja, pero deja constancia: si no, la avería sería invisible.
+    assert "copia caducada" in caplog.text
+    assert any(registro.exc_info for registro in caplog.records)
+
+
+def test_sin_copia_previa_el_fallo_se_propaga(monkeypatch, reloj):
+    monkeypatch.setattr(
+        catalog_engine, "get_bq_client", lambda: _failing_client(ServiceUnavailable("caído"))
+    )
+
+    with pytest.raises(BigQueryQueryError):
+        catalog_engine.catalog()
+
+
+def test_un_fallo_no_se_cachea(monkeypatch, reloj):
+    monkeypatch.setattr(
+        catalog_engine, "get_bq_client", lambda: _failing_client(ServiceUnavailable("caído"))
+    )
+    with pytest.raises(BigQueryQueryError):
+        catalog_engine.catalog()
+
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    assert catalog_engine.catalog()["divisiones"] == [{"fila": 1}]
+    assert len(cliente.consultas) == 2
+
+
+def test_invalidate_fuerza_la_relectura(monkeypatch, reloj):
+    cliente = _ClienteContador()
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    catalog_engine.catalog()
+    catalog_engine.invalidate_catalog_cache()
+    catalog_engine.catalog()
+
+    assert len(cliente.consultas) == 4
+
+
+def test_peticiones_simultaneas_con_cache_fria_consultan_una_sola_vez(monkeypatch, reloj):
+    # Los endpoints síncronos de FastAPI corren en un threadpool: sin el lock,
+    # 10 peticiones concurrentes serían 20 jobs de BigQuery en paralelo.
+    cliente = _ClienteContador(demora=0.02)
+    monkeypatch.setattr(catalog_engine, "get_bq_client", lambda: cliente)
+
+    resultados: list[dict] = []
+    barrera = threading.Barrier(10)
+
+    def _pedir():
+        barrera.wait()
+        resultados.append(catalog_engine.catalog())
+
+    hilos = [threading.Thread(target=_pedir) for _ in range(10)]
+    for hilo in hilos:
+        hilo.start()
+    for hilo in hilos:
+        hilo.join()
+
+    assert len(cliente.consultas) == 2
+    assert len(resultados) == 10
+    assert all(resultado == resultados[0] for resultado in resultados)

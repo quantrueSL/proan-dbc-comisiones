@@ -89,6 +89,13 @@ spec:
               value: us-west4
             # Sin BQ_CREDENTIALS_PATH a propósito: db.py cae a las credenciales
             # de aplicación, que aquí son la identidad del servicio.
+            # TTL de la caché del catálogo. Explícito aunque coincida con el
+            # valor por defecto: es la ventana en la que un CEDIS nuevo tarda en
+            # aparecer en los filtros. `0` la desactiva (solo para desarrollo).
+            - name: CATALOG_CACHE_TTL_SECONDS
+              value: "3600"
+            - name: LOG_LEVEL
+              value: INFO
           startupProbe:
             tcpSocket:
               port: 8091

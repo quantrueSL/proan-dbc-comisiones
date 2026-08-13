@@ -84,6 +84,12 @@ gestionan en la lista de Firestore desde el portal de listas (ver `LOGIN.md`).
 - **`min-instances: 0`.** Habrá arranque en frío en la primera petición, y el
   sidecar carga pandas y pyarrow, así que no es instantáneo. Subirlo a 1 lo evita
   a cambio de pagar la instancia 24×7.
+- **Caché del catálogo (`CATALOG_CACHE_TTL_SECONDS`, 3600).** El catálogo de
+  división/CEDIS se cachea en memoria del proceso, así que muere en cada arranque
+  en frío y cada instancia tiene la suya: no hay invalidación global sin
+  desplegar. Es también la ventana en la que un CEDIS nuevo tarda en aparecer en
+  los filtros. Si BigQuery falla y hay una copia caducada se sirve esa, con un
+  aviso en el log, antes que devolver un 503.
 - **`DOCKER_BUILDKIT=1`** en `cloudbuild.yaml`: el Dockerfile de `comisionesbi` usa
   `RUN --mount=type=cache`, que el constructor clásico no entiende.
 - **Sin `BQ_CREDENTIALS_PATH`**: `db.py` cae a credenciales de aplicación, que en
