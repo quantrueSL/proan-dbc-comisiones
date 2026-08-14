@@ -10748,6 +10748,23 @@ body.proan-report-assistant-open .proan-content-scroll {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Manual de la pantalla
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* Las dos listas del manual de la pantalla. El resto de sus estilos (títulos,
+   párrafos, notas) vive ahora en la sección "Manual de usuario · interactivo",
+   con las clases `.manual-*` que comparten todos los apartados. */
+.flujo-manual-fases { display: grid; gap: 12px; margin: 4px 0 0; padding: 0; list-style: none; }
+.flujo-manual-fases li { display: grid; grid-template-columns: auto 1fr; gap: 11px; align-items: start; }
+.flujo-manual-fases i { width: 11px; height: 11px; border-radius: 3px; margin-top: 4px; }
+.flujo-manual-fases b { display: block; font-size: 13px; }
+.flujo-manual-fases span { color: #55524d; font-size: 13px; line-height: 1.55; }
+
+.flujo-manual-pendientes { display: grid; gap: 9px; margin: 0; padding-left: 18px; }
+.flujo-manual-pendientes li { color: #55524d; font-size: 13px; line-height: 1.55; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Flujo de producto · controles, barras pulsables y modales
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -10784,6 +10801,12 @@ body.proan-report-assistant-open .proan-content-scroll {
 .flujo-modal-cuerpo th, .flujo-modal-cuerpo td { border-top: 1px solid #e2e8f0; padding: 11px 14px; }
 .flujo-modal-cuerpo th.flujo-num, .flujo-modal-cuerpo td.flujo-num { text-align: right; font-variant-numeric: tabular-nums; }
 .flujo-modal-cuerpo .flujo-sin-asignar td { background: #fff9f5; font-style: italic; }
+
+/* Manual como página */
+.manual-page .manual-hoja {
+  max-width: 860px; border: 1px solid #e4dfd8; border-radius: 14px; background: #fff;
+  box-shadow: 0 8px 18px rgba(47, 34, 16, .035); padding: 30px 34px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .flujo-barra .dashboard-bar-fill { transition: none; }
@@ -11005,4 +11028,379 @@ body.proan-report-assistant-open .proan-content-scroll {
 @media (max-width: 599px) {
   /* Tres importes de nueve cifras no caben en una fila de móvil. */
   .flujo-cabecera .hydro-module-kpis { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Manual de usuario · interactivo
+   ───────────────────────────────────────────────────────────────────────────
+   El manual dejó de ser una hoja de texto: cuenta qué es la plataforma, qué
+   problema resuelve, el recorrido del producto en cuatro capas (pulsable) y las
+   tres trampas de la pantalla, cada una con un juguete que hace la cosa mal a
+   propósito.
+
+   DOS REGLAS DE ESTA SECCIÓN:
+   · El texto no depende de ninguna animación. Todo lo que aparece animado está
+     en el HTML desde el principio; la animación solo decide cómo entra. Al final
+     hay un bloque de `prefers-reduced-motion` que lo deja todo quieto y visible.
+   · Nada mide en píxeles fijos dentro de una columna elástica (la lección de la
+     gráfica): los SVG llevan `viewBox` con `max-width`, y las rejillas usan
+     `minmax(0, …)`.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.hydro-page.manual-page {
+  max-width: 1520px; margin-inline: auto; gap: 16px;
+  grid-template-rows: none; grid-template-columns: minmax(0, 1fr);
+  padding: 4px 4px 44px;
+}
+
+/* Cabecera: título a la izquierda y cifras a la derecha, que para eso hay
+   ancho. La línea de colores cruza las dos columnas por debajo. */
+.manual-portada {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end; column-gap: 36px; padding: 6px 2px 14px;
+}
+.manual-portada-titulo { min-width: 0; }
+.manual-portada-titulo > p:first-child {
+  margin: 0 0 5px; color: #3d3d7c; font-size: 9px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.manual-portada h1 {
+  margin: 0; color: #25272b; font-family: var(--font-proan-primary);
+  font-size: clamp(26px, 3vw, 40px); font-weight: 650; letter-spacing: -.045em; line-height: 1.02;
+}
+.manual-portada h1 span { color: #a9591f; }
+.manual-portada-texto { max-width: 72ch; margin: 10px 0 0; color: #55524d; font-size: 13.5px; line-height: 1.62; }
+/* En columna a la derecha del título: son cuatro datos cortos y en fila
+   horizontal desperdiciaban el hueco que deja el titular. */
+.manual-portada-datos { display: grid; gap: 6px 22px; padding-bottom: 3px; color: #8b8880; font-size: 11px; text-align: right; }
+.manual-portada-datos b { color: #25272c; font-family: var(--font-proan-primary); font-size: 15px; font-weight: 700; }
+.manual-portada-linea { grid-column: 1 / -1; }
+/* Una línea que se llena sola: el recorrido del producto, resumido en un gesto. */
+.manual-portada-linea { height: 2px; margin-top: 16px; border-radius: 999px; background: #eae3d8; overflow: hidden; }
+.manual-portada-linea::after {
+  content: ""; display: block; width: 40%; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #5f62d0, #12a074 55%, #cf7a22);
+  animation: manual-barrido 4.2s cubic-bezier(.55, 0, .45, 1) infinite;
+}
+@keyframes manual-barrido {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* ── Índice: barra lateral DERECHA, pegada ────────────────────────────────
+   Va a la derecha porque es una barra de navegación del documento, y ahí no le
+   quita el margen izquierdo al texto ni compite con la sangría de los
+   apartados. En el HTML sigue yendo primero (ver la página): la rejilla lo
+   coloca, y las dos celdas llevan `grid-row: 1` a la fuerza — sin eso, el
+   segundo hijo con columna explícita se iría a una fila nueva y el índice
+   quedaría flotando solo arriba. */
+.manual-cuerpo { display: grid; grid-template-columns: minmax(0, 1fr) 232px; gap: 24px; align-items: start; }
+.manual-indice { position: sticky; top: 4px; grid-column: 2; grid-row: 1; }
+.manual-page .manual-hoja { grid-column: 1; grid-row: 1; }
+.manual-indice-caja { border: 1px solid #e8e2da; border-radius: 12px; background: rgba(255, 254, 251, .82); padding: 13px 14px; }
+.manual-indice-caja > b { display: block; color: #8b8880; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.manual-indice-avance { height: 2px; margin: 9px 0 10px; border-radius: 999px; background: #eee7dc; }
+.manual-indice-avance span { display: block; height: 100%; border-radius: 999px; background: #3d3d7c; transform-origin: left; transition: transform .12s linear; }
+.manual-indice ol { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; counter-reset: apartado; }
+.manual-indice li { counter-increment: apartado; }
+.manual-indice a {
+  display: block; border-radius: 7px; padding: 5px 9px;
+  color: #6f6a60; font-size: 11.5px; text-decoration: none;
+  border-left: 2px solid transparent; transition: color .14s ease, background .14s ease, border-color .14s ease;
+}
+/* Numerados: en una lista de doce apartados, el número ayuda a saber por dónde
+   se va sin contar a ojo. */
+.manual-indice a::before { content: counter(apartado) ". "; color: #b8b0a4; font-variant-numeric: tabular-nums; }
+.manual-indice a:hover { background: rgba(61, 61, 124, .06); color: #3d3d7c; }
+.manual-indice a[aria-current="true"] { border-left-color: #3d3d7c; background: rgba(61, 61, 124, .08); color: #25272c; font-weight: 700; }
+.manual-indice a[aria-current="true"]::before { color: #3d3d7c; }
+
+/* La hoja deja de ser una tarjeta: ahora la tarjeta es cada apartado. Ya no
+   lleva ancho máximo —el ancho lo pone la rejilla—; lo que se limita es la
+   MEDIDA del texto, apartado por apartado, que es lo que se lee mal cuando la
+   línea se hace larga. Las tarjetas, el diagrama y los juguetes sí aprovechan
+   todo el ancho. */
+.manual-page .manual-hoja {
+  display: grid; gap: 14px; max-width: none;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none; padding: 0;
+}
+.manual-seccion {
+  scroll-margin-top: 10px;
+  border: 1px solid #e8e2da; border-radius: 14px; background: #fffefb;
+  box-shadow: 0 5px 16px rgba(42, 34, 24, .03); padding: 20px 24px 22px;
+}
+.manual-seccion h2 {
+  margin: 0 0 10px; padding-bottom: 9px; border-bottom: 1px solid #f0ebe3;
+  color: #25272c; font-family: var(--font-proan-primary); font-size: 17px; font-weight: 700; letter-spacing: -.02em;
+}
+.manual-seccion h3 { margin: 0; color: #25272c; font-family: var(--font-proan-primary); font-size: 14px; font-weight: 700; }
+/* La medida del texto se limita en caracteres, no en píxeles: una línea de más
+   de ~90 caracteres se lee mal por mucho ancho que sobre. Lo que ocupa todo el
+   ancho es lo que se mira, no lo que se lee. */
+.manual-seccion p { max-width: 88ch; margin: 0 0 10px; color: #55524d; font-size: 13px; line-height: 1.65; }
+.manual-seccion p:last-child { margin-bottom: 0; }
+
+/* Texto a un lado, juguete al otro. */
+.manual-doble { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .92fr); gap: 16px 26px; align-items: start; }
+.manual-doble > div > p:last-child { margin-bottom: 0; }
+.manual-doble .manual-demo { margin-top: 0; }
+.manual-seccion b { color: #25272c; }
+.manual-seccion code { border-radius: 4px; background: #f3ede4; padding: 1px 5px; font-size: 11.5px; color: #6d4a2c; }
+.manual-seccion a { color: #a9591f; font-weight: 700; }
+/* Estos dos van con dos clases, no con `!important`: `.manual-seccion p` lleva
+   un elemento en el selector y gana a una clase suelta. */
+.manual-seccion .manual-entradilla { color: #3f3c37; font-size: 14.5px; }
+/* Nota: lo que evita una lectura equivocada, marcado para quien lee en diagonal. */
+.manual-seccion .manual-nota {
+  margin: 12px 0 0; border-left: 3px solid #cf7a22; border-radius: 0 8px 8px 0;
+  background: #fff9f5; padding: 10px 14px; font-size: 12.5px;
+}
+.manual-etiqueta {
+  margin-left: 8px; border: 1px solid #e0d6c8; border-radius: 999px; background: #fff;
+  padding: 2px 8px; color: #8b6a3f; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+
+/* Aparecer al entrar en pantalla */
+.manual-revelar { transition: opacity .5s ease, transform .55s cubic-bezier(.2, .7, .2, 1); }
+.manual-revelar[data-visto="no"] { opacity: 0; transform: translateY(16px); }
+.manual-revelar[data-visto="si"] { opacity: 1; transform: none; }
+.manual-contador { font-variant-numeric: tabular-nums; }
+
+/* Tres tarjetas de "qué hace" */
+.manual-tarjetas { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0 0; }
+.manual-tarjeta { border: 1px solid #ece7df; border-radius: 12px; background: #fff; padding: 13px 15px; }
+.manual-tarjeta b { display: block; margin-bottom: 5px; color: #25272c; font-family: var(--font-proan-primary); font-size: 13px; }
+.manual-tarjeta p { margin: 0; color: #6f6a60; font-size: 12px; line-height: 1.55; }
+
+/* Los tres problemas, numerados */
+.manual-problemas { display: grid; gap: 10px; margin-top: 14px; }
+.manual-problema { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: start; border: 1px solid #ece7df; border-radius: 12px; background: #fff; padding: 14px 16px; }
+.manual-problema-num {
+  display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  background: rgba(61, 61, 124, .1); color: #3d3d7c;
+  font-family: var(--font-proan-primary); font-size: 14px; font-weight: 700;
+}
+.manual-problema b { display: block; margin-bottom: 4px; font-family: var(--font-proan-primary); font-size: 13.5px; }
+.manual-problema p { margin: 0; font-size: 12.5px; }
+
+/* Módulos */
+.manual-modulos { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 14px 0 0; }
+.manual-modulo > div { display: grid; gap: 7px; height: 100%; border: 1px solid #ece7df; border-radius: 12px; background: #fff; padding: 14px 15px; }
+.manual-modulo > div[data-estado="bloqueado"] { background: #fdfbf7; border-style: dashed; }
+.manual-modulo header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.manual-modulo b { color: #25272c; font-family: var(--font-proan-primary); font-size: 13.5px; }
+.manual-modulo p { margin: 0; color: #6f6a60; font-size: 12px; line-height: 1.55; }
+.manual-modulo .manual-modulo-falta { border-top: 1px dashed #e6ddcf; padding-top: 7px; color: #7d6a55; }
+.manual-estado { border-radius: 999px; padding: 3px 8px; font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.manual-estado[data-estado="activo"] { background: #e6f4ee; color: #17624a; }
+.manual-estado[data-estado="bloqueado"] { background: #f6ece0; color: #8b5a24; }
+.manual-enlace { align-self: start; color: #a9591f; font-size: 11.5px; font-weight: 700; text-decoration: none; }
+.manual-enlace:hover { color: #3d3d7c; }
+
+/* ── El recorrido: diagrama pulsable ──────────────────────────────────────
+   Los eslabones son botones de HTML, no formas dentro de un SVG: se enfocan
+   con el teclado, se leen con un lector de pantalla y no hay que pelearse con
+   el escalado del texto. La cajita que los recorre va por DEBAJO (z-index) y
+   así parece entrar y salir de cada uno. */
+.manual-flujo { position: relative; margin: 16px 0 14px; }
+.manual-flujo-pista { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.manual-flujo-caja {
+  position: absolute; top: 50%; left: 4%; width: 15px; height: 11px; margin-top: -6px;
+  border-radius: 3px; background: #cf7a22; box-shadow: 0 2px 7px rgba(207, 122, 34, .5);
+  animation: manual-reparto 5.4s cubic-bezier(.55, 0, .45, 1) infinite;
+}
+@keyframes manual-reparto {
+  0% { left: 3%; opacity: 0; }
+  9% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { left: 95%; opacity: 0; }
+}
+.manual-flujo-nodos { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 28px; margin: 0; padding: 0; list-style: none; }
+.manual-flujo-nodos li { position: relative; }
+/* El conector vive en el hueco de la rejilla, sin ocupar DOM propio. */
+.manual-flujo-nodos li + li::before {
+  content: ""; position: absolute; top: 50%; left: -28px; width: 28px; height: 2px;
+  background: repeating-linear-gradient(90deg, #cdc4b7 0 5px, transparent 5px 10px);
+  background-size: 10px 2px;
+  animation: manual-fluir 1.05s linear infinite;
+}
+.manual-flujo-nodos button {
+  position: relative; display: grid; gap: 1px; width: 100%; overflow: hidden;
+  border: 1px solid #e4dfd8; border-left: 3px solid var(--tono); border-radius: 12px;
+  background: #fff; padding: 10px 12px 11px; text-align: left; cursor: pointer;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.manual-flujo-nodos button::after {
+  content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 2px;
+  background: var(--tono); transform: scaleX(0); transform-origin: left; transition: transform .28s ease;
+}
+.manual-flujo-nodos button[data-activa="si"]::after { transform: scaleX(1); }
+.manual-flujo-nodos button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(47, 34, 16, .08); }
+.manual-flujo-nodos button[data-activa="si"] { border-color: #d9d2c7; background: #fffdf9; }
+.manual-flujo-nodos button[data-resuelta="no"] { border-style: dashed; border-left-style: solid; }
+.manual-flujo-nodos small { color: #b0a89c; font-size: 9.5px; font-weight: 800; }
+.manual-flujo-nodos b { color: #25272c; font-family: var(--font-proan-primary); font-size: 13.5px; }
+.manual-flujo-nodos button > span { color: #8b8880; font-size: 10.5px; }
+.manual-flujo-nodos em {
+  justify-self: start; margin-top: 4px; border-radius: 999px; background: #f6ece0;
+  padding: 2px 7px; color: #8b5a24; font-size: 9px; font-style: normal; font-weight: 800; text-transform: uppercase;
+}
+
+/* Ficha del eslabón activo */
+.manual-ficha {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px 22px;
+  border: 1px solid #e8e2da; border-left: 3px solid var(--tono); border-radius: 12px;
+  background: #fffefb; padding: 16px 18px;
+  animation: manual-entrar .32s cubic-bezier(.2, .7, .2, 1) both;
+}
+.manual-ficha-texto { grid-column: 1; grid-row: 1 / span 2; }
+.manual-ficha-texto h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.manual-ficha-texto h3 i { width: 10px; height: 10px; border-radius: 3px; background: var(--tono); }
+.manual-ficha-datos { grid-column: 2; grid-row: 1; display: grid; gap: 7px; margin: 0; }
+.manual-ficha-datos > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.manual-ficha-datos dt { color: #8b8880; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.manual-ficha-datos dd { margin: 0; min-width: 0; }
+.manual-ficha-datos code { display: inline-block; max-width: 100%; overflow-wrap: anywhere; background: #f3ede4; border-radius: 4px; padding: 1px 5px; color: #6d4a2c; font-size: 11px; }
+.manual-ficha-cifras { grid-column: 2; grid-row: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; border-top: 1px solid #f0ebe3; padding-top: 10px; }
+.manual-ficha-cifras > div { min-width: 0; }
+.manual-ficha-cifras span { display: block; color: #8b8880; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.manual-ficha-cifras strong { display: block; overflow: hidden; color: #25272c; font-family: var(--font-proan-primary); font-size: 16px; font-weight: 700; letter-spacing: -.03em; text-overflow: ellipsis; white-space: nowrap; }
+.manual-ficha-cifras small { grid-column: 1 / -1; margin-top: 4px; color: #918a80; font-size: 10px; line-height: 1.45; }
+.manual-ficha-cifras.is-vacia { grid-template-columns: 1fr; }
+.manual-ficha-cifras.is-vacia p { margin: 0; color: #7d6a55; font-size: 11.5px; line-height: 1.5; }
+
+/* Progreso de las capas */
+.manual-progreso { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: center; margin-top: 14px; border: 1px solid #ece7df; border-radius: 12px; background: #fff; padding: 14px 16px; }
+.manual-progreso b { display: block; margin-bottom: 4px; color: #25272c; font-family: var(--font-proan-primary); font-size: 13px; }
+.manual-progreso p { margin: 0; color: #6f6a60; font-size: 12px; line-height: 1.55; }
+.manual-anillo { display: grid; grid-template-columns: auto; justify-items: center; gap: 5px; }
+.manual-anillo-caja { position: relative; width: 62px; height: 62px; }
+.manual-anillo svg { width: 62px; height: 62px; }
+.manual-anillo-pista { fill: none; stroke: #eee7dc; stroke-width: 7; }
+.manual-anillo-arco { fill: none; stroke: #3d3d7c; stroke-width: 7; stroke-linecap: round; transition: stroke-dashoffset 1.2s cubic-bezier(.3, 0, .2, 1); }
+.manual-anillo-caja b { position: absolute; inset: 0; display: grid; place-content: center; color: #25272c; font-family: var(--font-proan-primary); font-size: 18px; font-weight: 700; }
+.manual-anillo-caja small { color: #a49b8f; font-size: 11px; }
+.manual-anillo > span { max-width: 90px; color: #8b8880; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-align: center; text-transform: uppercase; }
+
+/* ── Los juguetes ─────────────────────────────────────────────────────────
+   Cada uno tiene un botón que hace la cosa MAL y enseña qué pasaría. */
+.manual-demo { display: grid; gap: 11px; margin: 14px 0 0; border: 1px solid #ece7df; border-radius: 12px; background: #fbf9f5; padding: 14px 16px; }
+.manual-demo figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 14px; }
+.manual-demo figcaption button {
+  border: 1px solid #ded5c6; border-radius: 999px; background: #fff; padding: 6px 13px;
+  color: #8b5a24; font-size: 11.5px; font-weight: 700; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease, transform .15s ease;
+}
+.manual-demo figcaption button:hover { border-color: #cf7a22; transform: translateY(-1px); }
+.manual-demo figcaption span { flex: 1 1 260px; color: #6f6a60; font-size: 11.5px; line-height: 1.5; }
+.manual-demo svg { display: block; width: 100%; max-width: 430px; height: auto; }
+
+.manual-demo-suelo { stroke: #ded8cf; stroke-width: 1; stroke-dasharray: 3 3; }
+.manual-demo-linea { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: opacity .32s ease; }
+.manual-demo-punto { stroke: #fbf9f5; stroke-width: 2; transition: opacity .32s ease; }
+.manual-demo-texto { fill: #918a80; font-size: 9px; font-weight: 700; transition: opacity .32s ease; }
+.manual-demo-texto.is-mal { fill: #b3421f; }
+.manual-demo-punto.is-mal { fill: #b3421f; }
+.manual-demo[data-mal="no"] .is-mal { opacity: 0; }
+.manual-demo[data-mal="si"] .is-bien { opacity: 0; }
+
+.manual-demo-total span { display: block; color: #8b8880; font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.manual-demo-total strong { display: inline-block; margin-top: 2px; color: #25272c; font-family: var(--font-proan-primary); font-size: clamp(20px, 2.2vw, 26px); font-variant-numeric: tabular-nums; font-weight: 700; letter-spacing: -.035em; animation: manual-latir .42s ease both; }
+.manual-demo-total em { margin-left: 10px; color: #b3421f; font-size: 11.5px; font-style: normal; font-weight: 700; animation: manual-entrar .3s ease both; }
+.manual-demo-pista { display: flex; height: 15px; border-radius: 999px; background: #f0e9df; overflow: hidden; }
+.manual-demo-tramo { transition: flex-basis .55s cubic-bezier(.4, 0, .2, 1); }
+.manual-demo-tramo.is-sin { background: repeating-linear-gradient(45deg, #cf7a22 0 6px, #b06817 6px 12px); }
+.manual-demo-leyenda { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.manual-demo-leyenda li { display: flex; align-items: center; gap: 8px; color: #6f6a60; font-size: 11.5px; transition: opacity .3s ease; }
+.manual-demo-leyenda li[data-apagado="si"] { opacity: .35; text-decoration: line-through; }
+.manual-demo-leyenda i { width: 9px; height: 9px; flex: none; border-radius: 2px; background: repeating-linear-gradient(45deg, #cf7a22 0 4px, #b06817 4px 8px); }
+.manual-demo-leyenda b { color: #25272c; }
+
+.manual-demo-mezcla { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.manual-demo-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #e4dfd8; border-radius: 10px; background: #fff; padding: 7px 11px; color: #6f6a60; font-size: 11.5px; }
+.manual-demo-chip b { color: #25272c; font-family: var(--font-proan-primary); font-size: 15px; }
+.manual-demo-chip small { color: #a49b8f; font-size: 10px; }
+.manual-demo-chip i { margin-left: 8px; color: #b0a89c; font-style: normal; font-weight: 700; }
+.manual-demo-igual { color: #b0a89c; font-style: normal; font-weight: 700; }
+.manual-demo-resultado { color: #8b8880; font-family: var(--font-proan-primary); font-size: 17px; font-weight: 700; }
+.manual-demo[data-sumado="si"] .manual-demo-resultado { color: #b3421f; animation: manual-temblor .5s ease both; }
+
+/* Glosario */
+.manual-glosario { display: grid; gap: 6px; margin-top: 12px; }
+.manual-glosario details { border: 1px solid #ece7df; border-radius: 10px; background: #fff; overflow: hidden; }
+.manual-glosario details[open] { border-color: #ded5c6; }
+.manual-glosario summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; color: #25272c; font-size: 12.5px; font-weight: 700; cursor: pointer; list-style: none; }
+.manual-glosario summary::-webkit-details-marker { display: none; }
+.manual-glosario summary:hover { background: #fdfbf7; }
+.manual-glosario summary i { width: 8px; height: 8px; flex: none; border-right: 2px solid #a49b8f; border-bottom: 2px solid #a49b8f; transform: rotate(-45deg); transition: transform .2s ease; }
+.manual-glosario details[open] summary i { transform: rotate(45deg); }
+.manual-glosario details p { margin: 0; padding: 0 14px 12px; color: #55524d; font-size: 12.5px; line-height: 1.6; animation: manual-abrir .24s ease both; }
+
+@keyframes manual-fluir { to { background-position: 10px 0; } }
+@keyframes manual-entrar { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes manual-abrir { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes manual-latir { 0% { transform: scale(.94); } 60% { transform: scale(1.03); } 100% { transform: none; } }
+@keyframes manual-temblor {
+  0%, 100% { transform: none; }
+  20% { transform: translateX(-4px) rotate(-1.5deg); }
+  45% { transform: translateX(4px) rotate(1.5deg); }
+  70% { transform: translateX(-2px); }
+}
+
+/* Con sitio de sobra, la ficha del eslabón se abre en tres columnas —texto,
+   fuentes y cifras a la vez, sin bajar la vista— y el juguete se estrecha un
+   poco para que el texto de al lado respire. Va DESPUÉS de las reglas base a
+   propósito: una media query no aporta especificidad, así que si estuviera
+   antes la ganaría la regla de dos columnas. */
+@media (min-width: 1340px) {
+  .manual-ficha { grid-template-columns: minmax(0, 1.3fr) minmax(0, .82fr) minmax(0, .8fr); }
+  .manual-ficha-texto { grid-row: 1; }
+  .manual-ficha-cifras {
+    grid-column: 3; grid-row: 1; grid-template-columns: minmax(0, 1fr);
+    border-top: 0; border-left: 1px solid #f0ebe3; padding: 2px 0 2px 20px;
+  }
+  .manual-doble { grid-template-columns: minmax(0, 1fr) minmax(0, .82fr); }
+  /* Los tres problemas, en fila: son hermanos y del mismo peso. Apilados
+     ocupaban tres pantallazos de alto en una pantalla que tiene ancho. */
+  .manual-problemas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1099px) {
+  /* El índice deja de ser barra lateral y pasa a ser una tira horizontal
+     arriba: pegado a un lado en una pantalla estrecha solo robaría ancho al
+     texto. Hay que devolver las dos celdas a la columna 1, o se quedarían
+     apiladas en la segunda. */
+  .manual-cuerpo { grid-template-columns: minmax(0, 1fr); }
+  .manual-indice { position: static; grid-column: 1; grid-row: auto; }
+  .manual-page .manual-hoja { grid-column: 1; grid-row: auto; }
+  .manual-indice ol { display: flex; flex-wrap: wrap; gap: 4px; }
+  .manual-indice a { border: 1px solid #ece7df; border-left-width: 2px; }
+}
+
+@media (max-width: 899px) {
+  .manual-portada { grid-template-columns: minmax(0, 1fr); }
+  .manual-portada-datos { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 14px; text-align: left; }
+  .manual-doble { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 767px) {
+  .manual-flujo-nodos { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .manual-flujo-nodos li + li::before { display: none; }
+  .manual-flujo-pista { display: none; }
+  .manual-ficha { grid-template-columns: minmax(0, 1fr); }
+  .manual-ficha-texto, .manual-ficha-datos, .manual-ficha-cifras { grid-column: 1; grid-row: auto; }
+  .manual-seccion { padding: 16px 16px 18px; }
+}
+
+/* Quien pide menos movimiento se queda con el manual entero, quieto y visible.
+   Ninguna animación de aquí aporta información: todas son maneras de entrar. */
+@media (prefers-reduced-motion: reduce) {
+  .manual-revelar, .manual-revelar[data-visto="no"] { opacity: 1; transform: none; transition: none; }
+  .manual-portada-linea::after, .manual-flujo-caja, .manual-flujo-nodos li + li::before { animation: none; }
+  .manual-portada-linea::after { width: 100%; }
+  .manual-flujo-caja { display: none; }
+  .manual-ficha, .manual-glosario details p, .manual-demo-total strong, .manual-demo-total em { animation: none; }
+  .manual-anillo-arco, .manual-demo-tramo, .manual-demo-linea, .manual-demo-punto, .manual-demo-texto, .manual-indice-avance span { transition: none; }
+  .manual-demo[data-sumado="si"] .manual-demo-resultado { animation: none; }
+  .manual-flujo-nodos button:hover, .manual-demo figcaption button:hover { transform: none; }
 }
