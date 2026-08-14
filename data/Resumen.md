@@ -77,6 +77,7 @@ De propina, al releer los 6 excels del cliente: sus reportes por división invie
 - **`data/`** (esta carpeta) — trabajo de esta sesión:
   - `Comisiones_DBC_Borrador_Tecnico.md` — copia del borrador con todos los hallazgos de esta sesión ya integrados (secciones 4.0, 5, 7, 9, 12, 13, 15).
   - `sql/` — las ~31 queries de exploración corridas contra BigQuery (todas de solo agregados/esquema, sin datos de cliente).
-  - `notas/01` a `06` — el detalle completo de cada hallazgo, uno por archivo.
+  - `consultas/` — las dos que sí quedan corriendo de verdad: `DBC_silver_flujo_producto.sql` y `DBC_gold_flujo_producto_diario.sql`, que materializan la vista de Silvana en vez de reemplazarla.
+  - `notas/hallazgos.md` — el detalle completo de cada hallazgo de esta sesión, y por qué las dos consultas de arriba no reemplazan la vista de Silvana.
   - `Resumen.md` — este archivo.
 - **`backup/`** (gitignored) — los 6 excels originales del cliente + su conversión a Markdown en `backup/md/`.

@@ -21,8 +21,8 @@
 //
 // DOS COSAS QUE NO PUEDE HACER, y no son cosméticas:
 //   1. Ocultar el grupo sin CEDIS asignado. Es dos tercios del importe
-//      (data/notas/08): escondido, los totales no cuadrarían y nadie sabría
-//      por qué. Se pinta en naranja y no es pulsable, porque no es un CEDIS.
+//      (data/notas/hallazgos.md): escondido, los totales no cuadrarían y nadie
+//      sabría por qué. Se pinta en naranja y no es pulsable, porque no es un CEDIS.
 //   2. Sumar cantidades entre unidades distintas (CS, PZA, PAQ, SAC, KG).
 
 import { useMemo, useState } from "react";

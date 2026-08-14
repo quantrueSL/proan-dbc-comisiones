@@ -8,8 +8,8 @@
 // pasaría. Ninguna toca datos reales de la pantalla: son maquetas.
 //
 // Las cifras de la segunda sí son reales, de la corrida del 13 de agosto de
-// 2026 sobre facturado (ver `data/notas/08_cedis_sin_mapear...`), porque el
-// tamaño del agujero es justo lo que cuesta creer.
+// 2026 sobre facturado (ver `data/notas/hallazgos.md`), porque el tamaño del
+// agujero es justo lo que cuesta creer.
 
 import { useState } from "react";
 import { COLOR_FASE } from "@/features/flujo-producto/fases";

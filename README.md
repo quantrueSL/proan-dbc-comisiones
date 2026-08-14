@@ -47,7 +47,7 @@ enlace. Falta la primera capa, los traspasos, que depende del cliente
 incómodos de los datos están **a la vista en la interfaz**, no escondidos en una
 nota: el corte de `sap_VBAP` (la línea de «vendido» termina en vez de caer a
 cero) y el 65% del importe sin CEDIS asignado (fila «Sin asignar», que no se
-esconde para que los totales cuadren). Ver `data/notas/07` y `data/notas/08`.
+esconde para que los totales cuadren). Ver `data/notas/hallazgos.md`.
 
 Hay además un **manual de usuario** en `/manual`, escrito para que nadie saque
 conclusiones falsas de esta pantalla: qué resuelve la plataforma, el recorrido

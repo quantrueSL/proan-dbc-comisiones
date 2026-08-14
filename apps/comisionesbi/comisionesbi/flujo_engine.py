@@ -17,8 +17,8 @@ TRES COSAS QUE ESTE MÓDULO TIENE QUE HACER BIEN, y que no son evidentes:
    equivalente a stockkeeping_units.
 3. Cada fase tiene su propia fecha de corte, y hoy NO coinciden: `sap_VBAP`
    lleva sin datos nuevos desde el 20 de julio de 2026, así que "vendido" se
-   corta ahí mientras facturado y cobrado siguen (ver
-   data/notas/07_vbap_sin_datos_desde_20_julio.md). Por eso se devuelve
+   corta ahí mientras facturado y cobrado siguen (ver data/notas/hallazgos.md,
+   sección "El corte de sap_VBAP"). Por eso se devuelve
    `cobertura`: sin ese dato, la pantalla dibujaría ceros a partir del 21 de
    julio y parecería un desplome de ventas en vez de una laguna de datos.
 

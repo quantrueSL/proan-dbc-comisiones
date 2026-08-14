@@ -29,7 +29,7 @@ function fecha(valor: string | undefined, porDefecto: string): string {
 /**
  * Por defecto, desde el día 1 del mes pasado hasta hoy. Cubre siempre un mes
  * completo más el corriente, que es lo mínimo para que las tres fases tengan
- * datos: "vendido" se corta el 20/07/2026 (ver data/notas/07).
+ * datos: "vendido" se corta el 20/07/2026 (ver data/notas/hallazgos.md).
  */
 function rangoPorDefecto(): { desde: string; hasta: string } {
   const hoy = new Date();

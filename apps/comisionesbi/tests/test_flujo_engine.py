@@ -127,8 +127,8 @@ def test_la_cantidad_no_se_suma_entre_unidades(cliente):
 
 def test_devuelve_la_fecha_de_corte_de_cada_fase(cliente):
     # Hoy vendido se corta el 20 de julio porque sap_VBAP no tiene datos nuevos
-    # (ver data/notas/07). Sin este dato la pantalla pintaría ceros y parecería
-    # un desplome de ventas.
+    # (ver data/notas/hallazgos.md). Sin este dato la pantalla pintaría ceros y
+    # parecería un desplome de ventas.
     cliente([_fila("facturado", date(2026, 8, 1), "Leon 1", 10.0)])
 
     cobertura = _flujo()["cobertura"]

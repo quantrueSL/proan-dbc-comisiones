@@ -8,7 +8,7 @@
 //
 // LO MÁS IMPORTANTE DE ESTE COMPONENTE: un día sin dato deja HUECO en la línea,
 // nunca un cero. "Vendido" se corta el 20/07/2026 porque sap_VBAP no recibe
-// datos (data/notas/07); dibujarlo como cero diría que ese día no se vendió
+// datos (data/notas/hallazgos.md); dibujarlo como cero diría que ese día no se vendió
 // nada, que es mentira. Con el hueco, la línea simplemente termina.
 //
 // LO SEGUNDO MÁS IMPORTANTE: se dibuja a ESCALA 1:1. Antes el SVG tenía un

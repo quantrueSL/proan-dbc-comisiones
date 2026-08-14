@@ -58,7 +58,7 @@ export type FlujoCantidadUnidadRow = { fase: string; unidad: string; cantidad_to
  * Hasta qué fecha hay datos de cada fase. Hoy NO coinciden: sap_VBAP no recibe
  * datos desde el 20/07/2026, así que "vendido" se corta ahí mientras facturado
  * y cobrado siguen. Sin esto la pantalla dibujaría ceros y parecería un
- * desplome de ventas — ver data/notas/07.
+ * desplome de ventas — ver data/notas/hallazgos.md.
  */
 export type FlujoCobertura = Record<string, { desde: string; hasta: string }>;
 
