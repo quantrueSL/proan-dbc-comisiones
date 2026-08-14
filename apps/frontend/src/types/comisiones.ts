@@ -23,6 +23,73 @@ export type ComisionesCatalog = {
 
 export const EMPTY_CATALOG: ComisionesCatalog = { divisiones: [], cedis: [] };
 
+// ─── Flujo de producto (M0) — vendido, facturado y cobrado ────────────────
+// Sale de ZZ_PRUEBAS.DBC_gold_flujo_producto_diario (ver flujo_engine.py).
+// Falta la cuarta capa, traspasos: depende de validar sap_mseg contra MB51.
+
+export type FlujoFilters = {
+  division: string | null;
+  cedis: string | null;
+  tipo_venta?: string | null;
+  /** ISO `YYYY-MM-DD`: la tabla de origen es diaria. */
+  start_date: string;
+  end_date: string;
+};
+
+export type FlujoTotales = {
+  num_lineas: number;
+  monto_total: number;
+  /** Solo la fase "facturado" trae cajas. `null` significa "aquí no aplica", no cero. */
+  cantidad_cajas_total: number | null;
+};
+
+export type FlujoResumenRow = FlujoTotales & { fase: string };
+export type FlujoPorFechaRow = FlujoTotales & { fecha: string; fase: string };
+/** `cedis` es null cuando la combinación almacén+oficina no está en dm_cedis. */
+export type FlujoPorCedisRow = FlujoTotales & { cedis: string | null; fase: string };
+
+/**
+ * Cantidades desglosadas por unidad. NO se pueden sumar entre unidades: vienen
+ * en CS, PZA, PAQ, SAC, KG... Por eso llegan separadas y no como un total.
+ */
+export type FlujoCantidadUnidadRow = { fase: string; unidad: string; cantidad_total: number };
+
+/**
+ * Hasta qué fecha hay datos de cada fase. Hoy NO coinciden: sap_VBAP no recibe
+ * datos desde el 20/07/2026, así que "vendido" se corta ahí mientras facturado
+ * y cobrado siguen. Sin esto la pantalla dibujaría ceros y parecería un
+ * desplome de ventas — ver data/notas/07.
+ */
+export type FlujoCobertura = Record<string, { desde: string; hasta: string }>;
+
+/** `division_code` es lo que se filtra; `division` es lo que se enseña. */
+export type FlujoPorDivisionRow = FlujoTotales & {
+  division_code: string | null;
+  division: string | null;
+  fase: string;
+};
+export type FlujoPorTipoVentaRow = FlujoTotales & { tipo_venta: string | null; fase: string };
+
+export type FlujoResponse = {
+  cobertura: FlujoCobertura;
+  resumen: FlujoResumenRow[];
+  por_fecha: FlujoPorFechaRow[];
+  por_cedis: FlujoPorCedisRow[];
+  por_division: FlujoPorDivisionRow[];
+  por_tipo_venta: FlujoPorTipoVentaRow[];
+  cantidad_por_unidad: FlujoCantidadUnidadRow[];
+};
+
+export const EMPTY_FLUJO: FlujoResponse = {
+  cobertura: {},
+  resumen: [],
+  por_fecha: [],
+  por_cedis: [],
+  por_division: [],
+  por_tipo_venta: [],
+  cantidad_por_unidad: []
+};
+
 // ─── Comisiones (M2) — bloqueado: falta GS03 (SETs) y ZSDFI_001 (tarifas) ──
 
 export type ReportFilters = {

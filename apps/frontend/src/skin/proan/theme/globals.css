@@ -10563,3 +10563,390 @@ body.proan-report-assistant-open .proan-content-scroll {
     border-top: 1px solid #ded9d1;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Módulo de flujo de producto
+   ───────────────────────────────────────────────────────────────────────────
+   Sección propia y acotada a [data-module="flujo-producto"] en vez de tocar
+   las clases genéricas .hydro-*, que comparten los tres módulos: un ajuste
+   allí arriba se lleva por delante pantallas que no estamos mirando.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Los avisos se apilaban unos sobre otros. Van en su propia pila, con altura
+   propia y sin el flex de .hydro-unavailable que los aplastaba. */
+.flujo-avisos { display: grid; gap: 12px; }
+.flujo-aviso {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid #edcfbf;
+  border-left: 4px solid #c9761f;
+  border-radius: 12px;
+  background: #fff9f5;
+  padding: 16px 20px;
+  animation: flujo-entrada .32s ease both;
+}
+.flujo-aviso[data-tono="dato"] { border-color: #cfd6ef; border-left-color: #5f62d0; background: #f7f8fe; }
+.flujo-aviso-icono { width: 22px; height: 22px; flex: none; margin-top: 1px; }
+.flujo-aviso b { display: block; color: #763719; font-family: var(--font-proan-primary); font-size: 15px; }
+.flujo-aviso[data-tono="dato"] b { color: #33357a; }
+.flujo-aviso p { margin: 4px 0 0; color: #6f6a60; font-size: 13px; line-height: 1.5; }
+.flujo-aviso code { border-radius: 4px; background: #f0e7dd; padding: 1px 5px; font-size: 12px; }
+
+/* Las tablas salían con scroll interno y cinco filas a la vista. Se les da
+   altura suficiente y la cabecera se queda pegada al hacer scroll. */
+[data-module="flujo-producto"] .hydro-table-wrap { max-height: none; overflow: visible; }
+[data-module="flujo-producto"] .flujo-tabla-scroll { max-height: 420px; overflow: auto; }
+[data-module="flujo-producto"] .flujo-tabla-scroll thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 #e2e8f0; }
+[data-module="flujo-producto"] tbody tr { cursor: default; transition: background .12s ease; }
+[data-module="flujo-producto"] td.flujo-num { font-variant-numeric: tabular-nums; text-align: right; }
+[data-module="flujo-producto"] th.flujo-num { text-align: right; }
+.flujo-sin-asignar td { background: #fff9f5; font-style: italic; }
+.flujo-sin-asignar td:first-child { box-shadow: inset 3px 0 0 #c9761f; }
+
+/* Secciones plegables. <details> nativo: sin JavaScript y accesible de serie. */
+.flujo-plegable { border: 1px solid #e4dfd8; border-radius: 12px; background: #fff; overflow: hidden; }
+.flujo-plegable > summary {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 18px; cursor: pointer; list-style: none;
+  font-family: var(--font-proan-primary); font-size: 15px; font-weight: 700; color: #25272c;
+}
+.flujo-plegable > summary::-webkit-details-marker { display: none; }
+.flujo-plegable > summary:hover { background: #faf9f6; }
+.flujo-plegable > summary .flujo-chevron { transition: transform .2s ease; }
+.flujo-plegable[open] > summary .flujo-chevron { transform: rotate(90deg); }
+.flujo-plegable > summary small { margin-left: auto; color: #6f7278; font-size: 12px; font-weight: 600; }
+.flujo-plegable-cuerpo { border-top: 1px solid #efece7; animation: flujo-desplegar .24s ease both; }
+
+/* Gráfica */
+.flujo-chart { display: grid; gap: 10px; }
+.flujo-chart-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: #6f7278; }
+.flujo-chart-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.flujo-chart-legend i, .flujo-chart-tooltip i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+/* Alto FIJO en píxeles, no relación de aspecto. La relación de aspecto ataba el
+   alto al ancho disponible: en un monitor ancho la gráfica pasaba de 300 a más
+   de 600 px de alto y, como el SVG se estiraba desde un viewBox de 960, las
+   etiquetas de los ejes (11 px en unidades del viewBox) salían a 22 px reales.
+   Se comía la pantalla. Ahora el SVG se dibuja al ancho medido y a escala 1:1
+   (ver flujo-chart.tsx), de donde sale también el alto de esta caja.
+   ── El SVG va FUERA DEL FLUJO, y no es cosmética: lleva un ancho en píxeles y
+   en flujo normal ese ancho contaba para el min-content de la rejilla de la
+   página. Cada medida ensanchaba la columna y cada columna ensanchaba la
+   medida: la página se iba a miles de píxeles de ancho y todo salía cortado.
+   Posicionado en absoluto no aporta tamaño intrínseco y el bucle desaparece. */
+.flujo-chart-plot { position: relative; overflow: hidden; }
+.flujo-chart svg { position: absolute; top: 0; left: 0; display: block; }
+.flujo-chart-grid { stroke: #edeae4; stroke-width: 1; }
+.flujo-chart-axis { fill: #8b8880; font-size: 11px; font-variant-numeric: tabular-nums; }
+.flujo-chart-crosshair { stroke: #b9b4ab; stroke-width: 1; stroke-dasharray: 3 3; }
+.flujo-chart-line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.flujo-chart-label { font-size: 12px; font-weight: 700; }
+/* Anillo del color del fondo: separa el punto de la línea que hay debajo. */
+.flujo-chart-dot { stroke: #fff; stroke-width: 2; }
+.flujo-chart-empty { display: grid; gap: 4px; padding: 40px; text-align: center; color: #6f7278; }
+.flujo-chart-empty b { color: #25272c; }
+.flujo-chart-tooltip {
+  position: absolute; top: 8px;
+  display: grid; gap: 5px; min-width: 186px; max-width: 240px;
+  border: 1px solid #e4dfd8; border-radius: 10px; background: #fff;
+  box-shadow: 0 10px 24px rgba(47, 34, 16, .12); padding: 9px 12px;
+  font-size: 12px; pointer-events: none;
+}
+/* `left` es el píxel del día activo. La ficha se pone al lado y salta al otro
+   lado en el tramo derecho: centrada sobre el punto tapaba la línea, y pegada
+   a la derecha se salía de la tarjeta. */
+.flujo-chart-tooltip[data-lado="derecha"] { transform: translateX(14px); }
+.flujo-chart-tooltip[data-lado="izquierda"] { transform: translateX(calc(-100% - 14px)); }
+.flujo-chart-tooltip b { font-size: 12px; color: #25272c; }
+.flujo-chart-tooltip span { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; color: #6f7278; }
+/* El número lleva tinta de texto, no el color de la serie: el color lo aporta
+   el cuadradito de al lado. */
+.flujo-chart-tooltip em { font-style: normal; font-variant-numeric: tabular-nums; font-weight: 700; color: #25272c; }
+
+/* Esqueleto de carga */
+/* Mismo ancho máximo y mismas alturas que la pantalla real: el esqueleto sirve
+   para que al llegar el contenido no se mueva nada de sitio. */
+.flujo-skeleton { display: grid; gap: 14px; max-width: 1520px; margin-inline: auto; padding: 8px 4px 32px; }
+.flujo-skeleton-fila { display: grid; grid-template-columns: repeat(3, minmax(0, 172px)); gap: 10px; justify-content: end; }
+.flujo-skeleton-bloque {
+  border-radius: 12px;
+  background: linear-gradient(90deg, #f0ede8 25%, #f7f5f1 37%, #f0ede8 63%);
+  background-size: 400% 100%;
+  animation: flujo-brillo 1.4s ease infinite;
+}
+.flujo-skeleton-bloque[data-alto="kpi"] { height: 68px; }
+.flujo-skeleton-bloque[data-alto="grafica"] { height: 330px; }
+.flujo-skeleton-bloque[data-alto="tabla"] { height: 260px; }
+.flujo-skeleton-bloque[data-alto="titulo"] { height: 62px; max-width: 380px; }
+
+@keyframes flujo-brillo { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+@keyframes flujo-entrada { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes flujo-desplegar { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* Quien pida menos movimiento no lo recibe. */
+@media (prefers-reduced-motion: reduce) {
+  .flujo-aviso, .flujo-plegable-cuerpo { animation: none; }
+  .flujo-skeleton-bloque { animation: none; background: #f0ede8; }
+  .flujo-plegable > summary .flujo-chevron { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Flujo de producto · controles, barras pulsables y modales
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.flujo-pista { margin: 14px 0 0; color: #8b8880; font-size: 11px; line-height: 1.5; }
+
+/* Los KPI son botones: eligen la fase que gobierna las barras. */
+.flujo-kpi { display: block; width: 100%; text-align: left; cursor: pointer; border: 1px solid #dce3ea; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
+.flujo-kpi:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(47, 34, 16, .08); }
+.flujo-kpi.is-active { border-color: #5f62d0; box-shadow: 0 0 0 1px #5f62d0 inset; }
+.flujo-kpi span { display: flex; align-items: center; gap: 7px; }
+.flujo-kpi span i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+
+/* Barras pulsables */
+.flujo-barra {
+  display: grid; grid-template-columns: minmax(96px, 150px) 1fr auto; gap: 12px; align-items: center;
+  width: 100%; border: 0; background: transparent; padding: 5px 6px; border-radius: 8px;
+  cursor: pointer; text-align: left; transition: background .12s ease;
+}
+.flujo-barra[data-filtrable="no"] { cursor: default; }
+.flujo-barra:hover:not([data-filtrable="no"]) { background: #f6f5fe; }
+.flujo-barra[data-activa="si"] { background: #eff1fc; box-shadow: inset 0 0 0 1px #c7c9ee; }
+.flujo-barra .dashboard-bar-fill { transition: width .35s cubic-bezier(.4, 0, .2, 1); }
+.flujo-barra .dashboard-bar-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* Modales de tabla */
+.flujo-modal { width: min(1040px, 94vw); max-height: 86vh; display: flex; flex-direction: column; }
+.flujo-modal header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #efece7; padding: 18px 22px; }
+.flujo-modal header span { display: block; color: #8b8880; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.flujo-modal header h2 { margin: 4px 0 0; font-size: 19px; }
+.flujo-modal header button { border: 0; background: transparent; color: #6f7278; cursor: pointer; font-size: 28px; line-height: 1; }
+.flujo-modal-cuerpo { overflow: auto; padding: 0 6px 6px; }
+.flujo-modal-cuerpo table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.flujo-modal-cuerpo th { position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475569; font-size: 11px; letter-spacing: .04em; text-align: left; text-transform: uppercase; }
+.flujo-modal-cuerpo th, .flujo-modal-cuerpo td { border-top: 1px solid #e2e8f0; padding: 11px 14px; }
+.flujo-modal-cuerpo th.flujo-num, .flujo-modal-cuerpo td.flujo-num { text-align: right; font-variant-numeric: tabular-nums; }
+.flujo-modal-cuerpo .flujo-sin-asignar td { background: #fff9f5; font-style: italic; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flujo-barra .dashboard-bar-fill { transition: none; }
+  .flujo-kpi:hover { transform: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Flujo · avisos como símbolo y donut
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.flujo-aviso-boton {
+  display: grid; place-items: center; width: 34px; height: 34px;
+  border: 1px solid #e4dfd8; border-radius: 50%; background: #fff; cursor: pointer;
+  transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.flujo-aviso-boton svg { width: 19px; height: 19px; }
+.flujo-aviso-boton[data-tono="dato"] { border-color: #cfd6ef; background: #f7f8fe; }
+.flujo-aviso-boton[data-tono="atencion"] { border-color: #edcfbf; background: #fff9f5; }
+.flujo-aviso-boton:hover { transform: translateY(-1px); box-shadow: 0 6px 14px rgba(47, 34, 16, .1); }
+.flujo-aviso-boton:focus-visible { outline: 2px solid #5f62d0; outline-offset: 2px; }
+/* Un latido lento en el de atención: tiene que verse que hay algo que leer,
+   sin convertirse en una luz de discoteca. */
+.flujo-aviso-boton[data-tono="atencion"]::after {
+  content: ""; position: absolute; width: 34px; height: 34px; border-radius: 50%;
+  border: 1px solid #c9761f; animation: flujo-latido 3.4s ease-out infinite;
+}
+.flujo-aviso-boton { position: relative; }
+@keyframes flujo-latido {
+  0% { transform: scale(1); opacity: .55; }
+  70%, 100% { transform: scale(1.55); opacity: 0; }
+}
+
+.flujo-aviso-texto { display: grid; gap: 10px; padding: 18px 22px; max-width: 620px; }
+.flujo-aviso-texto p { margin: 0; color: #55524d; font-size: 13px; line-height: 1.6; }
+.flujo-aviso-texto code { border-radius: 4px; background: #f0e7dd; padding: 1px 5px; font-size: 12px; }
+
+/* Donut */
+.flujo-donut { padding: 6px 4px 10px; }
+.flujo-donut-arco { transition: opacity .15s ease, stroke-width .15s ease; }
+.flujo-donut-arco:hover { opacity: .82; }
+.flujo-donut-arco.is-selected { stroke-width: 15; }
+.flujo-donut .dashboard-status-legend button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 5px 6px; border-radius: 8px; cursor: pointer; font-size: 12px; color: #55524d; text-align: left; }
+.flujo-donut .dashboard-status-legend button:hover:not(:disabled) { background: #f6f5fe; }
+.flujo-donut .dashboard-status-legend button.is-selected { background: #eff1fc; box-shadow: inset 0 0 0 1px #c7c9ee; }
+.flujo-donut .dashboard-status-legend button:disabled { cursor: default; }
+.flujo-donut .dashboard-status-legend b { margin-left: auto; font-variant-numeric: tabular-nums; color: #25272c; }
+.flujo-donut .dashboard-status-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flujo-aviso-boton::after { animation: none; opacity: 0; }
+  .flujo-aviso-boton:hover { transform: none; }
+  .flujo-donut-arco { transition: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Flujo de producto · encaje de la pantalla
+   ───────────────────────────────────────────────────────────────────────────
+   La pantalla no cabía: había que alejar el zoom del navegador para verla
+   entera. No era una cosa, eran tres, y ninguna se arregla con márgenes:
+
+   1. NINGÚN ANCHO MÁXIMO. El módulo heredaba `max-width: none`, así que en un
+      monitor ancho los tres indicadores se estiraban a 600 px cada uno —el
+      número a un palmo de su rótulo— y las cinco tarjetas se ponían en una
+      sola fila, demasiado estrechas para leer el nombre de un CEDIS.
+   2. LAS BARRAS ESTABAN ROTAS. `.flujo-barra` declara tres columnas, pero sus
+      hijos traen `grid-area: label / track / value` de `.dashboard-bar-row`, y
+      esos nombres no existen aquí: los tres se iban a la MISMA celda implícita
+      del extremo derecho, montados uno sobre otro. Por eso no se veía el
+      nombre de ningún CEDIS, solo el importe. Se declaran las áreas.
+   3. LA FILA DE ALTO FIJO de `.hydro-page:has(> .operational-summary)` está
+      pensada para "cabecera + una tabla". Aquí hay seis hijos.
+
+   Todo lo de abajo está acotado a esta pantalla: las clases `.dashboard-*` y
+   `.hydro-*` las comparten los otros módulos.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.hydro-page.flujo-pagina {
+  max-width: 1520px;
+  margin-inline: auto;
+  gap: 13px;
+  grid-template-rows: none;
+  /* Una única columna que NO puede crecer con su contenido. Sin el `minmax(0,
+     …)` la columna se dimensiona por el min-content de lo que lleve dentro, y
+     basta con que un hijo mida en píxeles —la gráfica— para que la página se
+     estire hasta miles de píxeles y todo salga cortado por la derecha. */
+  grid-template-columns: minmax(0, 1fr);
+  padding: 4px 4px 30px;
+}
+
+/* Cabecera: el título se queda con el sitio que necesita y los indicadores
+   dejan de estirarse. Son un selector de fase, no un cartel. */
+.flujo-cabecera { grid-template-columns: minmax(0, 1fr) auto; gap: 20px; padding: 2px 2px 2px; }
+.flujo-cabecera .operational-summary-title h1 { font-size: clamp(19px, 1.5vw, 24px); }
+.flujo-cabecera .operational-summary-title span { max-width: 460px; }
+.flujo-cabecera .hydro-module-kpis {
+  grid-template-columns: repeat(3, minmax(0, 172px));
+  border: 1px solid #dfd9cf; border-radius: 10px; background: rgba(244, 240, 232, .72);
+}
+.flujo-cabecera .hydro-kpi { min-height: 0; padding: 8px 13px; text-align: left; }
+.flujo-cabecera .hydro-kpi span { font-size: 9.5px; }
+.flujo-cabecera .hydro-kpi strong {
+  overflow: hidden; margin: 2px 0 0; font-size: clamp(15px, 1.15vw, 19px);
+  font-variant-numeric: tabular-nums; text-overflow: ellipsis;
+}
+.flujo-cabecera .hydro-kpi small { font-size: 9.5px; }
+
+/* Una sola barra de controles. A la izquierda el contexto —avisos y filtros
+   puestos—, a la derecha las acciones y la métrica. Antes eran dos filas y
+   media de cromo por encima de la primera gráfica. */
+.flujo-pagina .flujo-controles {
+  justify-content: flex-start; gap: 8px 14px;
+  border-top: 1px solid #e8e2da; border-bottom: 1px solid #e8e2da;
+  padding: 7px 2px;
+}
+.flujo-controles-avisos { display: flex; align-items: center; gap: 8px; }
+.flujo-controles-avisos:empty { display: none; }
+.flujo-controles-pista { color: #918a80; font-size: 11px; }
+.flujo-controles-derecha { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-left: auto; }
+.flujo-controles .dashboard-filter-chips { flex: 0 1 auto; margin: 0; }
+.flujo-controles .flujo-chip-limpiar { border-style: dashed; color: #a9591f; font-weight: 700; }
+
+/* Un botón por tabla. Estuvieron detrás de un desplegable y no compensaba:
+   son cuatro, cada uno abre su ventana y así se sabe qué hay sin abrir nada. */
+.flujo-botones-tabla { display: flex; flex-wrap: wrap; gap: 6px; }
+.flujo-botones-tabla button {
+  border: 1px solid #e4dfd8; border-radius: 999px; background: #fff;
+  padding: 5px 12px; color: #55524d; font-size: 11px; font-weight: 700; cursor: pointer;
+  transition: border-color .15s ease, color .15s ease;
+}
+.flujo-botones-tabla button:hover, .flujo-botones-tabla button:focus-visible {
+  border-color: #b9b3e0; color: #43458f; outline: none;
+}
+
+/* Tablero: la gráfica ocupa dos columnas de tres —ancho de gráfica, no de
+   página— con el donut al lado en la misma fila. Debajo, las dos listas largas
+   (CEDIS y división) y las dos piezas pequeñas apiladas a la derecha. Todo con
+   `minmax(0, …)`: ninguna columna puede crecer con su contenido. */
+.flujo-tablero {
+  display: grid; gap: 12px; align-items: start;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 1fr);
+  grid-template-areas:
+    "grafica grafica  tipo"
+    "cedis   division mes"
+    "cedis   division unidad";
+}
+.flujo-tablero > * { min-width: 0; }
+.flujo-tablero > [data-zona="grafica"] { grid-area: grafica; }
+.flujo-tablero > [data-zona="cedis"] { grid-area: cedis; }
+.flujo-tablero > [data-zona="division"] { grid-area: division; }
+.flujo-tablero > [data-zona="tipo"] { grid-area: tipo; }
+.flujo-tablero > [data-zona="mes"] { grid-area: mes; }
+.flujo-tablero > [data-zona="unidad"] { grid-area: unidad; }
+
+.flujo-tablero .dashboard-card { padding: 12px 14px 10px; }
+.flujo-tablero .dashboard-card-head { margin-bottom: 9px; }
+.flujo-tablero .dashboard-card-head h2 {
+  margin: 0; color: #25272c; font-family: var(--font-proan-primary);
+  font-size: 12.5px; font-weight: 700; letter-spacing: -.01em;
+}
+.flujo-tablero .dashboard-card-head span { display: block; margin-top: 2px; color: #918a80; font-size: 10px; }
+
+/* La gráfica es la pieza principal: título un punto mayor y el resto igual que
+   sus vecinas, para que la fila se lea como una fila. */
+.flujo-tablero .flujo-tarjeta-grafica { padding: 12px 16px 8px; }
+.flujo-tablero .flujo-tarjeta-grafica .dashboard-card-head { margin-bottom: 4px; }
+.flujo-tablero .flujo-tarjeta-grafica .dashboard-card-head h2 { font-size: 13.5px; }
+
+/* Barras: se declaran las áreas que sus hijos ya piden (ver el punto 2 de
+   arriba) y el <li> deja de ser una rejilla de dos columnas que le comía 90 px
+   al botón. */
+.flujo-pagina .dashboard-bar-row { display: block; }
+.flujo-pagina .dashboard-bar-list { gap: 5px; }
+.flujo-pagina .flujo-barra {
+  grid-template-areas: "label track value";
+  grid-template-columns: minmax(64px, 124px) minmax(40px, 1fr) auto;
+  gap: 10px; padding: 3px 6px; font-size: 11.5px;
+}
+.flujo-pagina .dashboard-bar-label { font-size: 11.5px; font-weight: 600; }
+.flujo-pagina .dashboard-bar-value { font-size: 11.5px; }
+.flujo-pagina .dashboard-bar-track { height: 7px; }
+
+/* Pie de lista: la cola de la lista se consulta en la tabla, no alargando la
+   tarjeta hasta descuadrar la columna de al lado. */
+.flujo-lista { display: grid; gap: 7px; }
+.flujo-lista-pie {
+  display: inline-flex; align-items: center; gap: 6px; justify-self: start;
+  border: 0; border-radius: 6px; background: transparent; padding: 3px 6px;
+  color: #3d3d7c; font-size: 10.5px; font-weight: 700; cursor: pointer;
+}
+.flujo-lista-pie:hover, .flujo-lista-pie:focus-visible { background: rgba(61, 61, 124, .08); outline: none; }
+
+/* Donut y leyenda, a la medida de la columna estrecha. */
+.flujo-tablero .dashboard-donut-svg { width: 112px; height: 112px; }
+.flujo-tablero .flujo-donut { padding: 2px 0 4px; }
+.flujo-tablero .flujo-donut .dashboard-status-legend { display: grid; gap: 1px; width: 100%; margin: 9px 0 0; }
+.flujo-tablero .flujo-donut .dashboard-status-legend button { padding: 3px 5px; font-size: 11px; }
+
+@media (max-width: 1279px) {
+  .flujo-tablero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "grafica grafica"
+      "cedis   division"
+      "tipo    mes"
+      "tipo    unidad";
+  }
+}
+
+@media (max-width: 899px) {
+  .flujo-cabecera { grid-template-columns: minmax(0, 1fr); }
+  .flujo-cabecera .hydro-module-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .flujo-controles-derecha { margin-left: 0; }
+  .flujo-tablero {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "grafica" "cedis" "division" "tipo" "mes" "unidad";
+  }
+}
+
+@media (max-width: 599px) {
+  /* Tres importes de nueve cifras no caben en una fila de móvil. */
+  .flujo-cabecera .hydro-module-kpis { grid-template-columns: minmax(0, 1fr); }
+}

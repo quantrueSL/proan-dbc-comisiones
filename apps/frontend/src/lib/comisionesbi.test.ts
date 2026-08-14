@@ -3,7 +3,8 @@ import {
   BackendNotReadyError,
   getComisionesCatalog,
   getComisionesReconciliation,
-  getComisionesReport
+  getComisionesReport,
+  getFlujoProducto
 } from "@/lib/comisionesbi";
 
 const CATALOGO = { divisiones: [{ business_area_code: "H" }], cedis: [] };
@@ -84,6 +85,41 @@ describe("cómo se llama al backend", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(filtros)
     });
+  });
+
+  it("manda el flujo de producto con sus fechas ISO", async () => {
+    responde(200, { resumen: [], cobertura: {} });
+    const filtros = {
+      division: "H",
+      cedis: "Leon 1",
+      start_date: "2026-07-01",
+      end_date: "2026-07-31"
+    };
+
+    await getFlujoProducto(filtros);
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8091/v1/comisionesbi/flujo");
+    expect(opcionesDeLaLlamada()).toMatchObject({
+      method: "POST",
+      body: JSON.stringify(filtros)
+    });
+  });
+
+  it("manda null en los filtros vacíos del flujo, no cadenas vacías", async () => {
+    // El backend distingue: null es "sin filtro", "" filtraría por cadena vacía
+    // y no devolvería nada.
+    responde(200, { resumen: [], cobertura: {} });
+
+    await getFlujoProducto({
+      division: null,
+      cedis: null,
+      start_date: "2026-07-01",
+      end_date: "2026-07-31"
+    });
+
+    const cuerpo = JSON.parse(String(opcionesDeLaLlamada().body));
+    expect(cuerpo.division).toBeNull();
+    expect(cuerpo.cedis).toBeNull();
   });
 
   it("manda la conciliación a su propia ruta", async () => {
