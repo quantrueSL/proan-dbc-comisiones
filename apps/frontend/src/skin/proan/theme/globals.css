@@ -10692,6 +10692,62 @@ body.proan-report-assistant-open .proan-content-scroll {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Login · fondo de la red de distribución
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.login-backdrop { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.login-backdrop svg { width: 100%; height: 100%; }
+/* La tarjeta por encima del fondo, y con algo de fondo propio para que el
+   texto no compita con las rutas. */
+.login-page > .login-shell { position: relative; z-index: 1; }
+
+.login-map-route { fill: none; stroke: #d9d5ee; stroke-width: 1.5; }
+.login-map-flow {
+  fill: none; stroke: #5f62d0; stroke-width: 2; stroke-linecap: round;
+  stroke-dasharray: 26 420; stroke-dashoffset: 446;
+  animation: login-flujo 6.5s cubic-bezier(.45, 0, .25, 1) infinite;
+  opacity: .55;
+}
+.login-map-box { fill: #cf7a22; opacity: .85; display: none; }
+/* offset-path no está en todos los navegadores; donde falte, quedan las rutas
+   fluyendo, que ya cuentan lo mismo. */
+@supports (offset-path: path("M0 0 L1 1")) {
+  .login-map-box {
+    display: block;
+    offset-rotate: 0deg;
+    animation: login-reparto 6.5s cubic-bezier(.45, 0, .25, 1) infinite;
+  }
+}
+
+.login-map-hub circle { fill: #fff; stroke: #5f62d0; stroke-width: 2.5; }
+.login-map-pulse { fill: none; transform-origin: 170px 400px; animation: login-pulso 3.2s ease-out infinite; }
+.login-map-node { fill: #fff; stroke: #12a074; stroke-width: 2; animation: login-nodo 3.2s ease-in-out infinite; }
+
+@keyframes login-flujo { to { stroke-dashoffset: 0; } }
+@keyframes login-reparto {
+  0% { offset-distance: 0%; opacity: 0; }
+  8% { opacity: .85; }
+  88% { opacity: .85; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+@keyframes login-pulso {
+  0% { transform: scale(1); opacity: .5; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes login-nodo {
+  0%, 100% { stroke-width: 2; }
+  50% { stroke-width: 3.4; }
+}
+
+/* Una pantalla de login es lo último donde conviene marear a alguien: quien
+   pide menos movimiento se queda con la red dibujada y quieta. */
+@media (prefers-reduced-motion: reduce) {
+  .login-map-flow, .login-map-pulse, .login-map-node, .login-map-box { animation: none; }
+  .login-map-flow { stroke-dasharray: none; stroke-dashoffset: 0; opacity: .3; }
+  .login-map-box { display: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Flujo de producto · controles, barras pulsables y modales
    ═══════════════════════════════════════════════════════════════════════════ */
 

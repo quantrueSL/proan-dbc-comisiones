@@ -3,6 +3,7 @@ import { GoogleLoginButton } from "@/components/google-login-button";
 import { LoginForm } from "@/components/login-form";
 import { getFirebaseWebConfig } from "@/lib/env";
 import { proanBranding } from "@/skin/proan/branding";
+import { ProanLoginBackdrop } from "@/skin/proan/components/proan-login-backdrop";
 import proanLogo from "@/skin/proan/assets/logos/logoproan.png";
 
 export function ProanLoginPanel() {
@@ -12,6 +13,7 @@ export function ProanLoginPanel() {
 
   return (
     <main className="login-page">
+      <ProanLoginBackdrop />
       <section className="login-shell">
         <div className="login-brand-mark">
           <Image
