@@ -69,7 +69,12 @@ rol irreconocible se degrada al menos privilegiado (`viewer`), nunca al revés.
 | `SESSION_COOKIE_NAME` | `dbc_comisiones_session` |
 | `HTPASSWD_PATH` | ruta al fichero de usuarios técnicos |
 | `GCP_PROJECT` / `FIRESTORE_DATABASE_ID` / `ACCESS_LIST_ID` | ubicación de la lista de acceso |
-| `FIREBASE_API_KEY` / `FIREBASE_AUTH_DOMAIN` / `FIREBASE_APP_ID` | config pública del SDK web (pendiente registrar app, ver §2) |
+| `FIREBASE_API_KEY` / `FIREBASE_AUTH_DOMAIN` / `FIREBASE_APP_ID` | config pública del SDK web (app ya registrada, ver §2). Si falta cualquiera de las tres, `getFirebaseWebConfig()` devuelve `null`, el botón de Google no se pinta y la pantalla se repliega al usuario/contraseña |
+
+Con `docker compose` estas variables las pone `deploy/docker-compose.dev.yml`.
+Levantando el frontend a mano (`pnpm dev`) no existen, así que hay plantilla:
+`cp apps/frontend/.env.local.example apps/frontend/.env.local`. Fue justo el
+motivo por el que el botón de Google no aparecía corriendo fuera de Docker.
 
 ## 6. Estado
 
@@ -81,6 +86,15 @@ Hecho (2026-08-13):
   `deploy/cloudrun/README.md`).
 - Documento `lists/dbc_comisiones_acceso` creado con los primeros cinco
   correos, `enabled: true` y `roles` vacío — o sea, todos entran como `viewer`.
+
+Hecho (2026-08-14):
+
+- Botón de Google comprobado en local, con el stack de `docker compose`
+  (http://localhost:8080). La lista de acceso se leyó de Firestore y responde:
+  `enabled: true`, los cinco correos, `roles` vacío. Para entrar hay que usar
+  una de esas cinco cuentas; cualquier otra se rechaza (la lista es la puerta).
+- Plantilla `apps/frontend/.env.local.example` para levantar el frontend sin
+  Docker (§5).
 
 Pendiente:
 
