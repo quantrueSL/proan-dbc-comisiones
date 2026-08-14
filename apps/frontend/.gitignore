@@ -1,4 +1,7 @@
 node_modules
 .next
+# Builds de comprobación (NEXT_DIST_DIR, ver next.config.mjs): así no le pisan
+# los manifiestos al `next dev` que esté levantado.
+.next-*
 .env.local
 *.tsbuildinfo
