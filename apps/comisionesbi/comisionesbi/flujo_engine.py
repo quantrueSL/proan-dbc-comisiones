@@ -45,6 +45,7 @@ FROM {_TABLA}
 WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
   AND (@cedis IS NULL OR cedis = @cedis)
+  AND (@tipo_venta IS NULL OR tipo_venta = @tipo_venta)
 """
 
 # La cobertura se calcula sobre la tabla ENTERA, sin los filtros de fecha: "hasta
@@ -86,10 +87,21 @@ def _nuevo() -> dict:
     return {"num_lineas": 0, "monto_total": 0.0, "cantidad_cajas_total": None}
 
 
+def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
+    """Convierte {(valor, fase): totales} en filas, con los nulos al final."""
+    return [
+        {clave: valor, "fase": fase, **datos}
+        for (valor, fase), datos in sorted(
+            agrupado.items(), key=lambda item: (item[0][0] is None, item[0][0] or "", item[0][1])
+        )
+    ]
+
+
 def build_flujo(
     *,
     division: str | None,
     cedis: str | None,
+    tipo_venta: str | None = None,
     start_date: date,
     end_date: date,
 ) -> dict:
@@ -97,7 +109,12 @@ def build_flujo(
 
     Una sola consulta al detalle diario y las agregaciones en memoria: la tabla
     gold entera son 4,7 MB, así que traer el trozo filtrado y agrupar aquí sale
-    más barato que lanzar tres consultas.
+    más barato que lanzar una consulta por agrupación.
+
+    Se devuelven las agrupaciones por CEDIS, división y tipo de venta porque la
+    pantalla deja pulsar sobre ellas para filtrar el resto; el nombre de la
+    división viaja junto a su código para que la interfaz pueda enseñar "Huevo"
+    y filtrar por "H" sin tener que cruzar nada.
     """
     filas = run_query(
         _DETALLE_SQL,
@@ -107,12 +124,16 @@ def build_flujo(
             "end": ("DATE", end_date),
             "division": ("STRING", division),
             "cedis": ("STRING", cedis),
+            "tipo_venta": ("STRING", tipo_venta),
         },
     )
 
     por_fase: dict = defaultdict(_nuevo)
     por_fecha: dict = defaultdict(_nuevo)
     por_cedis: dict = defaultdict(_nuevo)
+    por_division: dict = defaultdict(_nuevo)
+    por_tipo_venta: dict = defaultdict(_nuevo)
+    nombre_division: dict = {}
     # `cantidad` NO se suma entre unidades (punto 1 del docstring): la clave
     # lleva la unidad dentro, y quien la pinte tiene que respetar ese desglose.
     por_unidad: dict = defaultdict(float)
@@ -122,8 +143,16 @@ def build_flujo(
         _acumular(por_fase, fase, fila)
         _acumular(por_fecha, (_iso(fila["fecha"]), fase), fila)
         _acumular(por_cedis, (fila["cedis"], fase), fila)
+        _acumular(por_division, (fila["division_code"], fase), fila)
+        _acumular(por_tipo_venta, (fila["tipo_venta"], fase), fila)
+        if fila["division_code"] and fila["division"]:
+            nombre_division[fila["division_code"]] = fila["division"]
         if fila["unidad"] and fila["cantidad_total"]:
             por_unidad[(fase, fila["unidad"])] += fila["cantidad_total"]
+
+    divisiones = _ordenadas(por_division, "division_code")
+    for entrada in divisiones:
+        entrada["division"] = nombre_division.get(entrada["division_code"])
 
     return {
         "cobertura": cobertura(),
@@ -132,12 +161,9 @@ def build_flujo(
             {"fecha": fecha, "fase": fase, **datos}
             for (fecha, fase), datos in sorted(por_fecha.items())
         ],
-        "por_cedis": [
-            {"cedis": cedis_nombre, "fase": fase, **datos}
-            for (cedis_nombre, fase), datos in sorted(
-                por_cedis.items(), key=lambda item: (item[0][0] or "", item[0][1])
-            )
-        ],
+        "por_cedis": _ordenadas(por_cedis, "cedis"),
+        "por_division": divisiones,
+        "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
         "cantidad_por_unidad": [
             {"fase": fase, "unidad": unidad, "cantidad_total": total}
             for (fase, unidad), total in sorted(por_unidad.items())

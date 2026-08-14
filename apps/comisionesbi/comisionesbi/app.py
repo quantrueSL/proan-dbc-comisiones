@@ -73,6 +73,7 @@ class FlujoQuery(BaseModel):
 
     division: str | None = None
     cedis: str | None = None
+    tipo_venta: str | None = None
     start_date: date
     end_date: date
 
@@ -105,6 +106,7 @@ def post_flujo(body: FlujoQuery) -> dict:
     return build_flujo(
         division=body.division,
         cedis=body.cedis,
+        tipo_venta=body.tipo_venta,
         start_date=body.start_date,
         end_date=body.end_date,
     )

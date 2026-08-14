@@ -62,6 +62,7 @@ def _flujo(**extra):
     parametros = {
         "division": None,
         "cedis": None,
+        "tipo_venta": None,
         "start_date": date(2026, 1, 1),
         "end_date": date(2026, 8, 31),
     }
@@ -167,6 +168,7 @@ def test_los_filtros_viajan_como_parametros(cliente):
         "end": ("DATE", date(2026, 5, 31)),
         "division": ("STRING", "H"),
         "cedis": ("STRING", "Leon 1"),
+        "tipo_venta": ("STRING", None),
     }
 
 
@@ -181,6 +183,65 @@ def test_un_filtro_vacio_viaja_como_null_tipado(cliente):
     parametros = {p.name: p.value for p in job_config.query_parameters}
     assert parametros["division"] is None
     assert parametros["cedis"] is None
+
+
+def test_agrupa_por_division_con_su_nombre(cliente):
+    # La interfaz enseña "Huevo" y filtra por "H": necesita los dos juntos.
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0),
+            _fila("facturado", date(2026, 7, 2), "Leon 2", 50.0),
+        ]
+    )
+
+    divisiones = _flujo()["por_division"]
+
+    assert divisiones == [
+        {
+            "division_code": "H",
+            "fase": "facturado",
+            "num_lineas": 2,
+            "monto_total": 150.0,
+            "cantidad_cajas_total": None,
+            "division": "Huevo",
+        }
+    ]
+
+
+def test_agrupa_por_tipo_de_venta(cliente):
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0),
+            _fila("facturado", date(2026, 7, 2), "Leon 1", 40.0),
+        ]
+    )
+
+    assert _flujo()["por_tipo_venta"][0]["tipo_venta"] == "VTA EN RUTA"
+    assert _flujo()["por_tipo_venta"][0]["monto_total"] == 140.0
+
+
+def test_los_grupos_sin_valor_van_al_final(cliente):
+    # "Sin asignar" es el grupo más grande en importe; si se ordenara con los
+    # demás quedaría arriba del todo y taparía a los CEDIS reales.
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), None, 900.0),
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 10.0),
+            _fila("facturado", date(2026, 7, 1), "Ags", 20.0),
+        ]
+    )
+
+    assert [f["cedis"] for f in _flujo()["por_cedis"]] == ["Ags", "Leon 1", None]
+
+
+def test_el_tipo_de_venta_tambien_es_filtrable(cliente):
+    falso = cliente([])
+
+    _flujo(tipo_venta="MAYOREO")
+
+    _, job_config = next((sql, cfg) for sql, cfg in falso.llamadas if "GROUP BY fase" not in sql)
+    parametros = {p.name: p.value for p in job_config.query_parameters}
+    assert parametros["tipo_venta"] == "MAYOREO"
 
 
 def test_agrupa_por_fecha_y_por_cedis(cliente):
