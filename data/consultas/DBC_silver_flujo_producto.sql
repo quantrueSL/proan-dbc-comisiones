@@ -18,7 +18,14 @@
 -- ZZ_PRUEBAS.GOLD_ALERTAS_MENSUAL, particionada por mes y clusterizada).
 --
 -- ORDEN: esta primero, luego DBC_gold_flujo_producto_diario.sql, que sale de
--- esta. Las dos juntas son el DAG diario cuando se orqueste en Airflow.
+-- esta. Las dos juntas son el DAG diario cuando se orqueste en Airflow. Ojo:
+-- `v1_flujo_producto_dbc.sql` (que crea la vista de la que sale esto, y las
+-- dimensiones que ella cruza) va ANTES de las dos — es donde vive la lógica.
+--
+-- Sigue siendo un `SELECT *` a propósito: la lógica de mapeo está en la vista,
+-- así que las columnas nuevas de allí (por ejemplo `cedis_origen`, que dice si
+-- el CEDIS salió del cruce almacén+oficina o del fallback por oficina sola)
+-- llegan aquí sin tocar este fichero.
 --
 -- DATASET: ZZ_PRUEBAS mientras dure la fase de pruebas, que es donde Silvana
 -- dejó sus vistas. Al validarse, esta tabla va a D50_AGGREGATE (staging) y la
