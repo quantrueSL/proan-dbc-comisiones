@@ -3,6 +3,15 @@
 
 _Última actualización: 12 de agosto de 2026_
 
+> **Aviso del 21 de agosto de 2026.** Las cifras de este borrador son de la
+> corrida del 12 de agosto y **tres de ellas ya no valen**: `sap_VBAP` se puso al
+> día (vendido ya no se corta el 20 de julio), el cobrado estaba inflado un 53%
+> porque `sap_pago` copia el importe en cada partida y en cada compensación, y el
+> pendiente #7 —la conversión a caja— está resuelto en las tres fases, no solo en
+> facturado. Las cifras vigentes están en `data/Resumen.md` y el detalle de qué
+> cambió y por qué, en `data/notas/hallazgos.md`. Este documento se mantiene como
+> lo que es: el registro de lo que se sabía entonces.
+
 ## 1. Objetivo
 
 Plataforma web con dashboard interactivo que centralice y visualice la información operativa y comercial de DBC por cada CEDIS. Consolida datos de SAP para dar visión integral del flujo de producto: entrada de mercancía al CEDIS (traspasos), unidades vendidas, facturadas y compensadas (cobradas), hasta el inventario disponible (**inventarios fuera de alcance por el momento**). El detalle debe llegar a tipo de producto y presentación, y diferenciar tipo de venta (mayoreo, detalle, ruta, etc.).

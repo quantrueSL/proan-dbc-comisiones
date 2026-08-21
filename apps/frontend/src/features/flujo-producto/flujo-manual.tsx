@@ -77,14 +77,15 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
         <div className="manual-doble">
           <div>
             <p>
-              Cada línea muestra el importe de cada día. Pasa el ratón por encima para ver las tres
-              cifras de ese día, y usa los tres indicadores de arriba para elegir qué fase gobierna
-              las barras de abajo.
+              Cada día lleva tres barras juntas, una por etapa. Pasa el ratón por encima para ver las
+              tres cifras de ese día, y usa los tres indicadores de arriba para elegir qué fase
+              gobierna las barras de abajo. Si el periodo es largo, las barras pasan a agrupar por
+              semana o por mes y la leyenda lo dice.
             </p>
             <p>
-              <b>Un hueco en la línea significa que no hay dato de ese día, no que fuera cero.</b> Por
-              eso la línea se corta en vez de bajar al suelo: un cero diría que ese día no hubo
-              movimiento, y sería mentira.
+              <b>Si falta la barra de una fase, es que no hay dato de ese día, no que fuera cero.</b> Por
+              eso no se dibuja nada en vez de dibujar una barra a ras del suelo: un cero diría que ese
+              día no hubo movimiento, y sería mentira.
             </p>
           </div>
           <DemoHueco />
@@ -129,14 +130,16 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
               esconderse, para que la suma de la tabla cuadre con los indicadores de arriba.
             </p>
             <p>
-              <b>No es un caso raro:</b> son pocas operaciones pero muy grandes, y se llevan dos
-              tercios del importe. Una línea sin CEDIS vale de media veinticinco veces más que una
-              normal.
+              <b>No es un caso raro:</b> son pocas operaciones pero muy grandes, y se llevan el 61%
+              del importe. Una línea sin CEDIS vale de media veinticinco veces más que una normal.
             </p>
             <p className="manual-nota">
-              Doce combinaciones de almacén y oficina explican el 86% de ese hueco. Está pendiente de
-              que el cliente diga a qué CEDIS corresponde cada una. Hasta entonces, cualquier análisis
-              por CEDIS solo cubre un tercio del dinero.
+              Era el 65% hasta que el cruce de CEDIS pasó a usar la oficina sola cuando el par
+              almacén + oficina no existe en el catálogo. Lo que queda se concentra: cuatro
+              combinaciones de almacén y oficina explican el 71% del hueco, y esos almacenes no
+              aparecen en el catálogo de CEDIS de ninguna forma. Está pendiente de que el cliente diga
+              a qué CEDIS corresponden. Hasta entonces, cualquier análisis por CEDIS cubre el 39% del
+              dinero.
             </p>
           </div>
           <DemoSinAsignar />
@@ -153,8 +156,15 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
               unidad y no verás nunca un total de cantidad.
             </p>
             <p>
-              La única cantidad comparable es la de <b>cajas</b>, y solo existe en facturado. Es
-              también la unidad en la que se paga la comisión, así que no es un detalle menor.
+              La única cantidad comparable es la de <b>cajas</b>, y ya existe en las tres etapas: en
+              facturado viene de SAP, en vendido de la conversión de la unidad de venta, y en cobrado
+              se reparte la de la factura según la proporción cobrada. Es también la unidad en la que
+              se paga la comisión, así que no es un detalle menor.
+            </p>
+            <p className="manual-nota">
+              Con precisión: es la cantidad en la <b>unidad de manejo</b> de cada producto, que suele
+              ser la caja pero a veces es el paquete o el saco. Se llama «cajas» porque es como se
+              habla de ella, no porque todo se mida en cajas.
             </p>
           </div>
           <DemoUnidades />

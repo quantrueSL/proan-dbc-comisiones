@@ -13,7 +13,16 @@ afectan directamente al dashboard.
 
 ## Los dos hallazgos que importan de verdad
 
-### El corte de `sap_VBAP` desde el 20 de julio de 2026
+### El corte de `sap_VBAP` desde el 20 de julio de 2026 — RESUELTO el 21 de agosto
+
+> **Estado al 21 de agosto de 2026:** la carga volvió a andar. `MAX(ERDAT)` de
+> `sap_VBAP` pasó del 20 de julio al 9 de agosto por la mañana y al **19 de
+> agosto** por la tarde, así que el desfase con `sap_VBAK` es de un día, no de un
+> mes. Vendido subió de $1.867 M a **$2.224 M**. Lo que queda de este hallazgo no
+> es el corte, es la lección: **nadie se enteró de que el origen se había
+> arreglado**, porque silver y gold se refrescan a mano y no hay nada que avise.
+> De ahí la consulta de verificación pendiente al final de esta nota. Se deja el
+> texto original abajo porque explica cómo se detectó y cómo comprobarlo.
 
 Detectado al validar la tabla silver contra las cifras ya conocidas de
 `Resumen.md`: la fase **vendido** del flujo de producto se corta el
@@ -58,7 +67,7 @@ FROM `proan-quantrue.D30_INTEGRATION.sap_VBAP`;
 Si devuelve una fecha reciente, basta con reejecutar
 `data/consultas/DBC_silver_flujo_producto.sql` y la gold que sale de ella.
 
-### El 65% del importe facturado no tiene CEDIS asignado
+### El 65% del importe facturado no tenía CEDIS asignado (hoy, el 61%)
 
 Detectado al probar el motor de flujo de producto contra la tabla gold real.
 La cobertura de CEDIS del ~92,5% de `Resumen.md` está medida **en número de
@@ -97,6 +106,144 @@ cuadre y nadie sepa por qué. Y para el cálculo de comisión es tan bloqueante
 como el export de GS03, porque la tarifa depende de CEDIS × oficina: dos
 tercios del importe facturado no se pueden atribuir hoy.
 
+#### Actualización del 21 de agosto de 2026: fallback por oficina sola
+
+`v1_flujo_producto_dbc` cruza ahora por oficina sola (vista nueva
+`dim_cedis_oficina_v1`, sección 1b de su script) **solo cuando el par
+almacén + oficina no existe** en `dm_cedis`. Resultado medido sobre la silver:
+
+| Fase | % importe sin CEDIS antes | después | recupera |
+|---|---|---|---|
+| vendido | 68,5 | **65,3** | $65,1 M · 17.814 líneas |
+| facturado | 65,3 | **61,4** | $79,2 M · 20.662 líneas |
+| cobrado | 83,1 | **81,5** | $29,7 M · 1.814 líneas |
+
+La columna nueva `cedis_origen` (`'almacen+oficina'` / `'solo oficina'` /
+`NULL`) viaja hasta la gold, así que el resultado anterior se reproduce exacto
+con `IF(cedis_origen = 'solo oficina', NULL, cedis)`: el fallback etiqueta, no
+borra.
+
+**Por qué se puede hacer:** la oficina sola casi no es ambigua. De las 105
+oficinas de `dm_cedis`, 103 apuntan a un único CEDIS y a un único tipo de
+venta. Las dos que no (0122 Celaya, 0131 Tuxtla) no llegan nunca al fallback
+hoy — sus 77.539 líneas cruzan enteras por el par completo. Y donde el nombre
+del almacén en el maestro de SAP es legible, **confirma la asignación en el 89%
+del importe**.
+
+**Por qué el fallback recupera $79 M y no $497 M: la oficina `0001` es un
+cajón de sastre.** Sin filtrarla, el fallback recuperaba $497 M en facturado
+(hasta el 40,9%), pero **$418 M de esos iban a «Mexico 1» apoyados en UNA
+sola fila de `dm_cedis`** — la oficina 0001 tiene un almacén en el catálogo y
+aparece con **70 almacenes distintos** en el flujo. Los nombres de esos
+almacenes en `T001L` desmienten la asignación: `DG01`/`DG06`/`DG03` son
+`SPART = 'DG'` (Derivados de Ganado, $199 M), `H723` está en planta `H7AG`
+como "ALM. CENTRAL" ($171 M), y detrás vienen "CANCÚN FS", "VALLARTA FS",
+"GUADALAJARA FS", "DIS. IZTAPALAPA", "DIS. PUEBLA 2" — varios son CEDIS del
+catálogo distintos de Mexico 1. Así que `dim_cedis_oficina_v1` **excluye las
+oficinas con un solo almacén en el catálogo** (0001 y 0018). El `DG01` que
+esta nota tenía como pregunta abierta sigue en «Sin asignar», que es donde la
+evidencia lo deja.
+
+**Lo que el fallback no arregla, y no es por falta de método.** El hueco que
+queda en facturado son $1.250 M, y cuatro pares almacén+oficina explican el
+71%: `BO28`/`0126` ($285,1 M), `H793`/`0024` ($241,8 M), `DG01`/`0001`
+($188,3 M) y `H723`/`0001` ($171,2 M). Esos almacenes **no están en
+`dm_cedis` por ninguna llave**, comprobado por tres vías:
+
+1. por par almacén+oficina — es el fallo de partida;
+2. por almacén solo contra `dm_cedis`: recupera $15,7 M (1,2% del hueco), y
+   donde coincide con la vía de la oficina **discrepan el 100% de las veces**;
+3. aprendiendo el mapeo *nombre de almacén → CEDIS* de las propias líneas que
+   sí cruzan y aplicándolo al resto: otra vez $15,7 M. Los nombres del hueco
+   ("ALM. CENTRAL 2", "CEDIS SAN JUAN", "ALMACÉN DG") no aparecen en ninguna
+   línea mapeada.
+
+### `sap_pago` copia el importe: el cobrado estaba inflado un 53%
+
+_21 de agosto de 2026, encontrado al ir a prorratear las cajas de cobrado._
+
+`sap_pago` no reparte el importe cobrado entre los renglones de la factura: lo
+**copia**. Y hay dos niveles de copia, no uno:
+
+1. Dentro de una compensación hay un renglón por partida de la factura y los
+   tres traen el mismo `paid_amount_mxn`. Medido: los 39.967 grupos
+   factura × compensación tienen un único importe distinto — cero excepciones.
+2. La misma factura reaparece en varias compensaciones con el importe completo
+   otra vez: 479 facturas, $230,5 M. Ejemplo real, factura `2071220041`, tres
+   apariciones de $1.604.462,29 — dos renglones de la compensación del 26/03 y
+   otros dos de la del 31/03, una con el documento de pago `DP` y otra con el
+   de factura `RV`. Se cobró una vez.
+
+| forma de contarlo | cobrado 2026 |
+|---|---|
+| suma de renglones (lo que hacía la vista) | $1.884,7 M |
+| una vez por compensación | $1.459,8 M |
+| **una vez por factura** | **$1.229,3 M** |
+
+La vista pasa a contar una vez por factura (CTE `pago_factura_v1`). `pagado_lg`
+y `unique_billing_lg` no sirven como llave de deduplicación: 638 grupos no
+tienen exactamente una fila marcada.
+
+**Y no existen cobros parciales.** Los 39.967 pagos cuadran **exactamente** con
+el total de su factura con impuestos (`amount_total_mxn`): ratio 1,00, ninguno
+por encima, ninguno por debajo. Contra el importe neto el p99 salía 1,16, que
+era el IVA y no un sobrepago — prorratear contra el neto habría inflado las
+cajas cobradas hasta un 16%. Dos consecuencias:
+
+- Las cajas cobradas son las de la factura, enteras: 49,3 millones. La fórmula
+  del prorrateo está escrita igual, para el día que haya cobros parciales.
+- `monto` de cobrado pasa a ser el **neto equivalente** ($1.194,9 M) y no el
+  pagado con impuestos ($1.229,3 M), para medir con la misma vara que facturado,
+  que también es neto. Son 2,8% de diferencia, y sin eso cobrado podía superar a
+  facturado en la misma factura sin que se hubiera cobrado nada de más.
+
+### Las cajas de vendido estaban en `sap_VBAP` desde el principio
+
+_21 de agosto de 2026._ La nota anterior daba por hecho que `sap_VBAP` no tenía
+equivalente a `stockkeeping_units`. Sí lo tiene: `UMVKZ`/`UMVKN`, el factor de
+unidad de venta a unidad base, informado en el **100%** de las 1.778.013 líneas
+DBC de 2026 (ni un NULL, ni un denominador cero). `KWMENG * UMVKZ/UMVKN` da
+81,57 millones de cajas y coincide con `KLMENG` al cuarto decimal donde KLMENG
+no es cero — se prefiere la multiplicación porque KLMENG es cantidad
+*confirmada* y viene a cero en unas 430 líneas.
+
+Con esto las tres fases tienen la misma medida. Lo que conviene no olvidar es
+qué medida es: **cantidad en la unidad base del material**, que no siempre es
+una caja — en vendido son PAQ en 782k líneas, CS en 413k, PZA en 327k y SAC en
+118k. El nombre `cantidad_cajas` se mantuvo porque es el que ya consumía el
+dashboard; el manual lo explica en la sección de unidades.
+
+## `sap_T001L`: sirve para poner nombres, no para mapear CEDIS
+
+`D10_POSTPROCESSING.sap_T001L_YYYYMMDD` (maestro de almacenes de SAP,
+snapshots diarios de ~3.700 filas) se revisó como candidata a resolver el
+hueco de CEDIS. Conclusión: **no puede**, y conviene no volver a intentarlo.
+
+- **Cobertura**: el 100% de las líneas sin CEDIS tienen fila en T001L por
+  planta + almacén. La tabla conoce todos los almacenes; el problema no es
+  ahí.
+- **Columnas**: la única informada es `LGOBE`, el nombre (99,9% del importe).
+  `SPART`, `VKORG`, `VTWEG` y `KUNNR` llegan al 9,8%; `VSTEL`, `PARLG`,
+  `LIFNR`, `XLONG`, `XBLGO` están vacías. No hay una columna de CEDIS.
+- **El nombre como predictor**: bueno donde se puede comprobar — en las líneas
+  que ya tienen CEDIS, el nombre apunta a un único CEDIS en 51 de 55 nombres
+  (86,9% del importe). Pero inútil sobre el hueco (punto 3 de arriba).
+- **Por qué**: `LGOBE` son 16 caracteres de texto libre, abreviado y truncado
+  ("AGUASCALIENTE DC", "ALM. CENT. VUAL…") y con la codificación rota en
+  origen ("ALMAC?N DG"); el catálogo distingue más fino que la ciudad
+  ("Leon 1 / Leon 2 / Leon Abastos", "Irapuato 1 / 2", "Celaya Agustin /
+  Genaro"), que es justo lo que decide la tarifa; y los sitios que nombra
+  —San Juan, Monterrey, Mérida, Cancún, Vuala, Derivados de Ganado— **no
+  existen entre los 32 CEDIS del catálogo**. Ningún join inventa un CEDIS que
+  no está.
+- **Para qué sí sirve**: ponerle nombre humano a los 86 pares planta+almacén
+  del hueco, para que la pregunta al cliente se pueda contestar leyendo
+  "CEDIS SAN JUAN" en vez de descifrar `H793`. Con 27 pares de ≥$3 M se cubre
+  el 97% del hueco restante.
+- **Si algún día se consume**: son snapshots con fecha en el nombre, así que
+  hay que leer el último con comodín (`sap_T001L_*` + `_TABLE_SUFFIX`), no
+  fijar una fecha que envejece.
+
 **Qué pedirle al cliente:** una lista corta y cerrada — a qué CEDIS y qué
 tipo de venta corresponde cada uno de esos 12 pares almacén+oficina. Con las
 4 primeras se recupera el 67% del importe hoy sin asignar.
@@ -109,6 +256,15 @@ verdad) resuelve la parte difícil: el `UNION ALL` de las tres capas
 la lógica de mapeo de dimensiones y conversión a caja. Esa lógica sigue
 siendo suya y no se reescribe en ningún sitio — lo que cambia es dónde vive
 el resultado antes de llegar al dashboard.
+
+Matiz del 21 de agosto de 2026: esa vista **sí se edita** cuando lo que cambia
+es una regla de mapeo, y el fallback de CEDIS entró dentro de ella justo por
+eso (lo decidió Silvana). La alternativa era arreglarlo en la silver, y eso
+dejaba dos objetos contestando distinto a «de qué CEDIS es esta línea»: 118.313
+líneas y $1.384 M de diferencia entre su vista y nuestra tabla. Lo que sigue en
+pie es la regla de fondo: la lógica de mapeo vive en un solo sitio, el suyo, y
+las consultas de `data/consultas/` no la duplican — solo la materializan y la
+agregan.
 
 El problema, medido: es una vista, no una tabla, así que cada consulta rehace
 el `UNION ALL` desde cero contra SAP — **8,98 GiB escaneados por consulta**.

@@ -132,12 +132,12 @@ describe("las demos no pueden contradecir al texto", () => {
     expect(CON_CEDIS + SIN_CEDIS).toBe(TOTAL);
   });
 
-  it("el hueco sin CEDIS sigue siendo «dos tercios»", () => {
-    // El texto dice dos tercios; si algún día se corrige el mapeo y baja, hay
-    // que reescribir la frase, no dejar la demo mintiendo al lado.
-    expect(PORCENTAJE_SIN).toBeGreaterThanOrEqual(60);
-    expect(PORCENTAJE_SIN).toBeLessThanOrEqual(70);
-    expect(texto()).toMatch(/dos tercios del importe/);
+  it("el porcentaje del hueco es el mismo en la demo y en el texto", () => {
+    // Bajó del 65% al 61% al añadir el fallback por oficina sola, y con él la
+    // frase de al lado. Este test es el que obliga a cambiar las dos cosas
+    // juntas en vez de dejar la demo mintiendo pegada al texto.
+    expect(PORCENTAJE_SIN).toBe(61);
+    expect(texto()).toMatch(/61% del importe/);
   });
 
   it("los juguetes salen escritos en el HTML, no solo al pulsarlos", () => {

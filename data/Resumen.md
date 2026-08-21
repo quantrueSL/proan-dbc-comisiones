@@ -17,19 +17,36 @@ Todo vive en BigQuery, proyecto `proan-quantrue` (región `us-west4`), compartid
 | Facturado | `sap_2lis_13_vditm_billing_document_item` | Resuelto |
 | Cobrado / compensado | `D50_AGGREGATE_CHATBI.sap_pago` | Resuelto |
 
-Vendido, facturado y cobrado ya están unidos en una sola vista SQL (`Datos/sql/v1_flujo_producto_dbc.sql`, de Silvana — validado, no tocar). Cobertura de la última corrida:
+Vendido, facturado y cobrado ya están unidos en una sola vista SQL
+(`Datos/sql/v1_flujo_producto_dbc.sql`, de Silvana). Esa vista **sí se edita**
+cuando lo que cambia es una regla de mapeo, y ya pasó dos veces el 21 de agosto
+de 2026: el fallback de CEDIS por oficina y el grano por factura de cobrado. Lo
+que no se hace es tener la lógica en dos sitios — ver `data/notas/hallazgos.md`.
 
-| Fase | Filas | Monto | Rango de fechas | Sin CEDIS resuelto |
-|---|---|---|---|---|
-| Vendido | 1,506,006 | $1,867,026,840.65 | 2026-01-01 a 2026-07-20 | 5.8% |
-| Facturado | 1,745,163 | $1,903,510,061.80 | 2026-01-01 a 2026-08-02 | 7.0% |
-| Cobrado | 51,763 | $1,758,736,858.44 | 2026-01-02 a 2026-07-31 | 24.8% |
+Cobertura de la última corrida (**21 de agosto de 2026**):
+
+| Fase | Filas | Monto | Cajas | Rango de fechas | Sin CEDIS (importe) |
+|---|---|---|---|---|---|
+| Vendido | 1,778,013 | $2,223,963,393.50 | 81,573,307 | 2026-01-01 a 2026-08-19 | 65.3% |
+| Facturado | 1,862,648 | $2,036,408,131.27 | 76,774,285 | 2026-01-01 a 2026-08-20 | 61.4% |
+| Cobrado | 39,332 | $1,194,860,136.82 | 49,300,917 | 2026-01-02 a 2026-08-19 | 81.5% |
+
+Tres cosas cambiaron respecto a la corrida del 12 de agosto que traía este
+documento (vendido $1,867 M al 20/07, facturado $1,903 M, cobrado $1,758 M con
+51,763 filas):
+
+- **`sap_VBAP` se puso al día**: vendido ya no se corta en julio.
+- **Cobrado bajó a la mitad y es la cifra correcta**: `sap_pago` copia el
+  importe en cada partida y en cada compensación, así que sumar sus renglones lo
+  inflaba un 53%. Ahora va una fila por factura, en neto.
+- **Las tres fases tienen cajas** (antes solo facturado), así que el embudo se
+  lee en producto: 81,6 M → 76,8 M → 49,3 M.
 
 ## Qué tenemos resuelto
 
 - **División de producto** (`sales_division` → `D20_DIMENSION.dm_business_area`): 100% cobertura. `H`=Huevo, `BO`=Botana, `A`=Abarrote, `IA`=Alimento.
 - **Canal de distribución**: 100% cobertura.
-- **CEDIS + tipo de venta** (`storage_location`+`sales_office` → `D20_DIMENSION.dm_cedis`): ~92.5% cobertura. Tipos: VTA EN RUTA, MAYOREO, MED MAYOREO, EXTRAS.
+- **CEDIS + tipo de venta** (`storage_location`+`sales_office` → `D20_DIMENSION.dm_cedis`): ~92.5% cobertura **medida en líneas**, que es la vara engañosa — en importe el hueco es del 61% en facturado, porque las líneas sin CEDIS valen veinticinco veces más que las que cruzan. Desde el 21 de agosto hay un fallback por oficina sola cuando el par almacén+oficina no existe, y una columna `cedis_origen` que dice de dónde salió cada asignación. Ver `data/notas/hallazgos.md`. Tipos: VTA EN RUTA, MAYOREO, MED MAYOREO, EXTRAS, VTA EN PISO.
 - **Conversión a caja (CJ)**: `stockkeeping_units` (en facturado) da la cantidad ya convertida, validada contra miles de filas. Incorporada como `cantidad_cajas`.
 - **Estructura de la tarifa de comisión**: importe fijo $/caja, varía por SET × CEDIS × oficina (derivada empírica de los reportes del cliente — no es la fuente oficial todavía). Ejemplo: San Juan en León 1/Querétaro/Salamanca = $1.50/caja, en Uruapan = $2.15/caja.
 - **Nombre de oficina de venta** (`D00_SANDBOX.proan_TVKBT_20260728`): más completo que lo que tiene el propio cliente.

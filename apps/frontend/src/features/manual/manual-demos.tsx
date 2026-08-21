@@ -3,11 +3,11 @@
 // Las tres trampas de la pantalla, en forma de juguete.
 //
 // Están escritas en prosa en el manual, y aun así se leen mal: nadie cree de
-// verdad que esconder una fila pueda tirar el total dos tercios hasta que lo ve
-// caer. Cada demo tiene un botón que hace la cosa MAL a propósito y enseña qué
-// pasaría. Ninguna toca datos reales de la pantalla: son maquetas.
+// verdad que esconder una fila pueda tirar el total más de la mitad hasta que lo
+// ve caer. Cada demo tiene un botón que hace la cosa MAL a propósito y enseña
+// qué pasaría. Ninguna toca datos reales de la pantalla: son maquetas.
 //
-// Las cifras de la segunda sí son reales, de la corrida del 13 de agosto de
+// Las cifras de la segunda sí son reales, de la corrida del 21 de agosto de
 // 2026 sobre facturado (ver `data/notas/hallazgos.md`), porque el tamaño del
 // agujero es justo lo que cuesta creer.
 
@@ -20,28 +20,81 @@ const dinero = new Intl.NumberFormat("es-MX", {
   maximumFractionDigits: 0
 });
 
-// ─── 1. Un hueco no es un cero ────────────────────────────────────────────
+// ─── 1. Una barra que falta no es un cero ─────────────────────────────────
 
-const BIEN = "M20 40 L60 52 L100 34 L140 60 L180 44";
-const MAL = `${BIEN} L220 88 L260 88 L300 88`;
+// Seis días con sus tres barras, como la gráfica de verdad. En los dos últimos
+// no hay dato de vendido: la versión buena no dibuja nada y la mala dibuja una
+// barra a ras del suelo, que es la mentira que se quiere enseñar.
+const SUELO = 88;
+const PASO = 46;
+const ANCHO = 8;
+const DIAS: { vendido: number | null; facturado: number; cobrado: number }[] = [
+  { vendido: 44, facturado: 38, cobrado: 30 },
+  { vendido: 50, facturado: 42, cobrado: 34 },
+  { vendido: 40, facturado: 46, cobrado: 28 },
+  { vendido: 52, facturado: 40, cobrado: 36 },
+  { vendido: null, facturado: 44, cobrado: 32 },
+  { vendido: null, facturado: 48, cobrado: 30 }
+];
 
 export function DemoHueco() {
   const [mal, setMal] = useState(false);
 
   return (
     <figure className="manual-demo" data-mal={mal ? "si" : "no"}>
-      <svg viewBox="0 0 320 110" role="img" aria-label="Una línea con datos hasta la mitad del periodo">
-        <line className="manual-demo-suelo" x1="20" x2="300" y1="88" y2="88" />
-        {/* Las dos versiones existen siempre y se cruzan por opacidad: un
-            `d` no se puede transicionar, dos opacidades sí. */}
-        <path className="manual-demo-linea is-mal" d={MAL} stroke={COLOR_FASE.vendido} />
-        <path className="manual-demo-linea is-bien" d={BIEN} stroke={COLOR_FASE.vendido} />
-        <circle className="manual-demo-punto is-bien" cx="180" cy="44" fill={COLOR_FASE.vendido} r="4" />
-        <circle className="manual-demo-punto is-mal" cx="260" cy="88" r="4" />
-        <text className="manual-demo-texto is-bien" x="196" y="40">
+      <svg
+        viewBox="0 0 320 110"
+        role="img"
+        aria-label="Seis días con tres barras cada uno; en los dos últimos falta la barra de vendido"
+      >
+        <line className="manual-demo-suelo" x1="16" x2="304" y1={SUELO} y2={SUELO} />
+        {DIAS.map((dia, i) => {
+          const x = 20 + PASO * i;
+          return (
+            <g key={i}>
+              {/* Las dos versiones del día sin dato existen siempre y se cruzan
+                  por opacidad, igual que en las otras demos. */}
+              {dia.vendido === null ? (
+                <rect
+                  className="manual-demo-barra is-mal"
+                  height="3"
+                  width={ANCHO}
+                  x={x}
+                  y={SUELO - 3}
+                />
+              ) : (
+                <rect
+                  className="manual-demo-barra"
+                  fill={COLOR_FASE.vendido}
+                  height={SUELO - dia.vendido}
+                  width={ANCHO}
+                  x={x}
+                  y={dia.vendido}
+                />
+              )}
+              <rect
+                className="manual-demo-barra"
+                fill={COLOR_FASE.facturado}
+                height={SUELO - dia.facturado}
+                width={ANCHO}
+                x={x + ANCHO}
+                y={dia.facturado}
+              />
+              <rect
+                className="manual-demo-barra"
+                fill={COLOR_FASE.cobrado}
+                height={SUELO - dia.cobrado}
+                width={ANCHO}
+                x={x + ANCHO * 2}
+                y={dia.cobrado}
+              />
+            </g>
+          );
+        })}
+        <text className="manual-demo-texto is-bien" x="212" y="26">
           aquí se acaba el dato
         </text>
-        <text className="manual-demo-texto is-mal" x="230" y="76">
+        <text className="manual-demo-texto is-mal" x="212" y="26">
           ¿cero ventas?
         </text>
       </svg>
@@ -52,8 +105,8 @@ export function DemoHueco() {
         </button>
         <span>
           {mal
-            ? "Así la línea diría que esos días no se vendió nada. Y sí se vendió: lo que falta es el dato."
-            : "La línea termina donde termina el dato. El hueco es el mensaje."}
+            ? "Esa barrita pegada al suelo diría que esos días no se vendió nada. Y sí se vendió: lo que falta es el dato."
+            : "Donde no hay dato no hay barra. La ausencia es el mensaje."}
         </span>
       </figcaption>
     </figure>
@@ -63,10 +116,12 @@ export function DemoHueco() {
 // ─── 2. Esconder «Sin asignar» ────────────────────────────────────────────
 
 // Exportadas para que un test pueda comprobar que los tramos suman el total y
-// que el hueco sigue siendo "dos tercios", que es lo que dice el texto de al
-// lado. Si algún día baja, hay que reescribir la frase.
-export const CON_CEDIS = 690238875;
-export const SIN_CEDIS = 1297057383;
+// que el porcentaje del hueco sigue siendo el que dice el texto de al lado.
+// Ya pasó una vez: el hueco era del 65% hasta que el cruce de CEDIS ganó el
+// fallback por oficina sola y bajó al 61%. Si vuelve a moverse, se reescribe la
+// frase; la demo no se queda mintiendo al lado del texto.
+export const CON_CEDIS = 786583873;
+export const SIN_CEDIS = 1249824258;
 export const TOTAL = CON_CEDIS + SIN_CEDIS;
 export const PORCENTAJE_SIN = Math.round((SIN_CEDIS / TOTAL) * 100);
 
@@ -99,11 +154,11 @@ export function DemoSinAsignar() {
       <ul className="manual-demo-leyenda">
         <li>
           <i style={{ background: COLOR_FASE.facturado }} aria-hidden="true" />
-          Con CEDIS · {dinero.format(CON_CEDIS)} · 1.688.599 líneas · <b>$409 por línea</b>
+          Con CEDIS · {dinero.format(CON_CEDIS)} · 1.751.165 líneas · <b>$449 por línea</b>
         </li>
         <li data-apagado={escondido ? "si" : "no"}>
           <i aria-hidden="true" />
-          Sin asignar · {dinero.format(SIN_CEDIS)} · 127.720 líneas · <b>$10.155 por línea</b>
+          Sin asignar · {dinero.format(SIN_CEDIS)} · 111.483 líneas · <b>$11.211 por línea</b>
         </li>
       </ul>
 
@@ -114,7 +169,7 @@ export function DemoSinAsignar() {
         <span>
           {escondido
             ? "El total ya no cuadra con nada y nadie sabría por qué. Por eso la fila se enseña, aunque estorbe."
-            : "Son pocas líneas y muy gordas: veinticinco veces la línea normal. Facturado, corrida del 13 de agosto de 2026."}
+            : "Son pocas líneas y muy gordas: veinticinco veces la línea normal. Facturado, corrida del 21 de agosto de 2026."}
         </span>
       </figcaption>
     </figure>

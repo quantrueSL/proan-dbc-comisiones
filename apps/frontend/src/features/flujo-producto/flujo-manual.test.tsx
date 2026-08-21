@@ -19,15 +19,15 @@ function manual(cobertura: FlujoCobertura = COBERTURA) {
 }
 
 describe("las tres trampas de la pantalla", () => {
-  it("explica que un hueco en la gráfica no es un cero", () => {
-    // Sin esto, alguien lee la línea cortada de vendido como ventas a cero.
-    expect(manual()).toMatch(/hueco en la línea significa que no hay dato de ese día, no que fuera cero/);
+  it("explica que una barra que falta no es un cero", () => {
+    // Sin esto, alguien lee el día sin barra de vendido como ventas a cero.
+    expect(manual()).toMatch(/falta la barra de una fase, es que no hay dato de ese día, no que fuera cero/);
   });
 
-  it("explica qué es la fila «Sin asignar» y que se lleva dos tercios del importe", () => {
+  it("explica qué es la fila «Sin asignar» y cuánto importe se lleva", () => {
     const texto = manual();
     expect(texto).toMatch(/Sin asignar/);
-    expect(texto).toMatch(/dos tercios del importe/);
+    expect(texto).toMatch(/61% del importe/);
   });
 
   it("avisa de que las cantidades no se suman entre unidades", () => {

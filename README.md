@@ -40,14 +40,20 @@ LOGIN.md            decisiones de login y roles (provisional)
 
 **El módulo 0 (flujo de producto) funciona con datos reales**, con las tres
 capas que están resueltas: vendido, facturado y cobrado por CEDIS, división,
-tipo de venta, mes y unidad, con serie diaria. Se filtra pulsando sobre las
+tipo de venta, mes y unidad, con serie diaria en barras agrupadas (tres por día,
+que pasan a semana o mes cuando el rango no cabe). Se filtra pulsando sobre las
 propias gráficas y el filtro viaja en la URL, así que una vista se comparte por
-enlace. Falta la primera capa, los traspasos, que depende del cliente
+enlace. **Las tres fases traen ya cantidad en cajas**, así que el embudo se
+puede leer en producto y no solo en dinero: 81,6 M vendidas → 76,8 M facturadas
+→ 49,3 M cobradas. Falta la primera capa, los traspasos, que depende del cliente
 (bloqueante 5) y sale marcada como pendiente en el manual. Los dos hallazgos
 incómodos de los datos están **a la vista en la interfaz**, no escondidos en una
-nota: el corte de `sap_VBAP` (la línea de «vendido» termina en vez de caer a
-cero) y el 65% del importe sin CEDIS asignado (fila «Sin asignar», que no se
-esconde para que los totales cuadren). Ver `data/notas/hallazgos.md`.
+nota: el retraso de `sap_VBAP` (la serie de «vendido» termina antes que las
+otras dos en vez de caer a cero) y el 61% del importe sin CEDIS asignado (fila
+«Sin asignar», que no se esconde para que los totales cuadren). Ese 61% era el
+65% hasta que el cruce de CEDIS ganó un fallback por oficina sola; lo que queda
+son cuatro combinaciones almacén+oficina que no están en `dm_cedis` de ninguna
+forma y dependen del cliente. Ver `data/notas/hallazgos.md`.
 
 Hay además un **manual de usuario** en `/manual`, escrito para que nadie saque
 conclusiones falsas de esta pantalla: qué resuelve la plataforma, el recorrido

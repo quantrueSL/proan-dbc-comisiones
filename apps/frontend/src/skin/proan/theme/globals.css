@@ -11306,6 +11306,10 @@ body.proan-report-assistant-open .proan-content-scroll {
 
 .manual-demo-suelo { stroke: #ded8cf; stroke-width: 1; stroke-dasharray: 3 3; }
 .manual-demo-linea { fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; transition: opacity .32s ease; }
+/* Barras de la demo del hueco: mismas marcas finas que la gráfica real. La
+   variante `is-mal` es la barra a ras del suelo que finge un cero. */
+.manual-demo-barra { shape-rendering: crispEdges; transition: opacity .32s ease; }
+.manual-demo-barra.is-mal { fill: #b3421f; }
 .manual-demo-punto { stroke: #fbf9f5; stroke-width: 2; transition: opacity .32s ease; }
 .manual-demo-texto { fill: #918a80; font-size: 9px; font-weight: 700; transition: opacity .32s ease; }
 .manual-demo-texto.is-mal { fill: #b3421f; }
@@ -11409,7 +11413,7 @@ body.proan-report-assistant-open .proan-content-scroll {
   .manual-portada-linea::after { width: 100%; }
   .manual-flujo-caja { display: none; }
   .manual-ficha, .manual-glosario details p, .manual-demo-total strong, .manual-demo-total em { animation: none; }
-  .manual-anillo-arco, .manual-demo-tramo, .manual-demo-linea, .manual-demo-punto, .manual-demo-texto, .manual-indice-avance span { transition: none; }
+  .manual-anillo-arco, .manual-demo-tramo, .manual-demo-linea, .manual-demo-barra, .manual-demo-punto, .manual-demo-texto, .manual-indice-avance span { transition: none; }
   .manual-demo[data-sumado="si"] .manual-demo-resultado { animation: none; }
   .manual-flujo-nodos button:hover, .manual-demo figcaption button:hover { transform: none; }
 }

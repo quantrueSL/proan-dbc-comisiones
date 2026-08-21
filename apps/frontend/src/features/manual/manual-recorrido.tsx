@@ -18,7 +18,7 @@ import { COLOR_FASE } from "@/features/flujo-producto/fases";
 import { Anillo, Contador, Revelar } from "@/features/manual/manual-animaciones";
 
 /** Fecha de la corrida de la que salen las cifras de abajo. */
-export const CORRIDA = "12 de agosto de 2026";
+export const CORRIDA = "21 de agosto de 2026";
 
 export type Capa = {
   clave: string;
@@ -59,22 +59,22 @@ export const CAPAS: Capa[] = [
     llave: "VBELN + POSNR",
     fecha: "ERDAT",
     monto: "NETWR — orientativo",
-    nota: "El importe del pedido no cuadra con el de la factura: hay un 11% de diferencia porque los descuentos y rebates se aplican al facturar, no al pedir. La cantidad sí cuadra (0,22% de diferencia), así que no son entregas parciales, es precio. Para hablar de dinero, el de facturado.",
+    nota: "El importe del pedido no cuadra con el de la factura: hay un 9% de diferencia porque los descuentos y rebates se aplican al facturar, no al pedir. La cantidad sí cuadra (6% en cajas), así que no son entregas parciales, es precio. Para hablar de dinero, el de facturado.",
     resuelta: true,
-    cifras: { lineas: 1506006, monto: 1867026840.65 }
+    cifras: { lineas: 1778013, monto: 2223963393.5 }
   },
   {
     clave: "facturado",
     titulo: "Facturado",
     breve: "se emite factura",
-    que: "Lo que se facturó de verdad, con su importe fiable. Es la fase con más detalle y la única que trae la cantidad convertida a cajas.",
+    que: "Lo que se facturó de verdad, con su importe fiable. Es la fase con más detalle: material, unidad y cantidad convertida a cajas, todo de origen.",
     fuente: "sap_2lis_13_vditm_billing_document_item",
     llave: "billing_document",
     fecha: "billing_date",
     monto: "amount_mxn — el fiable",
-    nota: "La conversión a caja no hay que calcularla: el campo stockkeeping_units ya trae la cantidad convertida, validada contra miles de líneas por material. Es la única fase que la tiene, y por eso la métrica «Cajas» solo se activa aquí.",
+    nota: "La conversión a caja no hay que calcularla: el campo stockkeeping_units ya trae la cantidad convertida, validada contra miles de líneas por material. Fue la primera fase en tenerla; hoy las otras dos también, así que la métrica «Cajas» compara el recorrido completo.",
     resuelta: true,
-    cifras: { lineas: 1745163, monto: 1903510061.8 }
+    cifras: { lineas: 1862648, monto: 2036408131.27 }
   },
   {
     clave: "cobrado",
@@ -84,10 +84,10 @@ export const CAPAS: Capa[] = [
     fuente: "sap_pago (unido por billing_document)",
     llave: "billing_document",
     fecha: "clearing_date",
-    monto: "paid_amount_mxn",
-    nota: "Va por documento de factura, no por línea: por eso son muchas menos filas para un importe parecido al de facturado. Una factura emitida no genera comisión hasta que se compensa, y las ventas a crédito tardan.",
+    monto: "el neto de la factura cobrada",
+    nota: "Va por documento de factura, no por línea: una fila por factura cobrada, de ahí que sean tan pocas. SAP repite el importe en cada partida y en cada compensación, así que sumar sus renglones a pelo inflaba el cobrado un 53%. Una factura emitida no genera comisión hasta que se compensa, y las ventas a crédito tardan.",
     resuelta: true,
-    cifras: { lineas: 51763, monto: 1758736858.44 }
+    cifras: { lineas: 39332, monto: 1194860136.82 }
   }
 ];
 
