@@ -39,7 +39,9 @@ export type FlujoFilters = {
 export type FlujoTotales = {
   num_lineas: number;
   monto_total: number;
-  /** Solo la fase "facturado" trae cajas. `null` significa "aquí no aplica", no cero. */
+  /** Cantidad en la unidad de manejo del material — la única comparable entre
+   *  unidades. Ya viene en las tres fases. `null` sigue significando "aquí no
+   *  aplica", que no es lo mismo que cero. */
   cantidad_cajas_total: number | null;
 };
 
@@ -55,10 +57,10 @@ export type FlujoPorCedisRow = FlujoTotales & { cedis: string | null; fase: stri
 export type FlujoCantidadUnidadRow = { fase: string; unidad: string; cantidad_total: number };
 
 /**
- * Hasta qué fecha hay datos de cada fase. Hoy NO coinciden: sap_VBAP no recibe
- * datos desde el 20/07/2026, así que "vendido" se corta ahí mientras facturado
- * y cobrado siguen. Sin esto la pantalla dibujaría ceros y parecería un
- * desplome de ventas — ver data/notas/hallazgos.md.
+ * Hasta qué fecha hay datos de cada fase, y no tienen por qué coincidir: la
+ * carga de sap_VBAP se ha quedado atrás más de una vez y "vendido" termina
+ * antes que las otras dos (ver data/notas/hallazgos.md). Sin esto la pantalla
+ * dibujaría ceros donde falta el dato y parecería un desplome de ventas.
  */
 export type FlujoCobertura = Record<string, { desde: string; hasta: string }>;
 

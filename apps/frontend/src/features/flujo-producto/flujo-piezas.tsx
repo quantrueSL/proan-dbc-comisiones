@@ -39,8 +39,9 @@ export function MetricToggle({
   return (
     <div className="dashboard-metric-toggle" role="group" aria-label="Métrica">
       {METRICAS.map((opcion) => {
-        // Las cajas solo existen en facturado; ofrecer el botón cuando no hay
-        // nada que enseñar es prometer un dato que no está.
+        // Las cajas ya vienen en las tres fases, pero el botón sigue pudiendo
+        // quedarse sin nada que enseñar según el filtro: ofrecerlo entonces es
+        // prometer un dato que no está.
         const inhabilitada = opcion.clave === "cajas" && !cajasDisponibles;
         return (
           <button
@@ -49,7 +50,7 @@ export function MetricToggle({
             disabled={inhabilitada}
             key={opcion.clave}
             onClick={() => onChange(opcion.clave)}
-            title={inhabilitada ? "Solo la fase facturado trae cajas" : undefined}
+            title={inhabilitada ? "El filtro actual no tiene cajas que enseñar" : undefined}
             type="button"
           >
             {opcion.etiqueta}

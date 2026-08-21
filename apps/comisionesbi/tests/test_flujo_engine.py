@@ -87,9 +87,9 @@ def test_suma_por_fase(cliente):
 
 
 def test_las_cajas_solo_suman_donde_existen(cliente):
-    # `cantidad_cajas` solo la trae facturado. En vendido y cobrado se queda en
-    # None, no en 0: la interfaz debe poder distinguir "cero cajas" de "aquí no
-    # aplica esta métrica".
+    # `cantidad_cajas` ya viene en las tres fases, pero una fila puede traerla en
+    # None y entonces se queda en None, no en 0: la interfaz debe poder distinguir
+    # "cero cajas" de "aquí no aplica esta métrica".
     cliente(
         [
             _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0, cajas=12.0),

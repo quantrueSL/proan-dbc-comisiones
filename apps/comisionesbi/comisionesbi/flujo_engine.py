@@ -12,15 +12,18 @@ TRES COSAS QUE ESTE MÓDULO TIENE QUE HACER BIEN, y que no son evidentes:
 1. `cantidad` viene en unidades mezcladas (CS, PZA, PAQ, SAC, KG...), así que
    NO se suma entre unidades. Se devuelve desglosada por unidad y nunca como un
    único total.
-2. `cantidad_cajas` solo existe en la fase "facturado" — es NULL en vendido y
-   cobrado, porque sap_pago no llega a nivel de material y VBAP no tiene el
-   equivalente a stockkeeping_units.
-3. Cada fase tiene su propia fecha de corte, y hoy NO coinciden: `sap_VBAP`
-   lleva sin datos nuevos desde el 20 de julio de 2026, así que "vendido" se
-   corta ahí mientras facturado y cobrado siguen (ver data/notas/hallazgos.md,
-   sección "El corte de sap_VBAP"). Por eso se devuelve
-   `cobertura`: sin ese dato, la pantalla dibujaría ceros a partir del 21 de
-   julio y parecería un desplome de ventas en vez de una laguna de datos.
+2. `cantidad_cajas` ya existe en las tres fases, pero NO es "cajas": es la
+   cantidad en la unidad base del material (PAQ, CS, PZA, SAC...), que es la
+   única comparable entre unidades. El nombre se mantuvo porque es el que ya
+   consumía el dashboard. Sigue pudiendo ser NULL —"aquí no aplica"— y por eso
+   no se convierte en cero al agregar.
+3. Cada fase tiene su propia fecha de corte y no tienen por qué coincidir:
+   "vendido" sale de `sap_VBAP`, cuya carga se ha quedado atrás más de una vez
+   (ver data/notas/hallazgos.md). Aquí no se escribe ninguna fecha concreta
+   porque envejece mal: la de verdad la devuelve `cobertura`, y por eso este
+   módulo la devuelve siempre. Sin ese dato, la pantalla dibujaría ceros donde
+   lo que falta es el dato, y parecería un desplome de ventas en vez de una
+   laguna.
 
 Falta la cuarta capa, traspasos: depende de validar `sap_mseg` contra MB51, que
 está bloqueado por el código BWART pendiente del cliente.
@@ -76,8 +79,9 @@ def _acumular(destino: dict, clave, fila: dict) -> None:
     acumulado = destino[clave]
     acumulado["num_lineas"] += fila["num_lineas"] or 0
     acumulado["monto_total"] += fila["monto_total"] or 0.0
-    # Solo facturado trae cajas; en las otras fases se queda en None en vez de 0
-    # para que la interfaz distinga "cero cajas" de "aquí no aplica".
+    # Las cajas ya vienen en las tres fases, pero el None se respeta igual: si
+    # una fase no trae el dato se queda en None en vez de 0, para que la interfaz
+    # distinga "cero cajas" de "aquí no aplica".
     if fila["cantidad_cajas_total"] is not None:
         actual = acumulado["cantidad_cajas_total"] or 0.0
         acumulado["cantidad_cajas_total"] = actual + fila["cantidad_cajas_total"]
