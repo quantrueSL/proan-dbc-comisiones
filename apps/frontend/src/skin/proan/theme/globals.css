@@ -10639,11 +10639,20 @@ body.proan-report-assistant-open .proan-content-scroll {
 .flujo-chart svg { position: absolute; top: 0; left: 0; display: block; }
 .flujo-chart-grid { stroke: #edeae4; stroke-width: 1; }
 .flujo-chart-axis { fill: #8b8880; font-size: 11px; font-variant-numeric: tabular-nums; }
-.flujo-chart-crosshair { stroke: #b9b4ab; stroke-width: 1; stroke-dasharray: 3 3; }
-.flujo-chart-line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.flujo-chart-label { font-size: 12px; font-weight: 700; }
-/* Anillo del color del fondo: separa el punto de la línea que hay debajo. */
-.flujo-chart-dot { stroke: #fff; stroke-width: 2; }
+/* `crispEdges` no es cosmética con barras de 3 px: sin ella el navegador
+   reparte el borde fraccionario entre dos columnas de píxeles y las tres barras
+   de un grupo salen con tonos distintos, como si fueran datos distintos. */
+.flujo-chart-barra { shape-rendering: crispEdges; }
+/* Banda del grupo apuntado, en el sitio de la línea de puntas que acompañaba a
+   las líneas: lo que se resalta ahora es un grupo entero, no un instante. */
+.flujo-chart-banda { fill: #f6f3ee; }
+/* Línea del cero. Solo se dibuja cuando el eje baja a negativo (hay días de
+   facturado en negativo por notas de crédito) y va más marcada que la rejilla
+   porque de ella cuelgan las barras. */
+.flujo-chart-cero { stroke: #b9b4ab; stroke-width: 1; }
+/* El grano (día / semana / mes) va en la leyenda y en tinta secundaria: es una
+   nota de lectura, no una serie más. */
+.flujo-chart-grano { color: #8b8880; font-style: italic; }
 .flujo-chart-empty { display: grid; gap: 4px; padding: 40px; text-align: center; color: #6f7278; }
 .flujo-chart-empty b { color: #25272c; }
 .flujo-chart-tooltip {

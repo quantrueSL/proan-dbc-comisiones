@@ -1,30 +1,51 @@
 "use client";
 
-// Serie diaria de vendido / facturado / cobrado.
+// Serie de vendido / facturado / cobrado en BARRAS AGRUPADAS: tres barras
+// delgadas por grupo, en el orden y con los colores de fases.ts.
 //
 // SVG a mano y sin librería de gráficas: no hay ninguna en las dependencias y
-// meter uno de los paquetes habituales por tres líneas serían cientos de KB en
-// el navegador para algo que cabe en un fichero.
+// meter uno de los paquetes habituales por esto serían cientos de KB en el
+// navegador para algo que cabe en un fichero.
 //
-// LO MÁS IMPORTANTE DE ESTE COMPONENTE: un día sin dato deja HUECO en la línea,
-// nunca un cero. "Vendido" se corta el 20/07/2026 porque sap_VBAP no recibe
-// datos (data/notas/hallazgos.md); dibujarlo como cero diría que ese día no se vendió
-// nada, que es mentira. Con el hueco, la línea simplemente termina.
+// EL GRANO NO ES SIEMPRE EL DÍA. Tres barras necesitan unos 13 px de sitio, así
+// que ocho meses por día en un portátil darían barras de menos de un píxel: una
+// mancha. Cuando el día no cabe se agrupa por semana, y si tampoco cabe, por
+// mes — y la leyenda lo dice ("agrupado por semana"), porque una barra semanal
+// leída como diaria es un error de un factor siete. Quién elige el grano y cómo
+// se agrupa está en flujo-serie.ts, que sí se puede testear; aquí solo quedan
+// los píxeles.
 //
-// LO SEGUNDO MÁS IMPORTANTE: se dibuja a ESCALA 1:1. Antes el SVG tenía un
-// `viewBox` fijo de 960×300 estirado al ancho disponible, y en un monitor ancho
-// eso multiplicaba TODO por dos: la gráfica pasaba de 300 a 600 px de alto y
-// las etiquetas de los ejes, escritas en unidades del viewBox, salían a 22 px.
-// Se comía la pantalla y había que alejar el zoom para ver el resto. Ahora se
-// mide el contenedor y se dibuja con esos píxeles: el alto es el que decimos y
-// un texto de 11 px mide 11 px en cualquier pantalla.
+// UN GRUPO SIN DATO NO DIBUJA BARRA, nunca una barra a cero. Cada fase tiene su
+// propia fecha de corte y no tienen por qué coincidir: "vendido" sale de
+// `sap_VBAP`, cuya carga se ha quedado atrás más de una vez (ver
+// data/notas/hallazgos.md; el retraso ha ido de un mes a un día en la misma
+// semana, así que aquí no se escribe ningún número de días: la fecha de corte
+// de verdad la da `cobertura`). En pantalla eso son grupos con dos barras en
+// vez de tres al final de la serie; quien explica por qué es el rótulo de
+// cobertura, no la gráfica. Y al agrupar por semana o mes, el grupo donde cae el
+// corte sale MÁS BAJO, no vacío: mezcla días con dato y días sin dato. Es el
+// precio de agrupar, y por eso el grano va escrito en la leyenda.
 //
-// Los colores y el orden de las fases están en fases.ts.
+// SE DIBUJA A ESCALA 1:1. Antes el SVG tenía un `viewBox` fijo de 960×300
+// estirado al ancho disponible, y en un monitor ancho eso multiplicaba TODO por
+// dos: la gráfica pasaba de 300 a 600 px de alto y las etiquetas de los ejes,
+// escritas en unidades del viewBox, salían a 22 px. Se comía la pantalla y había
+// que alejar el zoom para ver el resto. Ahora se mide el contenedor y se dibuja
+// con esos píxeles: el alto es el que decimos y un texto de 11 px mide 11 px en
+// cualquier pantalla.
 
 import { useEffect, useMemo, useState } from "react";
 import type { FlujoPorFechaRow } from "@/types/comisiones";
 import type { Metrica } from "@/features/flujo-producto/flujo-piezas";
-import { COLOR_FASE, ETIQUETA_FASE as ETIQUETA, FASES, type Fase } from "@/features/flujo-producto/fases";
+import { COLOR_FASE, ETIQUETA_FASE as ETIQUETA, FASES } from "@/features/flujo-producto/fases";
+import {
+  agruparSerie,
+  AVISO_GRANO,
+  etiquetaEje,
+  granoQueCabe,
+  NOMBRE_GRANO,
+  rotuloGrupo
+} from "@/features/flujo-producto/flujo-serie";
 
 // Alto fijo, en píxeles de pantalla, y de aquí sale también el alto de la caja
 // (style={{ height: ALTO }}): si el número viviera además en el CSS, cualquier
@@ -32,12 +53,36 @@ import { COLOR_FASE, ETIQUETA_FASE as ETIQUETA, FASES, type Fase } from "@/featu
 // no puede quedarse con el alto de la ventana: debajo hay cinco tarjetas que
 // también se miran.
 const ALTO = 230;
-const MARGEN = { arriba: 14, derecha: 92, abajo: 26, izquierda: 60 };
-const TRAZO = 2; // marcas finas, como manda la guía
-// Separación mínima entre dos etiquetas de fin de serie y ancho mínimo por
-// etiqueta del eje de fechas.
-const SEPARACION_ETIQUETA = 14;
-const ANCHO_FECHA = 58;
+// Sin etiquetas de fin de serie (con barras no hay "fin de línea" que rotular),
+// el margen derecho ya no reserva 92 px para texto.
+const MARGEN = { arriba: 14, derecha: 18, abajo: 26, izquierda: 60 };
+
+// Geometría de las barras. El mínimo es lo que decide el grano: por debajo de
+// ANCHO_BARRA_MIN la barra deja de leerse, así que se agrupa. El máximo existe
+// para que un rango de cinco días no salga con tres columnas gordas: lo que se
+// pidió son barras delgadas.
+const ANCHO_BARRA_MIN = 3;
+const ANCHO_BARRA_MAX = 12;
+// Las tres barras de un grupo van PEGADAS, sin hueco: así el grupo se lee como
+// un bloque y lo que se compara de un vistazo es un día contra otro. Con un
+// píxel de aire entre ellas, el ojo comparaba las tres barras entre sí y los
+// días se desdibujaban. El único hueco es el que separa un día del siguiente.
+const HUECO_BARRAS = 0;
+// La separación entre días es una PROPORCIÓN del paso, no un número fijo de
+// píxeles: si fuera fija, en una pantalla ancha los bloques engordarían y el
+// aire entre ellos seguiría siendo el mismo, que es justo lo que hace que los
+// días se peguen visualmente. Así la relación bloque/aire se mantiene a
+// cualquier ancho. El mínimo en píxeles es para que en el límite —cuando el
+// grano está a punto de saltar a semanas— siga habiendo raya de separación.
+const HUECO_GRUPOS_REL = 0.3;
+const HUECO_GRUPOS_MIN = 3;
+// Paso mínimo para que las tres barras sigan midiendo ANCHO_BARRA_MIN con su
+// proporción de aire descontada. Por debajo de esto se agrupa por semana.
+const PASO_MIN = Math.ceil(
+  (FASES.length * ANCHO_BARRA_MIN + (FASES.length - 1) * HUECO_BARRAS) / (1 - HUECO_GRUPOS_REL)
+);
+// Ancho mínimo por etiqueta del eje de fechas.
+const ANCHO_ETIQUETA = 58;
 
 const FORMATO: Record<Metrica, { eje: Intl.NumberFormat; detalle: Intl.NumberFormat }> = {
   importe: {
@@ -63,18 +108,6 @@ function valorDe(fila: FlujoPorFechaRow, metrica: Metrica): number | null {
   if (metrica === "importe") return fila.monto_total;
   if (metrica === "lineas") return fila.num_lineas;
   return fila.cantidad_cajas_total;
-}
-
-function diaCorto(iso: string): string {
-  const [, mes, dia] = iso.split("-");
-  return `${dia}/${mes}`;
-}
-
-/** Redondea el techo del eje a algo legible en vez de al máximo exacto. */
-function techo(max: number): number {
-  if (max <= 0) return 1;
-  const magnitud = 10 ** Math.floor(Math.log10(max));
-  return Math.ceil(max / (magnitud / 2)) * (magnitud / 2);
 }
 
 /**
@@ -104,33 +137,17 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
   const [activo, setActivo] = useState<number | null>(null);
   const { eje: compacto, detalle: completo } = FORMATO[metrica];
 
-  const { fechas, series, maximo } = useMemo(() => {
-    const fechasUnicas = Array.from(new Set(filas.map((f) => f.fecha))).sort();
-    const indice = new Map(fechasUnicas.map((f, i) => [f, i]));
+  const anchoUtil = Math.max(120, ancho - MARGEN.izquierda - MARGEN.derecha);
 
-    const porFase = new Map<string, (number | null)[]>(
-      FASES.map((fase) => [fase, fechasUnicas.map(() => null)])
-    );
-    for (const fila of filas) {
-      const valores = porFase.get(fila.fase);
-      const i = indice.get(fila.fecha);
-      if (!valores || i === undefined) continue;
-      const valor = valorDe(fila, metrica);
-      // `null` es "no aplica" (las cajas solo existen en facturado) y tiene que
-      // seguir siendo hueco, no cero.
-      if (valor === null) continue;
-      valores[i] = (valores[i] ?? 0) + valor;
-    }
+  // El grano depende del ancho, así que el ancho entra en las dependencias: al
+  // estrechar la ventana la gráfica puede pasar de días a semanas.
+  const { claves, series, grano, techoEje, pisoEje } = useMemo(() => {
+    const fechas = Array.from(new Set(filas.map((f) => f.fecha)));
+    const granoElegido = granoQueCabe(fechas, anchoUtil, PASO_MIN);
+    return agruparSerie(filas, (fila) => valorDe(fila, metrica), granoElegido);
+  }, [filas, metrica, anchoUtil]);
 
-    const todos = Array.from(porFase.values()).flat().filter((v): v is number => v !== null);
-    return {
-      fechas: fechasUnicas,
-      series: porFase,
-      maximo: techo(todos.length ? Math.max(...todos) : 0)
-    };
-  }, [filas, metrica]);
-
-  if (!fechas.length) {
+  if (!claves.length) {
     return (
       <div className="flujo-chart-empty">
         <b>Sin movimientos que dibujar</b>
@@ -139,73 +156,42 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
     );
   }
 
-  const anchoUtil = Math.max(120, ancho - MARGEN.izquierda - MARGEN.derecha);
   const altoUtil = ALTO - MARGEN.arriba - MARGEN.abajo;
-  const x = (i: number) =>
-    MARGEN.izquierda + (fechas.length === 1 ? anchoUtil / 2 : (i * anchoUtil) / (fechas.length - 1));
-  const y = (valor: number) => MARGEN.arriba + altoUtil - (valor / maximo) * altoUtil;
+  const paso = anchoUtil / claves.length;
+  const huecoGrupos = Math.max(HUECO_GRUPOS_MIN, paso * HUECO_GRUPOS_REL);
+  const anchoBarra = Math.max(
+    1,
+    Math.min(ANCHO_BARRA_MAX, (paso - huecoGrupos - (FASES.length - 1) * HUECO_BARRAS) / FASES.length)
+  );
+  const anchoGrupo = FASES.length * anchoBarra + (FASES.length - 1) * HUECO_BARRAS;
 
-  /**
-   * Un `path` por fase. Los huecos cortan el trazo con `M` en vez de unir el
-   * punto anterior con el siguiente: si no, la línea de "vendido" cruzaría en
-   * diagonal las tres semanas sin datos como si hubiera habido ventas.
-   */
-  function trazo(valores: (number | null)[]): string {
-    let d = "";
-    let dibujando = false;
-    valores.forEach((valor, i) => {
-      if (valor === null) {
-        dibujando = false;
-        return;
-      }
-      d += `${dibujando ? "L" : "M"}${x(i).toFixed(1)} ${y(valor).toFixed(1)} `;
-      dibujando = true;
-    });
-    return d.trim();
-  }
+  const centroGrupo = (i: number) => MARGEN.izquierda + paso * (i + 0.5);
+  const y = (valor: number) => MARGEN.arriba + (altoUtil * (techoEje - valor)) / (techoEje - pisoEje);
+  const yCero = y(0);
 
-  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((p) => p * maximo);
+  const ticksY = [0, 0.25, 0.5, 0.75, 1].map((p) => pisoEje + p * (techoEje - pisoEje));
 
-  // Cuántas fechas caben sin pisarse. Antes se pintaba siempre una de cada
-  // ocho más la última, y la última se solapaba con su vecina.
-  const cabenFechas = Math.max(2, Math.floor(anchoUtil / ANCHO_FECHA));
-  const pasoX = Math.max(1, Math.ceil(fechas.length / cabenFechas));
-  const indicesFecha = fechas.map((_, i) => i).filter((i) => i % pasoX === 0);
-  const ultimaFecha = fechas.length - 1;
-  if (ultimaFecha - (indicesFecha[indicesFecha.length - 1] ?? 0) >= pasoX / 2) {
-    indicesFecha.push(ultimaFecha);
+  // Cuántas etiquetas de fecha caben sin pisarse. Antes se pintaba siempre una
+  // de cada ocho más la última, y la última se solapaba con su vecina.
+  const cabenEtiquetas = Math.max(2, Math.floor(anchoUtil / ANCHO_ETIQUETA));
+  const pasoEtiqueta = Math.max(1, Math.ceil(claves.length / cabenEtiquetas));
+  const indicesEtiqueta = claves.map((_, i) => i).filter((i) => i % pasoEtiqueta === 0);
+  const ultima = claves.length - 1;
+  if (ultima - (indicesEtiqueta[indicesEtiqueta.length - 1] ?? 0) >= pasoEtiqueta / 2) {
+    indicesEtiqueta.push(ultima);
   }
-
-  /**
-   * Etiqueta al final de cada línea. Es la identidad de la serie sin depender
-   * solo del color, pero si dos fases acaban al mismo importe los textos se
-   * montan uno sobre otro: se separan lo justo para poder leerlos.
-   */
-  const etiquetas: { fase: Fase; x: number; y: number }[] = [];
-  for (const fase of FASES) {
-    const valores = series.get(fase) ?? [];
-    const ultimo = valores.reduce<number>((acc, v, i) => (v !== null ? i : acc), -1);
-    if (ultimo < 0) continue;
-    etiquetas.push({ fase, x: x(ultimo) + 8, y: y(valores[ultimo] as number) + 4 });
-  }
-  etiquetas.sort((a, b) => a.y - b.y);
-  for (let i = 1; i < etiquetas.length; i += 1) {
-    const separacion = etiquetas[i].y - etiquetas[i - 1].y;
-    if (separacion < SEPARACION_ETIQUETA) {
-      etiquetas[i].y = etiquetas[i - 1].y + SEPARACION_ETIQUETA;
-    }
-  }
+  const variosAnios = new Set(claves.map((clave) => clave.slice(0, 4))).size > 1;
 
   function alMover(evento: React.MouseEvent<HTMLDivElement>) {
     const caja = evento.currentTarget.getBoundingClientRect();
     const posicion = evento.clientX - caja.left - MARGEN.izquierda;
-    const indice = Math.round((posicion / anchoUtil) * (fechas.length - 1));
-    setActivo(Math.min(fechas.length - 1, Math.max(0, indice)));
+    const indice = Math.floor(posicion / paso);
+    setActivo(Math.min(claves.length - 1, Math.max(0, indice)));
   }
 
-  // El tooltip se voltea al otro lado cuando el día activo está en el tramo
+  // El tooltip se voltea al otro lado cuando el grupo activo está en el tramo
   // derecho: si no, se sale de la tarjeta.
-  const tooltipDerecha = activo !== null && x(activo) > MARGEN.izquierda + anchoUtil * 0.62;
+  const tooltipDerecha = activo !== null && centroGrupo(activo) > MARGEN.izquierda + anchoUtil * 0.62;
 
   return (
     <div className="flujo-chart">
@@ -216,6 +202,9 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
             {ETIQUETA[fase]}
           </span>
         ))}
+        {/* El grano va en la leyenda, no en un comentario del código: tres
+            barras por semana se leen como tres barras por día si nadie lo dice. */}
+        {AVISO_GRANO[grano] ? <span className="flujo-chart-grano">{AVISO_GRANO[grano]}</span> : null}
       </div>
 
       {/* El SVG va posicionado en absoluto (ver globals.css): lleva un ancho en
@@ -236,7 +225,7 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
             reserva el alto fijo de `.flujo-chart-plot`. */}
         {ancho > 0 ? (
           <svg
-            aria-label="Importe diario por fase"
+            aria-label={`Serie ${NOMBRE_GRANO[grano]} por fase`}
             height={ALTO}
             role="img"
             viewBox={`0 0 ${ancho} ${ALTO}`}
@@ -257,49 +246,54 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
               </g>
             ))}
 
-            {indicesFecha.map((i) => (
-              <text className="flujo-chart-axis" key={fechas[i]} textAnchor="middle" x={x(i)} y={ALTO - 8}>
-                {diaCorto(fechas[i])}
-              </text>
-            ))}
-
+            {/* La banda del grupo apuntado va DEBAJO de las barras. */}
             {activo !== null ? (
-              <line
-                className="flujo-chart-crosshair"
-                x1={x(activo)}
-                x2={x(activo)}
-                y1={MARGEN.arriba}
-                y2={ALTO - MARGEN.abajo}
+              <rect
+                className="flujo-chart-banda"
+                height={altoUtil}
+                width={paso}
+                x={MARGEN.izquierda + paso * activo}
+                y={MARGEN.arriba}
               />
             ) : null}
 
-            {FASES.map((fase) => {
-              const valores = series.get(fase) ?? [];
-              return (
-                <g key={fase}>
-                  <path className="flujo-chart-line" d={trazo(valores)} stroke={COLOR_FASE[fase]} strokeWidth={TRAZO} />
-                  {activo !== null && valores[activo] !== null && valores[activo] !== undefined ? (
-                    <circle
-                      className="flujo-chart-dot"
-                      cx={x(activo)}
-                      cy={y(valores[activo] as number)}
-                      fill={COLOR_FASE[fase]}
-                      r={4}
-                    />
-                  ) : null}
-                </g>
-              );
-            })}
+            {/* Línea del cero, solo cuando hay valores negativos: si el suelo
+                del eje ya es cero, esa línea la dibuja la propia rejilla. */}
+            {pisoEje < 0 ? (
+              <line
+                className="flujo-chart-cero"
+                x1={MARGEN.izquierda}
+                x2={MARGEN.izquierda + anchoUtil}
+                y1={yCero}
+                y2={yCero}
+              />
+            ) : null}
 
-            {etiquetas.map((etiqueta) => (
-              <text
-                className="flujo-chart-label"
-                fill={COLOR_FASE[etiqueta.fase]}
-                key={etiqueta.fase}
-                x={etiqueta.x}
-                y={etiqueta.y}
-              >
-                {ETIQUETA[etiqueta.fase]}
+            {claves.map((clave, i) =>
+              FASES.map((fase, k) => {
+                const valor = (series.get(fase) ?? [])[i];
+                // Sin dato no se dibuja nada. Una barra a cero diría que esa
+                // fase movió cero ese día, que es otra cosa distinta.
+                if (valor === null || valor === undefined) return null;
+                const desde = Math.min(y(valor), yCero);
+                const hasta = Math.max(y(valor), yCero);
+                return (
+                  <rect
+                    className="flujo-chart-barra"
+                    fill={COLOR_FASE[fase]}
+                    height={valor === 0 ? 0 : Math.max(1, hasta - desde)}
+                    key={`${clave}-${fase}`}
+                    width={anchoBarra}
+                    x={centroGrupo(i) - anchoGrupo / 2 + k * (anchoBarra + HUECO_BARRAS)}
+                    y={desde}
+                  />
+                );
+              })
+            )}
+
+            {indicesEtiqueta.map((i) => (
+              <text className="flujo-chart-axis" key={claves[i]} textAnchor="middle" x={centroGrupo(i)} y={ALTO - 8}>
+                {etiquetaEje(claves[i], grano, variosAnios)}
               </text>
             ))}
           </svg>
@@ -310,9 +304,9 @@ export function FlujoChart({ filas, metrica }: { filas: FlujoPorFechaRow[]; metr
             className="flujo-chart-tooltip"
             data-lado={tooltipDerecha ? "izquierda" : "derecha"}
             role="status"
-            style={{ left: `${x(activo)}px` }}
+            style={{ left: `${centroGrupo(activo)}px` }}
           >
-            <b>{fechas[activo]}</b>
+            <b>{rotuloGrupo(claves[activo], grano)}</b>
             {FASES.map((fase) => {
               const valor = (series.get(fase) ?? [])[activo];
               return (
