@@ -215,6 +215,126 @@ FROM (
 WHERE rn = 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 1c) Dimensión CEDIS a nivel ALMACÉN — el segundo escalón del cruce.
+--     No es información nueva: es el MISMO dm_cedis mirado con una llave más
+--     corta. Si un almacén aparece varias veces en el catálogo y todas dicen el
+--     mismo CEDIS, el catálogo está afirmando "este almacén es ese CEDIS", y esa
+--     afirmación vale también para las oficinas que no tenga listadas.
+--
+--     Ejemplo real: `H781` sale tres veces en dm_cedis —oficinas 0174, 0175 y
+--     0176— y las tres dicen Mexico 2. Nuestro flujo lo factura además por la
+--     oficina 0001, que el catálogo no lista, así que $8,7 M se caían. Con este
+--     paso se colocan donde el propio catálogo dice.
+--
+--     SOLO ALMACENES INEQUÍVOCOS (54 de 59): los 5 que apuntan a dos CEDIS
+--     quedan fuera, porque ahí habría que elegir y elegir no es deducir.
+--
+--     POR QUÉ ESTE PASO Y NO EL DE LA OFICINA para estos casos: la mayoría de
+--     lo que rescata venía cayendo por la oficina 0001, que es un cajón de
+--     sastre y los mandaba a "Mexico 1". Por almacén van a su sitio, y los
+--     nombres del maestro de SAP lo confirman uno a uno: `H733` "DIS.
+--     IZTAPALAPA" -> Iztapalapa, `H730` "DIS. PUEBLA 2" -> Puebla 2, `H781`
+--     "ALM. CDMX 2" -> Mexico 2. Rescata ~$15 M.
+--
+--     No da `tipo_venta`: un mismo almacén sirve varios tipos según la oficina,
+--     así que eso se sigue resolviendo por el par o por la oficina.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` AS
+SELECT almacen, ANY_VALUE(cedis) AS cedis
+FROM (
+  SELECT almacen, cedis
+  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+  GROUP BY almacen, cedis
+)
+GROUP BY almacen
+HAVING COUNT(*) = 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- 1d) EL MAPEO MANUAL NO ESTÁ AQUÍ, y conviene saber dónde está.
+--
+--     Vive en `ZZ_PRUEBAS.DBC_dim_almacen_nombre`, en las filas con
+--     `origen = 'deducido'`. Esa tabla la carga `scripts/tablas_cliente.py`
+--     desde los Excel del cliente (59 filas de una lista suelta almacén ->
+--     nombre de CEDIS que mandó el 24/08/2026) más las nuestras, que salen de
+--     `data/mapeo_manual.csv`, versionado en el repo. La columna `origen`
+--     distingue "cliente" de "deducido"; el `fundamento` dice por qué.
+--
+--     Hoy la parte nuestra es UNA fila: `H793` en la planta `DBC3` factura
+--     $241,7 M y no está en dm_cedis por ninguna llave ni en las trece tablas
+--     del cliente. Lo único que se sabe de él es que en el maestro de almacenes
+--     de SAP se llama "CEDIS SAN JUAN".
+--
+--     LA PLANTA ES PARTE DE LA LLAVE, no un adorno: el mismo `H793` en la
+--     planta `H7AG` se llama "MT AGUASCALIENTE" y es otro sitio.
+--
+--     SE USAN TODAS LAS FILAS, las del cliente y las nuestras. Lo que hay que
+--     resolver no es cuáles valen, es que el cliente escribe los nombres a su
+--     manera: "LEÓN 1" donde el catálogo pone "Leon 1", "QUERETARO" donde pone
+--     "Queretaro". Sin normalizar, el mismo CEDIS saldría dos veces en la
+--     pantalla con dos grafías, que es peor que no cruzarlo.
+--
+--     Lo hace `dim_cedis_nombre_v1`, justo debajo: normaliza (sin acentos, sin
+--     espacios, mayúsculas) y **adopta la grafía del catálogo cuando el nombre
+--     existe allí** — 42 de las 59. Las 17 que no existen se quedan con el
+--     nombre del cliente, porque son CEDIS de verdad que el catálogo no tiene:
+--     TOLUCA, CHIHUAHUA, TUXTLA 1, GUADALAJARA... y San Juan, que es el nuestro.
+--     Descartarlos sería tirar información por no estar en una tabla
+--     incompleta.
+--
+--     Lo que NO entra: `BO28`, `BO01` y `H723` ($569,6 M facturado). En SAP se
+--     llaman "ALM. CENTRAL 2", "ALM. CENT. VUALA" y "ALM. CENTRAL", que no dicen
+--     ninguna ciudad, y no están en ninguna lista. Inventarles un CEDIS es
+--     justo lo que esto evita — y el cliente confirmó el 25/08/2026 que hacen
+--     bien en no tenerlo: son almacenes centrales.
+--
+--     LO QUE ESTE ESCALÓN APORTA DE VERDAD: cuatro almacenes que solo existen
+--     en la lista del cliente (`BO29`, `BO30`, `BO43`, `H770`), de los cuales
+--     hoy solo uno factura: `BO43` -> "MEXICO CARLOS", división Botana,
+--     $7,4 M en 2.693 líneas. Es la mayor parte del hueco que quedaba.
+--
+--     ORDEN DE EJECUCIÓN: por esto, `scripts/tablas_cliente.py --cargar` tiene
+--     que haber corrido antes que este script. Si esa tabla no existe, las
+--     vistas de abajo no se pueden crear.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` AS
+WITH catalogo AS (
+  SELECT DISTINCT
+    cedis,
+    UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+),
+lista AS (
+  SELECT
+    planta, almacen, nombre_cedis, origen,
+    UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
+  WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
+)
+SELECT * EXCEPT (rn) FROM (
+  SELECT
+    -- El fichero del cliente no trae columna de planta, así que esto llega
+    -- NULL en las 59 filas. Se normaliza a cadena vacía porque el contrato de
+    -- esta vista es "planta vacía = vale para cualquier planta", y `NULL = ''`
+    -- en SQL no es FALSE sino NULL: dejarlo nulo hacía que el JOIN de abajo no
+    -- cruzara NUNCA, y este escalón entero no llegaba a ejecutarse.
+    IFNULL(l.planta, '') AS planta,
+    l.almacen,
+    l.origen,
+    -- La grafía del catálogo si el nombre existe allí; si no, la del cliente.
+    COALESCE(c.cedis, l.nombre_cedis) AS cedis,
+    c.cedis IS NOT NULL AS grafia_del_catalogo,
+    -- Una sola fila por almacén, para que este join no pueda multiplicar
+    -- líneas del flujo. Si algún día hay dos, gana la nuestra.
+    ROW_NUMBER() OVER (
+      PARTITION BY l.almacen
+      ORDER BY IF(l.origen = 'deducido', 0, 1), l.planta DESC, l.nombre_cedis
+    ) AS rn
+  FROM lista l
+  LEFT JOIN catalogo c ON c.clave = l.clave
+)
+WHERE rn = 1;
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 2) v1: flujo de producto DBC — vendido + facturado + cobrado, un renglón
 --    por evento. `plantas_dbc` (21 plantas, sección 2) es el filtro para
 --    "vendido" -- "facturado" y "cobrado" ya filtran directo por su propio
@@ -330,11 +450,26 @@ SELECT
   p.SPART AS division_code,                 -- confirmado: SPART existe en VBAP (a nivel línea), no hace falta tomarlo de la cabecera
   ba.business_area_name AS division,        -- confirmado: dm_business_area usa business_area_code (llave) / business_area_name (descripción), no sales_division
   k.VTWEG AS canal_code,                    -- confirmado: VTWEG SOLO existe en VBAK (cabecera), no en VBAP
-  COALESCE(dc.cedis, dco.cedis) AS cedis,             -- fallback a la oficina sola cuando el par almacén+oficina no cruza (sección 1b)
+  -- Cuatro escalones, del más específico al más flojo (secciones 1b, 1c, 1d).
+  -- `cedis_origen` dice cuál ganó, y con él se reproduce cualquier versión
+  -- anterior: quitando 'solo oficina' se vuelve al resultado del 21/08, y
+  -- quitando además los otros dos, al original sin fallbacks.
+  COALESCE(dc.cedis, dal.cedis, dma.cedis, dco.cedis) AS cedis,
+  -- El tipo de venta NO tiene cuatro escalones: ni el almacén ni el mapeo
+  -- manual lo determinan (un almacén sirve varios tipos según la oficina).
   COALESCE(dc.tipo_venta, dco.tipo_venta) AS tipo_venta,
   CASE WHEN dc.cedis IS NOT NULL THEN 'almacen+oficina'
+       WHEN dal.cedis IS NOT NULL THEN 'solo almacen'
+       WHEN dma.cedis IS NOT NULL THEN 'lista de nombres'
        WHEN dco.cedis IS NOT NULL THEN 'solo oficina'
-  END AS cedis_origen,                      -- de dónde salió la asignación; con esto se reproduce el resultado sin fallback: IF(cedis_origen='solo oficina', NULL, cedis)
+  END AS cedis_origen,
+  -- Almacén central: el cliente confirmó el 25/08/2026 que estos cuatro NO
+  -- pasan por ningún CEDIS y NO generan comisión para nadie. No es que les
+  -- falte el dato: es que la respuesta correcta es "ninguno". Son $832,4 M
+  -- facturados ($656,5 M dentro de las cinco divisiones que DBC opera), el
+  -- 66,4% de todo lo que salía sin CEDIS. Se marcan en vez de borrarse para que
+  -- el total siga cuadrando y se pueda auditar cuánto se está dejando fuera.
+  p.LGORT IN ('BO28', 'BO01', 'H723', 'H793') AS almacen_central,
   k.VKBUR AS oficina,                       -- confirmado: VKBUR SOLO existe en VBAK (cabecera), no en VBAP — este era el error reportado
   p.WERKS AS planta,
   p.LGORT AS almacen,
@@ -355,10 +490,18 @@ FROM `proan-quantrue.D30_INTEGRATION.sap_VBAP` p
 JOIN `proan-quantrue.D30_INTEGRATION.sap_VBAK` k ON k.VBELN = p.VBELN
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = p.SPART
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = p.LGORT AND dc.oficina = k.VKBUR
--- El fallback solo entra donde el cruce completo falló: `dc.cedis IS NULL` en
--- el ON, no en un CASE aparte, para que la línea que ya cruzó no toque la
--- dimensión por oficina ni por casualidad.
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco ON dc.cedis IS NULL AND dco.oficina = k.VKBUR
+-- Cada escalón entra solo donde falló el anterior, y la condición va en el ON y
+-- no en un CASE posterior: así una línea que ya cruzó no toca las dimensiones
+-- de repuesto ni por casualidad.
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+       ON dc.cedis IS NULL AND dal.almacen = p.LGORT
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+       ON dc.cedis IS NULL AND dal.cedis IS NULL
+      AND dma.almacen = p.LGORT
+      AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = p.WERKS)
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+       ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
+      AND dco.oficina = k.VKBUR
 WHERE p.WERKS IN (SELECT planta FROM plantas_dbc)
   AND (p.ABGRU IS NULL OR p.ABGRU = '')    -- excluye líneas rechazadas/anuladas (sección 4.1)
   AND CAST(k.ERDAT AS DATE) >= '2026-01-01'
@@ -374,11 +517,20 @@ SELECT
   f.sales_division AS division_code,
   ba.business_area_name AS division,
   f.distribution_channel AS canal_code,
-  COALESCE(dc.cedis, dco.cedis) AS cedis,             -- fallback a la oficina sola cuando el par almacén+oficina no cruza (sección 1b)
+  COALESCE(dc.cedis, dal.cedis, dma.cedis, dco.cedis) AS cedis,
   COALESCE(dc.tipo_venta, dco.tipo_venta) AS tipo_venta,
   CASE WHEN dc.cedis IS NOT NULL THEN 'almacen+oficina'
+       WHEN dal.cedis IS NOT NULL THEN 'solo almacen'
+       WHEN dma.cedis IS NOT NULL THEN 'lista de nombres'
        WHEN dco.cedis IS NOT NULL THEN 'solo oficina'
   END AS cedis_origen,
+  -- Almacén central: el cliente confirmó el 25/08/2026 que estos cuatro NO
+  -- pasan por ningún CEDIS y NO generan comisión para nadie. No es que les
+  -- falte el dato: es que la respuesta correcta es "ninguno". Son $832,4 M
+  -- facturados ($656,5 M dentro de las cinco divisiones que DBC opera), el
+  -- 66,4% de todo lo que salía sin CEDIS. Se marcan en vez de borrarse para que
+  -- el total siga cuadrando y se pueda auditar cuánto se está dejando fuera.
+  f.storage_location IN ('BO28', 'BO01', 'H723', 'H793') AS almacen_central,
   f.sales_office AS oficina,
   f.receiving_plant AS planta,
   f.storage_location AS almacen,
@@ -391,7 +543,15 @@ SELECT
 FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = f.sales_division
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco ON dc.cedis IS NULL AND dco.oficina = f.sales_office
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+       ON dc.cedis IS NULL AND dal.almacen = f.storage_location
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+       ON dc.cedis IS NULL AND dal.cedis IS NULL
+      AND dma.almacen = f.storage_location
+      AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = f.receiving_plant)
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+       ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
+      AND dco.oficina = f.sales_office
 WHERE f.receiving_plant IN (SELECT planta FROM plantas_dbc)
   AND f.company_code = 'DBC'                -- filtro maestro (sección 2), confirmado como campo real por la consulta de referencia del senior
   AND CAST(f.billing_date AS DATE) BETWEEN '2026-01-01' AND CURRENT_DATE()  -- excluye años inválidos (2201/2202 — sección 2, pendiente #4)
@@ -439,11 +599,20 @@ SELECT
   g.business_area_code AS division_code,
   ba.business_area_name AS division,
   g.distribution_channel AS canal_code,
-  COALESCE(dc.cedis, dco.cedis) AS cedis,             -- fallback a la oficina sola cuando el par almacén+oficina no cruza (sección 1b)
+  COALESCE(dc.cedis, dal.cedis, dma.cedis, dco.cedis) AS cedis,
   COALESCE(dc.tipo_venta, dco.tipo_venta) AS tipo_venta,
   CASE WHEN dc.cedis IS NOT NULL THEN 'almacen+oficina'
+       WHEN dal.cedis IS NOT NULL THEN 'solo almacen'
+       WHEN dma.cedis IS NOT NULL THEN 'lista de nombres'
        WHEN dco.cedis IS NOT NULL THEN 'solo oficina'
-  END AS cedis_origen,                      -- aquí la oficina viene heredada de la factura, así que el pago cuya factura no cruza sigue sin CEDIS: no hay oficina que usar
+  END AS cedis_origen,                      -- aquí planta, almacén y oficina vienen heredados de la factura, así que el pago cuya factura no cruza se queda sin nada que usar en ninguno de los cuatro escalones
+  -- Almacén central: el cliente confirmó el 25/08/2026 que estos cuatro NO
+  -- pasan por ningún CEDIS y NO generan comisión para nadie. No es que les
+  -- falte el dato: es que la respuesta correcta es "ninguno". Son $832,4 M
+  -- facturados ($656,5 M dentro de las cinco divisiones que DBC opera), el
+  -- 66,4% de todo lo que salía sin CEDIS. Se marcan en vez de borrarse para que
+  -- el total siga cuadrando y se pueda auditar cuánto se está dejando fuera.
+  f.storage_location IN ('BO28', 'BO01', 'H723', 'H793') AS almacen_central,
   f.sales_office AS oficina,
   f.receiving_plant AS planta,
   f.storage_location AS almacen,
@@ -463,7 +632,15 @@ LEFT JOIN factura_totales_v1 t ON t.billing_document = g.billing_document
 LEFT JOIN factura_sitio_v1 f ON f.billing_document = g.billing_document
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = g.business_area_code
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco ON dc.cedis IS NULL AND dco.oficina = f.sales_office;
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+       ON dc.cedis IS NULL AND dal.almacen = f.storage_location
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+       ON dc.cedis IS NULL AND dal.cedis IS NULL
+      AND dma.almacen = f.storage_location
+      AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = f.receiving_plant)
+LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+       ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
+      AND dco.oficina = f.sales_office;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 3) Resumen diario — listo para KPIs/gráficas del dashboard (evita que
