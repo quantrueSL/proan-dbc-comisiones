@@ -2,14 +2,13 @@
 
 // Las tres trampas de la pantalla, en forma de juguete.
 //
-// Están escritas en prosa en el manual, y aun así se leen mal: nadie cree de
-// verdad que esconder una fila pueda tirar el total más de la mitad hasta que lo
-// ve caer. Cada demo tiene un botón que hace la cosa MAL a propósito y enseña
-// qué pasaría. Ninguna toca datos reales de la pantalla: son maquetas.
+// Están escritas en prosa en el manual, y aun así se leen mal: nadie cree que
+// esconder una fila descuadre el total hasta que lo ve caer. Cada demo tiene un
+// botón que hace la cosa MAL a propósito y enseña qué pasaría. Ninguna toca
+// datos reales de la pantalla: son maquetas.
 //
-// Las cifras de la segunda sí son reales, de la corrida del 21 de agosto de
-// 2026 sobre facturado (ver `data/notas/hallazgos.md`), porque el tamaño del
-// agujero es justo lo que cuesta creer.
+// Las cifras de la segunda sí son reales, de la corrida del 25 de agosto de
+// 2026 sobre facturado (ver `data/notas/tablas_del_cliente.md`).
 
 import { useState } from "react";
 import { COLOR_FASE } from "@/features/flujo-producto/fases";
@@ -117,13 +116,18 @@ export function DemoHueco() {
 
 // Exportadas para que un test pueda comprobar que los tramos suman el total y
 // que el porcentaje del hueco sigue siendo el que dice el texto de al lado.
-// Ya pasó una vez: el hueco era del 65% hasta que el cruce de CEDIS ganó el
-// fallback por oficina sola y bajó al 61%. Si vuelve a moverse, se reescribe la
-// frase; la demo no se queda mintiendo al lado del texto.
-export const CON_CEDIS = 786583873;
-export const SIN_CEDIS = 1249824258;
+// Ha bajado cuatro veces: 65% → 61% con el fallback por oficina → 1,2% cuando
+// el cliente aclaró que dos tercios de aquello no eran un hueco (eran
+// divisiones que no opera y almacenes centrales que, correctamente, no
+// pertenecen a ningún CEDIS) → 0,2% al arreglar el cruce por nombre de
+// almacén, que por un NULL comparado con cadena vacía no se ejecutaba nunca.
+// Si vuelve a moverse se reescribe la frase; la demo no se queda mintiendo al
+// lado del texto.
+export const CON_CEDIS = 731201638;
+export const SIN_CEDIS = 1331768;
 export const TOTAL = CON_CEDIS + SIN_CEDIS;
-export const PORCENTAJE_SIN = Math.round((SIN_CEDIS / TOTAL) * 100);
+// Con un decimal: redondear a entero daría 0% y la demo se quedaría sin tramo.
+export const PORCENTAJE_SIN = Math.round((SIN_CEDIS / TOTAL) * 1000) / 10;
 
 export function DemoSinAsignar() {
   const [escondido, setEscondido] = useState(false);
@@ -146,7 +150,13 @@ export function DemoSinAsignar() {
         />
         <span
           className="manual-demo-tramo is-sin"
-          style={{ flexBasis: escondido ? "0%" : `${PORCENTAJE_SIN}%` }}
+          // A escala real el tramo mide 0,2% y no se vería. Se le da un mínimo
+          // en píxeles para que exista en pantalla; el número de al lado es el
+          // de verdad y manda sobre lo que se ve.
+          style={{
+            flexBasis: escondido ? "0%" : `${PORCENTAJE_SIN}%`,
+            minWidth: escondido ? 0 : 6
+          }}
           title="Sin CEDIS asignado"
         />
       </div>
@@ -154,11 +164,11 @@ export function DemoSinAsignar() {
       <ul className="manual-demo-leyenda">
         <li>
           <i style={{ background: COLOR_FASE.facturado }} aria-hidden="true" />
-          Con CEDIS · {dinero.format(CON_CEDIS)} · 1.751.165 líneas · <b>$449 por línea</b>
+          Con CEDIS · {dinero.format(CON_CEDIS)} · 1.750.457 líneas · <b>$418 por línea</b>
         </li>
         <li data-apagado={escondido ? "si" : "no"}>
           <i aria-hidden="true" />
-          Sin asignar · {dinero.format(SIN_CEDIS)} · 111.483 líneas · <b>$11.211 por línea</b>
+          Sin asignar · {dinero.format(SIN_CEDIS)} · 5.485 líneas · <b>$243 por línea</b>
         </li>
       </ul>
 
@@ -169,7 +179,7 @@ export function DemoSinAsignar() {
         <span>
           {escondido
             ? "El total ya no cuadra con nada y nadie sabría por qué. Por eso la fila se enseña, aunque estorbe."
-            : "Son pocas líneas y muy gordas: veinticinco veces la línea normal. Facturado, corrida del 21 de agosto de 2026."}
+            : "El tramo se dibuja con un mínimo para que se vea: a escala real es el 0,2%. Facturado, corrida del 25 de agosto de 2026."}
         </span>
       </figcaption>
     </figure>

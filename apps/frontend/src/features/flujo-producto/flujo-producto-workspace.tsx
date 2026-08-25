@@ -129,8 +129,15 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
   const [tabla, setTabla] = useState<Tabla | null>(null);
 
   const { cedis } = initialCatalog;
-  const { cobertura, resumen, por_cedis, por_division, por_tipo_venta, cantidad_por_unidad } =
-    initialFlujo;
+  const {
+    cobertura,
+    resumen,
+    por_cedis,
+    por_division,
+    por_tipo_venta,
+    cantidad_por_unidad,
+    excluido_almacen_central: excluido
+  } = initialFlujo;
 
   const totales = useMemo(() => Object.fromEntries(resumen.map((r) => [r.fase, r])), [resumen]);
   const hayCajas = resumen.some((r) => r.cantidad_cajas_total !== null);
@@ -326,6 +333,29 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
           <div className="flujo-controles-avisos">
             {/* Los avisos, reducidos a su símbolo. Estaban siempre desplegados y
                 ocupaban media pantalla; ahora se abren solo si interesan. */}
+            {excluido.monto_total > 0 ? (
+              <AvisoBoton
+                tono="dato"
+                titulo="Cuatro almacenes centrales quedan fuera de esta pantalla"
+              >
+                <p>
+                  <b>BO28</b> (ALM. CENTRAL 2), <b>BO01</b> (ALM. CENT. VUALA), <b>H723</b> (ALM.
+                  CENTRAL) y <b>H793</b> (CEDIS SAN JUAN). No pasan por ningún CEDIS y no generan
+                  comisión.
+                </p>
+                <p>
+                  Son <b>{formatearMetrica(excluido.monto_total, "importe")}</b> en el periodo — el{" "}
+                  {excluido.pct_del_total.toFixed(0)}% de lo que factura DBC en las divisiones en
+                  operación. La cifra se calcula sobre los datos del periodo que estés viendo, no
+                  está escrita a mano.
+                </p>
+                <p>
+                  Un desglose por CEDIS que los incluyera no significaría nada, porque su respuesta
+                  correcta es «ninguno». Está explicado en el{" "}
+                  <Link href="/manual">manual de usuario</Link>.
+                </p>
+              </AvisoBoton>
+            ) : null}
             {fasesDesfasadas.length ? (
               <AvisoBoton tono="dato" titulo="Hay fases cuyos datos terminan antes del periodo pedido">
                 <p>

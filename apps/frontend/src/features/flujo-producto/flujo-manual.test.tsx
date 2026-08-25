@@ -27,7 +27,7 @@ describe("las tres trampas de la pantalla", () => {
   it("explica qué es la fila «Sin asignar» y cuánto importe se lleva", () => {
     const texto = manual();
     expect(texto).toMatch(/Sin asignar/);
-    expect(texto).toMatch(/61% del importe/);
+    expect(texto).toMatch(/el 0,2% del importe/);
   });
 
   it("avisa de que las cantidades no se suman entre unidades", () => {

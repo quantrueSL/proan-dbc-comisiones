@@ -12,6 +12,7 @@ export const SECCIONES: Seccion[] = [
   { id: "problema", titulo: "El problema" },
   { id: "recorrido", titulo: "El recorrido" },
   { id: "modulos", titulo: "Los módulos" },
+  { id: "alcance", titulo: "Qué entra y qué no" },
   { id: "fases", titulo: "Las tres líneas" },
   { id: "grafica", titulo: "Leer la gráfica" },
   { id: "vendido", titulo: "Vendido va atrás" },

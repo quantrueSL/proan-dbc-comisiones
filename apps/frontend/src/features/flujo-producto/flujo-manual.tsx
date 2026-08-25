@@ -29,7 +29,7 @@ const FASES: { clave: string; titulo: string; texto: string }[] = [
     clave: "facturado",
     titulo: "Facturado",
     texto:
-      "Lo que se facturó de verdad, con su importe fiable. Es la única fase que trae la cantidad convertida a cajas."
+      "Lo que se facturó de verdad, con su importe fiable. Trae el detalle más fino: material, unidad y cantidad convertida a cajas."
   },
   {
     clave: "cobrado",
@@ -45,6 +45,40 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
 
   return (
     <>
+      {/* Va lo primero a propósito: es lo que hay que saber ANTES de leer
+          cualquier cifra de la pantalla, porque los totales no son los de SAP
+          y sin esto la diferencia parece un error. Ninguna de las dos
+          exclusiones lleva cartel permanente en la pantalla —la de almacenes
+          centrales está en un aviso desplegable y la de divisiones no lleva
+          ninguno—, así que este es el sitio donde queda escrito. */}
+      <section className="manual-seccion" id="alcance">
+        <h2>Qué entra y qué no en esta pantalla</h2>
+        <p>
+          Los totales de aquí <b>no son todo lo que factura DBC</b>, y no por un fallo: hay dos
+          cosas que se dejan fuera a propósito, las dos confirmadas por el cliente el 25 de agosto
+          de 2026.
+        </p>
+        <p>
+          <b>Solo las divisiones que DBC opera</b>: huevo, botana, croqueta, abarrotes y leche. Las
+          demás —derivados de ganado, derivados de huevo, común, cárnicos, comida preparada— están
+          configuradas en SAP pero las llevan otros departamentos, y se les nota: entre el 82% y el
+          100% de su importe no cruza con ningún CEDIS porque nadie mantiene ese mapeo. Verás cuáles
+          hay en el desglose por división.
+        </p>
+        <p>
+          <b>Y cuatro almacenes centrales</b>: BO28 (ALM. CENTRAL 2), BO01 (ALM. CENT. VUALA), H723
+          (ALM. CENTRAL) y H793 (CEDIS SAN JUAN). No pasan por ningún CEDIS y no generan comisión,
+          así que un desglose por CEDIS que los incluyera no significaría nada — su respuesta
+          correcta es «ninguno». El aviso de la barra superior dice cuánto suman en el periodo que
+          estés viendo.
+        </p>
+        <p className="manual-nota">
+          El nombre de H793 en SAP es «CEDIS SAN JUAN», y aun así no es un CEDIS. Durante un tiempo
+          lo dimos por tal precisamente por el nombre, hasta que el cliente lo desmintió. Un rótulo
+          no es una fuente.
+        </p>
+      </section>
+
       <section className="manual-seccion" id="fases">
         <h2>Las tres líneas de la gráfica</h2>
         <p>
@@ -130,16 +164,15 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
               esconderse, para que la suma de la tabla cuadre con los indicadores de arriba.
             </p>
             <p>
-              <b>No es un caso raro:</b> son pocas operaciones pero muy grandes, y se llevan el 61%
-              del importe. Una línea sin CEDIS vale de media veinticinco veces más que una normal.
+              <b>Hoy es residual:</b> el 0,2% del importe. Pero conviene saber de dónde viene,
+              porque durante meses fue el 65% y esa cifra circuló.
             </p>
             <p className="manual-nota">
-              Era el 65% hasta que el cruce de CEDIS pasó a usar la oficina sola cuando el par
-              almacén + oficina no existe en el catálogo. Lo que queda se concentra: cuatro
-              combinaciones de almacén y oficina explican el 71% del hueco, y esos almacenes no
-              aparecen en el catálogo de CEDIS de ninguna forma. Está pendiente de que el cliente diga
-              a qué CEDIS corresponden. Hasta entonces, cualquier análisis por CEDIS cubre el 39% del
-              dinero.
+              Aquel 65% no era un fallo de mapeo. Dos tercios eran divisiones que DBC no opera y
+              almacenes centrales que, correctamente, no pertenecen a ningún CEDIS — y ninguna de las
+              dos cosas se enseña ya en esta pantalla. El tercio que sí lo era se cerró con la lista
+              de almacenes que mandó el cliente. Lo que queda sin asignar de verdad son 5.485 líneas,
+              $1,3 M.
             </p>
           </div>
           <DemoSinAsignar />

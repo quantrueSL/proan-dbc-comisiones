@@ -10810,6 +10810,10 @@ body.proan-report-assistant-open .proan-content-scroll {
 .flujo-modal-cuerpo th, .flujo-modal-cuerpo td { border-top: 1px solid #e2e8f0; padding: 11px 14px; }
 .flujo-modal-cuerpo th.flujo-num, .flujo-modal-cuerpo td.flujo-num { text-align: right; font-variant-numeric: tabular-nums; }
 .flujo-modal-cuerpo .flujo-sin-asignar td { background: #fff9f5; font-style: italic; }
+/* Enlaces dentro de los avisos: azul oscuro para que se vean como enlace sin
+   competir con el naranja de marca, que aquí ya significa «atención». */
+.flujo-modal-cuerpo a { color: #2f3a8c; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.flujo-modal-cuerpo a:hover { color: #1f2a6b; }
 
 /* Manual como página */
 .manual-page .manual-hoja {
@@ -10903,6 +10907,22 @@ body.proan-report-assistant-open .proan-content-scroll {
      estire hasta miles de píxeles y todo salga cortado por la derecha. */
   grid-template-columns: minmax(0, 1fr);
   padding: 4px 4px 30px;
+}
+
+/* EL SCROLL DE ESTA PANTALLA ES SUYO, no el de la ventana. A partir de 1100 px
+   la shell apaga el suyo (`.proan-content-scroll { overflow-y: hidden }`)
+   porque da por hecho que cada pantalla se hace cargo del propio. Esta no lo
+   hacía: heredaba `height: 100%` de `.hydro-page` con un contenido más alto que
+   la ventana, así que las tarjetas de abajo se quedaban cortadas y sin forma de
+   llegar a ellas — no es que sobraran, es que no había manera de bajar.
+   `min-height: 0` es imprescindible: sin él, un hijo de una rejilla no se deja
+   encoger por debajo de su contenido y el `overflow` no llega a activarse. */
+@media (min-width: 1100px) {
+  .hydro-page.flujo-pagina {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
 }
 
 /* Cabecera: el título se queda con el sitio que necesita y los indicadores
