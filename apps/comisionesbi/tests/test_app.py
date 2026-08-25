@@ -17,12 +17,38 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
-def test_report_returns_501_bloqueado():
+def test_report_ya_no_esta_bloqueado(monkeypatch):
+    # Devolvía 501 mientras faltaban los SETs y las tarifas. Llegaron el 24 de
+    # agosto de 2026, así que ahora calcula: el test cambia de "está bloqueado"
+    # a "responde", que es lo que hay que sostener a partir de aquí.
+    monkeypatch.setattr(app_module, "build_report", lambda **_: {"totales": {}, "bloqueado": []})
+
     response = client.post(
         "/v1/comisionesbi/report",
-        json={"start_period": "2026-01-01", "end_period": "2026-01-31"},
+        json={"start_date": "2026-01-01", "end_date": "2026-01-31"},
     )
-    assert response.status_code == 501
+
+    assert response.status_code == 200
+
+
+def test_report_rechaza_un_rango_al_reves():
+    # El endpoint aceptaba cadenas sueltas cuando devolvía 501 y daba igual lo
+    # que le mandaran. Ahora la tabla es diaria y el rango tiene que ser válido.
+    response = client.post(
+        "/v1/comisionesbi/report",
+        json={"start_date": "2026-08-31", "end_date": "2026-01-01"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_report_rechaza_una_fecha_que_no_lo_es():
+    response = client.post(
+        "/v1/comisionesbi/report",
+        json={"start_date": "enero", "end_date": "2026-01-31"},
+    )
+
+    assert response.status_code == 422
 
 
 def test_reconciliation_returns_501_bloqueado():

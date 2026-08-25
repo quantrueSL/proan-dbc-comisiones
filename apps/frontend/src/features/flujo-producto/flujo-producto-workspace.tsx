@@ -37,17 +37,8 @@ import {
   FASES,
   PALETA_CATEGORIAS
 } from "@/features/flujo-producto/fases";
-import {
-  AvisoBoton,
-  Donut,
-  MetricToggle,
-  Modal,
-  RankedBars,
-  formatearMetrica,
-  type BarraDato,
-  type Metrica,
-  type SegmentoDato
-} from "@/features/flujo-producto/flujo-piezas";
+import { AvisoBoton, Modal } from "@/components/aviso";
+import { Donut, MetricToggle, RankedBars, formatearMetrica, type BarraDato, type Metrica, type SegmentoDato } from "@/features/flujo-producto/flujo-piezas";
 import type {
   CedisRow,
   ComisionesCatalog,

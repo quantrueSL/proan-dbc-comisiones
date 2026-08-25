@@ -6848,6 +6848,35 @@ body.proan-report-assistant-open .proan-content-scroll {
 .hydro-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; border-top: 1px solid #e2e8f0; padding: 12px; font-size: 13px; }.hydro-pagination button { padding: 7px 10px; }
 .hydro-error { margin: 0; border-radius: 8px; background: #fef2f2; color: #b91c1c; padding: 11px 13px; }.hydro-empty, .hydro-muted { color: #64748b; padding: 16px; }
 .hydro-detail { position: fixed; z-index: 20; top: 0; right: 0; width: min(480px, 100vw); height: 100vh; overflow-y: auto; background: #fff; box-shadow: -10px 0 32px rgba(15, 23, 42, .2); }.hydro-detail-header { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e2e8f0; padding: 22px; }.hydro-detail-header p { margin: 0; color: #64748b; font-size: 12px; }.hydro-detail-header h2 { margin: 4px 0 0; }.hydro-detail-header button { border: 0; background: transparent; color: #475569; cursor: pointer; font-size: 30px; line-height: 1; }.hydro-detail-body { display: grid; gap: 20px; padding: 22px; }.hydro-detail-body h3 { margin: 0 0 10px; font-size: 15px; }.hydro-detail-body dl { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(0, 1.4fr); gap: 8px 12px; margin: 0; font-size: 13px; }.hydro-detail-body dt { color: #64748b; }.hydro-detail-body dd { margin: 0; overflow-wrap: anywhere; }.hydro-uuid { font-family: monospace; font-size: 11px; }
+/* ── Comisiones ─────────────────────────────────────────────────────────
+   La nota bajo el indicador existe para una cifra concreta: "con cobro
+   registrado" se lee como "lo que hay que pagar" si no se dice lo contrario,
+   y no lo es (sap_pago solo ve el 27% del facturado). El matiz tiene que ir
+   pegado al numero, no en un pie de pagina que nadie baja a leer. */
+.hydro-kpi-nota { display: block; color: #64748b; font-size: 11px; font-style: normal; line-height: 1.35; }
+
+/* El bloque de lo que no entra en el calculo NO se pliega ni se atenua: es lo
+   que impide leer el total como si estuviera completo. Se marca en ambar, que
+   es "ojo con esto", y no en rojo, que seria "esta roto" -- son datos correctos
+   esperando una respuesta del cliente. */
+.hydro-table-card[data-bloque="pendiente"] { border-left: 3px solid #d97706; }
+.hydro-table-card[data-bloque="pendiente"] .hydro-table-title span { color: #92400e; }
+.hydro-table-card[data-bloque="pendiente"] .hydro-table-wrap tbody tr { cursor: default; }
+
+/* Las cifras se leen en columna, alineadas a la derecha y con cifras de ancho
+   fijo: comparar importes de un vistazo es la mitad del trabajo de esta tabla. */
+.hydro-table-wrap th.n, .hydro-table-wrap td.n { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* El periodo va pegado al titulo y no en los filtros: una cifra de comision sin
+   su rango de fechas no significa nada, y el panel de filtros arranca cerrado. */
+/* `align-items: center` y no `baseline`: el aviso es un boton de 34 px junto a
+   una linea de 13 px, y alineado a la base se hunde. El margen negativo abajo
+   compensa el alto del boton para que no separe el titulo del resto. */
+.periodo-activo { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 8px 0 -6px; font-size: 13px; color: #475569; }
+.periodo-activo b { color: #172033; font-weight: 700; }
+
+.hydro-nota { margin: 0; color: #64748b; font-size: 12.5px; line-height: 1.5; padding: 0 4px; }
+
 @media (max-width: 1100px) { .hydro-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 680px) { .hydro-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }.hydro-filters label { width: calc(50% - 6px); }.hydro-filters input, .hydro-filters select { width: 100%; }.hydro-filter-actions { width: 100%; }.hydro-table-wrap th, .hydro-table-wrap td { white-space: nowrap; }.hydro-detail-body dl { grid-template-columns: 1fr; gap: 3px; }.hydro-detail-body dd { margin-bottom: 8px; } }
 

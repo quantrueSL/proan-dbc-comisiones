@@ -73,8 +73,9 @@ describe("cómo se llama al backend", () => {
     const filtros = {
       division: "H",
       cedis: "Leon 1",
-      start_period: "2026-01-01",
-      end_period: "2026-01-31"
+      comisionista: null,
+      start_date: "2026-01-01",
+      end_date: "2026-01-31"
     };
 
     await getComisionesReport(filtros);
@@ -142,13 +143,14 @@ describe("cómo se llama al backend", () => {
 
 describe("errores", () => {
   it("distingue el 501 de módulo bloqueado y conserva el motivo del backend", async () => {
-    // El 501 lo emiten a propósito comisiones_engine.py y conciliacion_engine.py:
-    // la página muestra por qué está bloqueado, no un "algo salió mal".
-    responde(501, { detail: "Falta el export de GS03 y la tabla ZSDFI_001." });
+    // Comisiones ya no devuelve 501 —calcula desde el 25/08/2026—, pero
+    // conciliación sí, y el mecanismo tiene que seguir funcionando: la página
+    // enseña por qué está bloqueado, no un "algo salió mal".
+    responde(501, { detail: "Falta explorar FBL1N / sap_bsik_open_items." });
 
     await expect(
-      getComisionesReport({ division: null, cedis: null, start_period: "2026-01-01", end_period: "2026-01-31" })
-    ).rejects.toThrow("Falta el export de GS03 y la tabla ZSDFI_001.");
+      getComisionesReconciliation({ provider_id: null, start_period: "2026-01-01", end_period: "2026-01-31" })
+    ).rejects.toThrow("Falta explorar FBL1N / sap_bsik_open_items.");
   });
 
   it("da un mensaje por defecto si el 501 llega sin detalle", async () => {

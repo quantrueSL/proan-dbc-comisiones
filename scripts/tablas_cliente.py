@@ -241,7 +241,8 @@ def de_sets(filas, cab, rastro) -> list[dict]:
             salida.append({**rastro, "set": normaliza_set(nombre_set),
                            "set_original": nombre_set, "material": material,
                            "material_sap": material.zfill(18),
-                           "denominacion": limpia(c.get(denom, ""))})
+                           "denominacion": limpia(c.get(denom, "")),
+                           "origen": "cliente", "fundamento": ""})
     return salida
 
 
@@ -287,6 +288,39 @@ def de_mapeo_manual() -> list[dict]:
     with open(ruta, encoding="utf-8") as fh:
         return [{"fichero": "data/mapeo_manual.csv", "hoja": "", "planta": limpia(r["planta"]),
                  "almacen": limpia(r["almacen"]), "nombre_cedis": limpia(r["nombre_cedis"]),
+                 "origen": "deducido", "fundamento": limpia(r["fundamento"])}
+                for r in csv.DictReader(fh)]
+
+
+def de_mapeo_set() -> list[dict]:
+    """Materiales que el fichero de SETs del cliente no trae, en la misma tabla
+    y distinguidos por `origen`. Viven en `data/mapeo_set_material.csv`.
+
+    Hoy son los tres de LECHE, y el caso explica para qué sirve este fichero.
+    Preguntamos al cliente qué material era cada leche y contestó «83 light, 83
+    entera y 84 deslactosada» — con el 83 repetido, así que la respuesta no se
+    podía usar. Pero SAP lo dice solo: `sap_VBAP.ARKTX` rotula cada línea de
+    pedido, y las 179.720 líneas de los tres materiales coinciden sin una sola
+    excepción. Con leche fuera, su división cruzaba al 0% y se quedaban $31,8 M
+    sin poder comisionar.
+
+    Que la deducción sea sólida no la convierte en dato del cliente: por eso va
+    marcada `deducido` y con el porqué en `fundamento`, para que quien la mire
+    dentro de un año sepa que la escribimos nosotros y sobre qué evidencia.
+
+    Los SET se escriben con la grafía del cliente, erratas incluidas
+    (`LLIGTH`, `LDESLACTOZADA`): la llave tiene que cruzar con su tabla de
+    tarifas, no leerse bien."""
+    ruta = os.path.join(RAIZ, "data", "mapeo_set_material.csv")
+    if not os.path.exists(ruta):
+        return []
+    with open(ruta, encoding="utf-8") as fh:
+        return [{"fichero": "data/mapeo_set_material.csv", "hoja": "",
+                 "set": normaliza_set(limpia(r["set"])),
+                 "set_original": limpia(r["set"]),
+                 "material": limpia(r["material"]),
+                 "material_sap": limpia(r["material"]).zfill(18),
+                 "denominacion": limpia(r["denominacion"]),
                  "origen": "deducido", "fundamento": limpia(r["fundamento"])}
                 for r in csv.DictReader(fh)]
 
@@ -422,6 +456,10 @@ def recorre():
             else:
                 desconocidas.append(f"{rastro['fichero']} · «{rastro['hoja']}» ({len(filas)} filas)")
     listas += de_mapeo_manual()
+    # Después del recorrido, no dentro: así una fila nuestra nunca puede
+    # tapar una del cliente sin que el aviso de "material en más de un SET"
+    # lo cante.
+    sets += de_mapeo_set()
     return sets, tarifas, abarrotes, diccionario, listas, desconocidas
 
 
@@ -510,7 +548,9 @@ def main() -> int:
     for r in sets:
         por_material[r["material_sap"]].add(r["set"])
     en_varios = {m: s for m, s in por_material.items() if len(s) > 1}
-    print(f"\nMateriales en más de un SET (duplicarían al cruzar): {len(en_varios)}")
+    deducidos = sum(1 for r in sets if r["origen"] == "deducido")
+    print(f"\nSET -> material: {len(sets) - deducidos} del cliente + {deducidos} deducidos por nosotros")
+    print(f"Materiales en más de un SET (duplicarían al cruzar): {len(en_varios)}")
     for m, s in list(en_varios.items())[:5]:
         print(f"   {m}: {sorted(s)}")
 

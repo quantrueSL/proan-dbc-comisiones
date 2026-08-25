@@ -52,10 +52,24 @@ def handle_bigquery_config_error(request: Request, exc: BigQueryConfigError) -> 
 
 
 class ReportQuery(BaseModel):
+    """Fechas, no cadenas: la tabla gold de comisión es diaria.
+
+    Era `start_period: str` de cuando el módulo devolvía 501 y nadie validaba
+    nada. Ahora Pydantic rechaza con 422 lo que no sea una fecha ISO, y aquí
+    solo queda comprobar que el rango tiene sentido — igual que en FlujoQuery.
+    """
+
     division: str | None = None
     cedis: str | None = None
-    start_period: str
-    end_period: str
+    comisionista: str | None = None
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def _rango_coherente(self) -> "ReportQuery":
+        if self.start_date > self.end_date:
+            raise ValueError("start_date no puede ser posterior a end_date.")
+        return self
 
 
 class ReconciliationQuery(BaseModel):
@@ -114,12 +128,18 @@ def post_flujo(body: FlujoQuery) -> dict:
 
 @app.post("/v1/comisionesbi/report")
 def post_report(body: ReportQuery) -> dict:
-    """Módulo de comisión y compensación — ver comisiones_engine.py (bloqueado)."""
+    """Módulo de comisión — ver comisiones_engine.py.
+
+    Devuelve lo devengado Y lo que está bloqueado, siempre juntos: todavía no
+    se calcula sobre todo el facturado, así que el total sin su contexto sería
+    un número que nadie puede cuadrar.
+    """
     return build_report(
         division=body.division,
         cedis=body.cedis,
-        start_period=body.start_period,
-        end_period=body.end_period,
+        comisionista=body.comisionista,
+        start_date=body.start_date,
+        end_date=body.end_date,
     )
 
 

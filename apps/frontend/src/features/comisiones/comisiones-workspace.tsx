@@ -1,70 +1,83 @@
 "use client";
 
-// Módulo 2 · Comisiones -- el cálculo real está bloqueado (ver
-// comisionesbi/comisiones_engine.py): falta el export de GS03 (SETs de
-// producto) y la tabla oficial de tarifas (ZSDFI_001). Esta pantalla ya está
-// conectada de verdad a POST /api/comisionesbi/report -- hoy responde 501 con
-// el motivo, así que se muestra ese aviso más una vista previa con datos de
-// EJEMPLO (marcados como tal) para validar la UX mientras se resuelven los
-// bloqueantes (tareas #3 y #10 del proyecto).
+// Módulo 1 · Comisiones — conectada de verdad a POST /api/comisionesbi/report.
+//
+// Estuvo devolviendo 501 con una vista previa de ejemplo al lado hasta que el
+// cliente mandó los SETs y las tarifas el 24 de agosto de 2026. Ya no hay datos
+// de ejemplo en este fichero: lo que se ve es lo que hay.
+//
+// LA DECISIÓN QUE MANDA SOBRE TODA LA PANTALLA: todavía no se puede calcular
+// comisión sobre todo el facturado —hoy sale sobre un 58%—, y lo que falta no
+// es poco: $174 M de botana dependen de cuál de las dos hojas de tarifas del
+// cliente esté vigente, y eso mueve la comisión entre $13,7 M y $20,2 M.
+// Enseñar el total sin eso al lado sería construir una cifra que nadie puede
+// cuadrar. Así que el bloque
+// "lo que todavía no entra" va SIEMPRE visible, con su importe y su motivo, y
+// no detrás de un desplegable. La pregunta que tiene que poder contestar
+// cualquiera que abra esto es "¿esto está completo?", y la respuesta está a la
+// vista sin pulsar nada.
 
 import { useState } from "react";
+import Link from "next/link";
+import { AvisoBoton } from "@/components/aviso";
 import { FiltersSidebar } from "@/components/filters-sidebar";
-import { EtiquetaVistaPrevia, ModuloEnConstruccion } from "@/components/modulo-en-construccion";
-import type { CedisRow, ComisionesCatalog, DivisionRow, ReportFilters, ReportResponse } from "@/types/comisiones";
+import type {
+  CedisRow,
+  ComisionesCatalog,
+  DivisionRow,
+  ReportFilters,
+  ReportResponse
+} from "@/types/comisiones";
 
 type Props = {
-  initialBlockedMessage: string | null;
   initialCatalog: ComisionesCatalog;
   initialError: string | null;
   initialReport: ReportResponse | null;
+  rangoInicial: { desde: string; hasta: string };
 };
 
-const money = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 });
-const number = new Intl.NumberFormat("es-MX");
+const dinero = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 });
+const numero = new Intl.NumberFormat("es-MX");
+const decimal = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 });
+const fechaLarga = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "long", year: "numeric" });
 
-function formatMoney(value: number) {
-  return `${money.format(value)} MXN`;
+/** "2026-01-02" -> "2 de enero de 2026", sin que el huso horario reste un día.
+ *  `new Date("2026-01-02")` se interpreta como UTC y al formatearlo en México
+ *  sale el 1 de enero. Construyéndola por partes se queda en local. */
+function enPalabras(iso: string | undefined | null) {
+  if (!iso) return null;
+  const [a, m, d] = iso.split("-").map(Number);
+  if (!a || !m || !d) return null;
+  return fechaLarga.format(new Date(a, m - 1, d));
 }
 
-function Kpi({ label, value }: { label: string; value: string }) {
+function pesos(valor: number) {
+  return `$${dinero.format(valor)}`;
+}
+
+function Kpi({ etiqueta, valor, nota }: { etiqueta: string; valor: string; nota?: string }) {
   return (
     <div className="hydro-kpi">
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <span>{etiqueta}</span>
+      <strong>{valor}</strong>
+      {nota ? <em className="hydro-kpi-nota">{nota}</em> : null}
     </div>
   );
 }
 
-// Datos de EJEMPLO -- ilustran cómo se vería el reporte una vez resueltos los
-// bloqueantes. No provienen de BigQuery. Ver README.md, "Bloqueantes".
-const EJEMPLO: ReportResponse = {
-  filas: [
-    { division: "Aves", cedis: "CEDIS Culiacán", comisionista: "Comisionista 1", vendido: 1240000, facturado: 1180000, cobrado: 980000, comision_devengada: 29500, comision_pagable: 24500 },
-    { division: "Aves", cedis: "CEDIS Mazatlán", comisionista: "Comisionista 2", vendido: 860000, facturado: 830000, cobrado: 830000, comision_devengada: 20750, comision_pagable: 20750 },
-    { division: "Cerdo", cedis: "CEDIS Culiacán", comisionista: "Comisionista 1", vendido: 540000, facturado: 510000, cobrado: 400000, comision_devengada: 12750, comision_pagable: 10000 },
-    { division: "Balanceado", cedis: "CEDIS Los Mochis", comisionista: "Comisionista 3", vendido: 2100000, facturado: 2050000, cobrado: 1900000, comision_devengada: 51250, comision_pagable: 47500 }
-  ],
-  vendido_total: 4740000,
-  facturado_total: 4570000,
-  cobrado_total: 4110000,
-  comision_pagable_total: 102750
-};
-
 function divisionLabel(row: DivisionRow): string {
-  // Confirmado contra el esquema real de dm_business_area: business_area_name.
   const candidate = row.business_area_name;
   return candidate === null || candidate === undefined ? JSON.stringify(row) : String(candidate);
 }
 
-export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, initialError, initialReport }: Props) {
+export function ComisionesWorkspace({ initialCatalog, initialError, initialReport, rangoInicial }: Props) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [division, setDivision] = useState("");
   const [cedis, setCedis] = useState("");
-  const [startPeriod, setStartPeriod] = useState("");
-  const [endPeriod, setEndPeriod] = useState("");
+  const [comisionista, setComisionista] = useState("");
+  const [desde, setDesde] = useState(rangoInicial.desde);
+  const [hasta, setHasta] = useState(rangoInicial.hasta);
   const [report, setReport] = useState(initialReport);
-  const [blockedMessage, setBlockedMessage] = useState(initialBlockedMessage);
   const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
 
@@ -75,8 +88,9 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
       const body: ReportFilters = {
         division: division || null,
         cedis: cedis || null,
-        start_period: startPeriod || "",
-        end_period: endPeriod || ""
+        comisionista: comisionista || null,
+        start_date: desde,
+        end_date: hasta
       };
       const response = await fetch("/api/comisionesbi/report", {
         method: "POST",
@@ -84,26 +98,28 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
         body: JSON.stringify(body)
       });
       const payload = (await response.json().catch(() => null)) as (ReportResponse & { detail?: string }) | null;
-      if (response.status === 501) {
-        setBlockedMessage(payload?.detail || "Este módulo todavía no está disponible.");
-        setReport(null);
-        return;
-      }
       if (!response.ok) {
-        throw new Error(payload?.detail || "No se pudo generar el reporte de comisión.");
+        throw new Error(payload?.detail || "No se pudo generar el informe de comisión.");
       }
-      setBlockedMessage(null);
       setReport(payload as ReportResponse);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "No se pudo generar el reporte de comisión.");
+      setError(cause instanceof Error ? cause.message : "No se pudo generar el informe de comisión.");
     } finally {
       setLoading(false);
     }
   }
 
-  const datos = report ?? (blockedMessage ? EJEMPLO : null);
-  const esEjemplo = !report && Boolean(blockedMessage);
-  const activeFilterCount = [division, cedis, startPeriod, endPeriod].filter(Boolean).length;
+  const activeFilterCount = [division, cedis, comisionista].filter(Boolean).length;
+  // Pedir hasta hoy cuando los datos acaban el 23 de agosto no es un error, pero
+  // deja creer que el último tramo no vendió nada. Se dice, en vez de que cada
+  // uno lo descubra por su cuenta.
+  const corte = report?.cobertura?.hasta;
+  const seVaDeRango = Boolean(corte && hasta > corte);
+  const totales = report?.totales;
+  const bloqueado = report?.bloqueado ?? [];
+  const montoBloqueado = bloqueado.reduce((suma, b) => suma + b.monto, 0);
+  // La horquilla solo existe donde las dos hojas del cliente se contradicen.
+  const horquilla = bloqueado.reduce((suma, b) => suma + (b.comision_max - b.comision_min), 0);
 
   return (
     <div className="workspace-with-sidebar">
@@ -112,20 +128,26 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
         info={
           <>
             <p>
-              Comisión devengada y pagable por comisionista, calculada solo sobre lo cobrado o
-              compensado (nunca sobre lo vendido/facturado) -- ver el borrador técnico, sección 6.
+              Comisión devengada por comisionista, calculada línea a línea sobre lo{" "}
+              <b>facturado</b>.
             </p>
-            <h3>Por qué dice &ldquo;vista previa&rdquo;</h3>
-            <ul>
-              <li>Falta el export de GS03 (SETs de producto).</li>
-              <li>Falta la tabla oficial de tarifas (TX ZSDFI_001).</li>
-            </ul>
+            <h3>Por qué sobre lo facturado, si se paga sobre lo cobrado</h3>
+            <p>
+              Porque lo cobrado no trae material: <code>sap_pago</code> da una fila por factura, sin
+              línea, así que no hay SET ni tarifa posible. Y esa fuente solo ve el 27% de lo
+              facturado, con un ratio plano en los ocho meses de 2026 — si fuera retraso de cobro,
+              enero estaría muy por encima de agosto.
+            </p>
+            <p>
+              Por eso la columna «con cobro registrado» es un <b>suelo conocido</b>, no lo que hay
+              que pagar.
+            </p>
           </>
         }
         infoTitle="Comisiones"
         onToggle={() => setFiltersOpen((v) => !v)}
         open={filtersOpen}
-        updatedAt={null}
+        updatedAt={report?.cobertura?.hasta ?? null}
       >
         <label>
           División
@@ -150,12 +172,26 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
           </select>
         </label>
         <label>
-          Desde (periodo)
-          <input onChange={(e) => setStartPeriod(e.target.value)} type="month" value={startPeriod} />
+          Comisionista
+          <select onChange={(e) => setComisionista(e.target.value)} value={comisionista}>
+            <option value="">Todos</option>
+            {(report?.por_comisionista ?? [])
+              .map((f) => f.comisionista)
+              .filter((n): n is string => Boolean(n))
+              .map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+          </select>
         </label>
         <label>
-          Hasta (periodo)
-          <input onChange={(e) => setEndPeriod(e.target.value)} type="month" value={endPeriod} />
+          Desde
+          <input onChange={(e) => setDesde(e.target.value)} type="date" value={desde} />
+        </label>
+        <label>
+          Hasta
+          <input onChange={(e) => setHasta(e.target.value)} type="date" value={hasta} />
         </label>
         <div className="filters-sidebar-actions">
           <button className="hydro-button" disabled={loading} onClick={load} type="button">
@@ -166,8 +202,9 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
             onClick={() => {
               setDivision("");
               setCedis("");
-              setStartPeriod("");
-              setEndPeriod("");
+              setComisionista("");
+              setDesde(rangoInicial.desde);
+              setHasta(rangoInicial.hasta);
             }}
             type="button"
           >
@@ -183,29 +220,154 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
           <div className="operational-summary-title">
             <p>Cálculo de comisión</p>
             <h1>Comisiones</h1>
-            <span>Comisión devengada y pagable por comisionista, según lo cobrado/compensado por CEDIS.</span>
+            <span>
+              Comisión devengada por comisionista, sobre lo facturado. Huevo se comisiona por kilo;
+              botana, croqueta y leche por unidad.
+            </span>
+            {/* El periodo se elegía en el panel de filtros, que arranca cerrado, así
+                que la pantalla enseñaba cifras sin decir de cuándo eran. Va aquí
+                arriba y siempre visible: un importe de comisión sin su periodo no
+                significa nada. */}
+            <div className="periodo-activo">
+              <span>
+                Del <b>{enPalabras(desde) ?? desde}</b> al <b>{enPalabras(hasta) ?? hasta}</b>
+              </span>
+              {/* El mismo icono y el mismo modal que en flujo de producto: un
+                  aviso sobre los datos se lee igual en las dos pantallas. */}
+              {seVaDeRango ? (
+                <AvisoBoton
+                  tono="dato"
+                  titulo="El periodo pedido va más allá de los datos cargados"
+                >
+                  <p>
+                    Hay facturación cargada hasta el <b>{enPalabras(corte)}</b>. El periodo que estás
+                    viendo llega hasta el <b>{enPalabras(hasta) ?? hasta}</b>, así que los últimos
+                    días salen en blanco.
+                  </p>
+                  <p>
+                    <b>No es que no se facturara</b>: es que el dato todavía no está. Viene de la
+                    ingesta de SAP, que es compartida con el resto del grupo y ajena a esta
+                    herramienta.
+                  </p>
+                  <p>
+                    Mientras dure, no leas la caída del final como una bajada de ventas ni de
+                    comisión. El mismo aviso está en la pantalla de{" "}
+                    <Link href="/flujo-producto">flujo de producto</Link>, donde se ve el efecto
+                    sobre la serie diaria.
+                  </p>
+                </AvisoBoton>
+              ) : null}
+            </div>
           </div>
-          {datos ? (
+          {totales ? (
             <section className="hydro-module-kpis" aria-label="Indicadores de comisión">
-              <Kpi label="Vendido" value={formatMoney(datos.vendido_total)} />
-              <Kpi label="Facturado" value={formatMoney(datos.facturado_total)} />
-              <Kpi label="Cobrado" value={formatMoney(datos.cobrado_total)} />
-              <Kpi label="Comisión pagable" value={formatMoney(datos.comision_pagable_total)} />
+              <Kpi etiqueta="Comisión devengada" valor={pesos(totales.comision)} />
+              <Kpi
+                etiqueta="Con cobro registrado"
+                valor={pesos(totales.comision_con_cobro)}
+                nota="suelo conocido, no lo pagable"
+              />
+              <Kpi
+                etiqueta="Facturado con tarifa"
+                valor={`${decimal.format(totales.pct_calculable)}%`}
+                nota={`${pesos(totales.monto_calculable)} de ${pesos(totales.monto)}`}
+              />
+              <Kpi etiqueta="Líneas calculadas" valor={numero.format(totales.num_lineas)} />
             </section>
           ) : null}
         </header>
 
-        {blockedMessage ? <ModuloEnConstruccion motivo={blockedMessage} /> : null}
+        {/* Siempre visible, nunca plegado: es lo que impide leer el total como
+            si estuviera completo. */}
+        {bloqueado.length ? (
+          <section className="hydro-table-card" data-bloque="pendiente">
+            <div className="hydro-table-title">
+              <div>
+                <h2>Lo que todavía no entra en el cálculo</h2>
+                <span>
+                  {pesos(montoBloqueado)} facturados sin comisión aplicable
+                  {horquilla > 0 ? ` · ${pesos(horquilla)} dependen de qué hoja de tarifas valga` : null}
+                </span>
+              </div>
+            </div>
+            <div className="hydro-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Motivo</th>
+                    <th className="n">Líneas</th>
+                    <th className="n">Facturado</th>
+                    <th className="n">Comisión si entrara</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bloqueado.map((b) => (
+                    <tr key={b.motivo}>
+                      <td>{b.motivo}</td>
+                      <td className="n">{numero.format(b.num_lineas)}</td>
+                      <td className="n">{pesos(b.monto)}</td>
+                      <td className="n">
+                        {/* Donde hay conflicto de tarifas se sabe el rango; en el
+                            resto todavía no se sabe nada, y decirlo es más útil
+                            que un cero que parece una cifra. */}
+                        {b.comision_max > 0
+                          ? `${pesos(b.comision_min)} – ${pesos(b.comision_max)}`
+                          : "sin determinar"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
 
-        {datos ? (
+        {report?.por_comisionista.length ? (
           <section className="hydro-table-card">
             <div className="hydro-table-title">
               <div>
                 <h2>Comisión por comisionista</h2>
                 <span>
-                  {number.format(datos.filas.length)} filas{esEjemplo ? " · " : null}
+                  {numero.format(report.por_comisionista.length)} comisionistas · ordenados por lo
+                  que se les debe
                 </span>
-                {esEjemplo ? <EtiquetaVistaPrevia /> : null}
+              </div>
+            </div>
+            <div className="hydro-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Comisionista</th>
+                    <th className="n">Facturado</th>
+                    <th className="n">Con tarifa</th>
+                    <th className="n">Comisión devengada</th>
+                    <th className="n">Con cobro registrado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.por_comisionista.map((fila) => (
+                    <tr key={fila.comisionista ?? "sin-asignar"}>
+                      <td>{fila.comisionista ?? "Sin comisionista asignado"}</td>
+                      <td className="n">{pesos(fila.monto)}</td>
+                      <td className="n">
+                        {fila.monto ? `${decimal.format((fila.monto_calculable / fila.monto) * 100)}%` : "—"}
+                      </td>
+                      <td className="n">{pesos(fila.comision)}</td>
+                      <td className="n">{pesos(fila.comision_con_cobro)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null}
+
+        {report?.por_division.length ? (
+          <section className="hydro-table-card">
+            <div className="hydro-table-title">
+              <div>
+                <h2>Por división</h2>
+                <span>La tasa sale sobre el facturado que sí tiene tarifa, no sobre el total</span>
               </div>
             </div>
             <div className="hydro-table-wrap">
@@ -213,32 +375,40 @@ export function ComisionesWorkspace({ initialBlockedMessage, initialCatalog, ini
                 <thead>
                   <tr>
                     <th>División</th>
-                    <th>CEDIS</th>
-                    <th>Comisionista</th>
-                    <th>Vendido</th>
-                    <th>Facturado</th>
-                    <th>Cobrado</th>
-                    <th>Comisión devengada</th>
-                    <th>Comisión pagable</th>
+                    <th className="n">Facturado</th>
+                    <th className="n">Con tarifa</th>
+                    <th className="n">Comisión</th>
+                    <th className="n">Tasa</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {datos.filas.map((row, index) => (
-                    <tr key={index}>
-                      <td>{row.division}</td>
-                      <td>{row.cedis}</td>
-                      <td>{row.comisionista}</td>
-                      <td>{formatMoney(row.vendido)}</td>
-                      <td>{formatMoney(row.facturado)}</td>
-                      <td>{formatMoney(row.cobrado)}</td>
-                      <td>{formatMoney(row.comision_devengada)}</td>
-                      <td>{formatMoney(row.comision_pagable)}</td>
+                  {report.por_division.map((fila) => (
+                    <tr key={fila.division_code ?? "sin"}>
+                      <td>{fila.division ?? fila.division_code ?? "Sin división"}</td>
+                      <td className="n">{pesos(fila.monto)}</td>
+                      <td className="n">
+                        {fila.monto ? `${decimal.format((fila.monto_calculable / fila.monto) * 100)}%` : "—"}
+                      </td>
+                      <td className="n">{pesos(fila.comision)}</td>
+                      <td className="n">
+                        {fila.monto_calculable
+                          ? `${decimal.format((fila.comision / fila.monto_calculable) * 100)}%`
+                          : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </section>
+        ) : null}
+
+        {totales?.lineas_sin_importe ? (
+          <p className="hydro-nota">
+            {numero.format(totales.lineas_sin_importe)} líneas del periodo tienen cantidad entregada
+            e importe cero. Se comisionan porque hay producto entregado, y quedan marcadas por si el
+            cliente decide que no deberían.
+          </p>
         ) : null}
       </div>
     </div>
