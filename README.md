@@ -44,16 +44,21 @@ tipo de venta, mes y unidad, con serie diaria en barras agrupadas (tres por día
 que pasan a semana o mes cuando el rango no cabe). Se filtra pulsando sobre las
 propias gráficas y el filtro viaja en la URL, así que una vista se comparte por
 enlace. **Las tres fases traen ya cantidad en cajas**, así que el embudo se
-puede leer en producto y no solo en dinero: 81,6 M vendidas → 76,8 M facturadas
-→ 49,3 M cobradas. Falta la primera capa, los traspasos, que depende del cliente
-(bloqueante 5) y sale marcada como pendiente en el manual. Los dos hallazgos
-incómodos de los datos están **a la vista en la interfaz**, no escondidos en una
-nota: el retraso de `sap_VBAP` (la serie de «vendido» termina antes que las
-otras dos en vez de caer a cero) y el 61% del importe sin CEDIS asignado (fila
-«Sin asignar», que no se esconde para que los totales cuadren). Ese 61% era el
-65% hasta que el cruce de CEDIS ganó un fallback por oficina sola; lo que queda
-son cuatro combinaciones almacén+oficina que no están en `dm_cedis` de ninguna
-forma y dependen del cliente. Ver `data/notas/hallazgos.md`.
+puede leer en producto y no solo en dinero. Falta la primera capa, los
+traspasos, aunque el cliente ya dio el código de movimiento (BWART 300-399, y
+100-199 en croqueta) y sale marcada como pendiente en el manual.
+
+La pantalla **no enseña todo lo que factura DBC**, y el manual lo explica en su
+primer apartado: solo las cinco divisiones que el cliente opera (huevo, botana,
+croqueta, abarrotes y leche) y sin los cuatro almacenes centrales, que no
+pertenecen a ningún CEDIS. Con eso, el importe **sin CEDIS asignado pasó del 65%
+al 0,2%** — no por un mapeo mejor, sino porque dos tercios de aquel hueco nunca
+fueron un hueco, y el tercio que sí lo era se cerró con la lista de almacenes que
+mandó el cliente. Ver `data/notas/tablas_del_cliente.md`.
+
+El hallazgo incómodo que sigue **a la vista en la interfaz** es el retraso de
+`sap_VBAP`: la serie de «vendido» termina antes que las otras dos en vez de caer
+a cero. Ver `data/notas/hallazgos.md`.
 
 Hay además un **manual de usuario** en `/manual`, escrito para que nadie saque
 conclusiones falsas de esta pantalla: qué resuelve la plataforma, el recorrido
@@ -65,15 +70,28 @@ SQL: son datos que solo tiene el cliente. El resto del mapeo está en
 `Datos/Comisiones_DBC_Borrador_Tecnico.md` y `data/Resumen.md` (dimensiones
 resueltas, modelo de 4 capas, tarifas derivadas empíricamente, pendientes).
 
-**Bloqueantes para construir el módulo de comisión real:**
+**Bloqueantes para el módulo de comisión — cuatro de cinco cayeron el 24 y 25
+de agosto de 2026, cuando el cliente mandó sus tablas** (ver
+`data/notas/tablas_del_cliente.md`; el extractor es `scripts/tablas_cliente.py`
+y deja cinco diccionarios en `ZZ_PRUEBAS.DBC_dim_*`):
 
-1. Export de GS03 (definición de SETs de producto por división) — sin esto no
-   se puede agrupar `material_number` por marca/línea.
-2. Tabla oficial de tarifas de comisión (TX `ZSDFI_001`).
-3. Relación comisionista ↔ oficinas de venta.
+1. ~~Export de GS03 (SETs de producto)~~ — **resuelto**: cubre el 94,3% del
+   facturado en operación. Falta solo asignar los tres materiales de leche.
+2. ~~Tabla oficial de tarifas~~ — **resuelto**: 3.426 tarifas. Y no hay un solo
+   modelo: huevo, botana, croqueta y leche van por importe unitario sobre una
+   matriz SET × tipo de venta, mientras abarrotes va por margen sobre el precio
+   de cada material. La base de huevo es el **kilo**, no la caja.
+3. ~~Relación comisionista ↔ oficinas~~ — **resuelto**: 57 nombres de
+   comisionista, de los que 32 traen código de persona (esa brecha hay que
+   cerrarla antes de liquidar a nadie). Además destraban conciliación: no había
+   maestro de proveedores en BigQuery.
 4. Rango de proveedor de comisionistas + frecuencia de liquidación.
-5. Código(s) `BWART` que usa el cliente en su MB51, para validar `sap_mseg` y
-   poder añadir la cuarta capa (traspasos) al flujo.
+5. ~~Código `BWART` de traspasos~~ — **resuelto**: 300-399, y 100-199 en
+   croqueta. Falta entender el reparto entre `sap_mseg`, `sap_mseg_cerdo` y
+   `sap_mseg_croqueta` antes de construir la cuarta capa.
+
+Sigue abierto: qué hoja de tarifas de botana está vigente (sus dos versiones
+difieren en 619 de 624 casillas).
 
 Sin (1) y (2), el endpoint `/v1/comisionesbi/report` no se puede construir de
 verdad — devuelve 501 a propósito en vez de simular datos. El módulo de
