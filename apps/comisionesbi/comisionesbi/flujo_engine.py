@@ -149,6 +149,11 @@ def build_flujo(
     # significa nada. Pero NO se descartan en silencio — se suman aparte y se
     # devuelven, porque son el 47% de lo que factura DBC en las divisiones en
     # operación y la pantalla tiene que poder decir cuánto está dejando fuera.
+    #
+    # Se acumulan POR FASE, no en un único saco. Sumar vendido + facturado +
+    # cobrado da un número que no existe: es el mismo producto contado tres
+    # veces según avanza por el embudo. La cifra que se enseña es la de
+    # facturado, que es la que alguien puede contrastar contra su propio SAP.
     excluidos: dict = defaultdict(_nuevo)
 
     for fila in filas:
@@ -161,7 +166,7 @@ def build_flujo(
         if fila.get("division_en_operacion") is False:
             continue
         if fila.get("almacen_central"):
-            _acumular(excluidos, "almacen_central", fila)
+            _acumular(excluidos, fila["fase"], fila)
             continue
         fase = fila["fase"]
         _acumular(por_fase, fase, fila)
@@ -178,18 +183,21 @@ def build_flujo(
     for entrada in divisiones:
         entrada["division"] = nombre_division.get(entrada["division_code"])
 
-    fuera = excluidos["almacen_central"]
-    dentro = sum(datos["monto_total"] for datos in por_fase.values())
+    # Facturado es la referencia: es la fase con monto confiable y la única
+    # contrastable contra SAP. Si el periodo filtrado no tuviera facturado, se
+    # devuelve el acumulador vacío en vez de inventar una cifra de otra fase.
+    fuera = excluidos.get("facturado", _nuevo())
+    dentro = por_fase.get("facturado", _nuevo())["monto_total"]
+    total = fuera["monto_total"] + dentro
 
     return {
         "cobertura": cobertura(),
         # Lo que se dejó fuera, para que la pantalla lo pueda decir con su cifra
-        # en vez de con un número escrito a mano que envejece.
+        # en vez de con un número escrito a mano que envejece. Todo sobre
+        # facturado: el importe, las líneas, las cajas y el porcentaje.
         "excluido_almacen_central": {
             **fuera,
-            "pct_del_total": (fuera["monto_total"] / (fuera["monto_total"] + dentro) * 100)
-            if (fuera["monto_total"] + dentro)
-            else 0.0,
+            "pct_del_total": (fuera["monto_total"] / total * 100) if total else 0.0,
         },
         "resumen": [{"fase": fase, **datos} for fase, datos in sorted(por_fase.items())],
         "por_fecha": [

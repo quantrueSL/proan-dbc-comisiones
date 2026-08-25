@@ -17,7 +17,19 @@ COBERTURA = [
 ]
 
 
-def _fila(fase, fecha, cedis, monto, *, unidad="CS", cantidad=10.0, cajas=None, lineas=1):
+def _fila(
+    fase,
+    fecha,
+    cedis,
+    monto,
+    *,
+    unidad="CS",
+    cantidad=10.0,
+    cajas=None,
+    lineas=1,
+    central=False,
+    en_operacion=True,
+):
     return {
         "fase": fase,
         "fecha": fecha,
@@ -25,6 +37,8 @@ def _fila(fase, fecha, cedis, monto, *, unidad="CS", cantidad=10.0, cajas=None, 
         "division": "Huevo",
         "cedis": cedis,
         "tipo_venta": "VTA EN RUTA",
+        "almacen_central": central,
+        "division_en_operacion": en_operacion,
         "unidad": unidad,
         "num_lineas": lineas,
         "cantidad_total": cantidad,
@@ -286,3 +300,75 @@ def test_un_fallo_de_bigquery_se_traduce(monkeypatch, caplog):
             _flujo()
 
     assert any(registro.exc_info for registro in caplog.records)
+
+
+# ─── El alcance de la pantalla ────────────────────────────────────────────
+#
+# Estas dos marcas son las que llevaron el importe «sin CEDIS» del 65% al 0,2%,
+# así que conviene que estén atadas: la diferencia entre las dos formas de
+# quedarse fuera es deliberada y se pierde con solo mirar el código por encima.
+
+
+def test_las_divisiones_que_dbc_no_opera_no_salen_por_ningun_lado(cliente):
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0),
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 900.0, en_operacion=False),
+        ]
+    )
+
+    salida = _flujo()
+    resumen = {f["fase"]: f for f in salida["resumen"]}
+
+    assert resumen["facturado"]["monto_total"] == 100.0
+    # Ni en el desglose ni en el contador de excluidos: nunca fueron de esta
+    # pantalla, las lleva otro departamento.
+    assert salida["excluido_almacen_central"]["monto_total"] == 0.0
+
+
+def test_los_almacenes_centrales_salen_del_desglose_pero_se_cuentan_aparte(cliente):
+    # La diferencia con el caso de arriba: estos SÍ son negocio de DBC, solo que
+    # no pasan por ningún CEDIS. Descontarlos en silencio es como se construye
+    # un total que nadie puede cuadrar seis meses después.
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0, lineas=2),
+            _fila("facturado", date(2026, 7, 1), None, 300.0, lineas=6, central=True),
+        ]
+    )
+
+    salida = _flujo()
+    fuera = salida["excluido_almacen_central"]
+
+    assert {f["fase"]: f["monto_total"] for f in salida["resumen"]} == {"facturado": 100.0}
+    assert fuera["monto_total"] == 300.0
+    assert fuera["num_lineas"] == 6
+    assert fuera["pct_del_total"] == pytest.approx(75.0)
+
+
+def test_lo_excluido_se_mide_sobre_facturado_y_no_sumando_las_tres_fases(cliente):
+    # Sumar vendido + facturado + cobrado da un número que no existe: es el
+    # mismo producto contado tres veces según avanza por el embudo. La cifra que
+    # se enseña tiene que ser la de facturado, que es la contrastable contra SAP.
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0),
+            _fila("facturado", date(2026, 7, 1), None, 100.0, central=True),
+            _fila("vendido", date(2026, 7, 1), None, 5000.0, central=True),
+            _fila("cobrado", date(2026, 7, 1), None, 5000.0, central=True),
+        ]
+    )
+
+    fuera = _flujo()["excluido_almacen_central"]
+
+    assert fuera["monto_total"] == 100.0
+    assert fuera["pct_del_total"] == pytest.approx(50.0)
+
+
+def test_sin_facturado_en_el_periodo_no_se_inventa_una_cifra_de_otra_fase(cliente):
+    cliente([_fila("vendido", date(2026, 7, 1), None, 900.0, central=True)])
+
+    fuera = _flujo()["excluido_almacen_central"]
+
+    assert fuera["monto_total"] == 0.0
+    assert fuera["pct_del_total"] == 0.0

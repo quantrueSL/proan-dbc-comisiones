@@ -344,10 +344,10 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
                   comisión.
                 </p>
                 <p>
-                  Son <b>{formatearMetrica(excluido.monto_total, "importe")}</b> en el periodo — el{" "}
-                  {excluido.pct_del_total.toFixed(0)}% de lo que factura DBC en las divisiones en
-                  operación. La cifra se calcula sobre los datos del periodo que estés viendo, no
-                  está escrita a mano.
+                  Son <b>{formatearMetrica(excluido.monto_total, "importe")}</b> facturados en el
+                  periodo — el {excluido.pct_del_total.toFixed(0)}% de lo que factura DBC en las
+                  divisiones en operación. La cifra se calcula sobre los datos del periodo que estés
+                  viendo, no está escrita a mano.
                 </p>
                 <p>
                   Un desglose por CEDIS que los incluyera no significaría nada, porque su respuesta
