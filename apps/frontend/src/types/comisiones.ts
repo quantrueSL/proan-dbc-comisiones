@@ -72,8 +72,16 @@ export type FlujoPorDivisionRow = FlujoTotales & {
 };
 export type FlujoPorTipoVentaRow = FlujoTotales & { tipo_venta: string | null; fase: string };
 
+/**
+ * Lo que la pantalla deja fuera: los cuatro almacenes centrales que no pasan
+ * por ningún CEDIS. Viene calculado del backend y no escrito a mano, para que
+ * la nota de la pantalla no envejezca mintiendo.
+ */
+export type FlujoExcluido = FlujoTotales & { pct_del_total: number };
+
 export type FlujoResponse = {
   cobertura: FlujoCobertura;
+  excluido_almacen_central: FlujoExcluido;
   resumen: FlujoResumenRow[];
   por_fecha: FlujoPorFechaRow[];
   por_cedis: FlujoPorCedisRow[];
@@ -84,6 +92,12 @@ export type FlujoResponse = {
 
 export const EMPTY_FLUJO: FlujoResponse = {
   cobertura: {},
+  excluido_almacen_central: {
+    num_lineas: 0,
+    monto_total: 0,
+    cantidad_cajas_total: null,
+    pct_del_total: 0
+  },
   resumen: [],
   por_fecha: [],
   por_cedis: [],

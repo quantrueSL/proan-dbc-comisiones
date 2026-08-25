@@ -43,6 +43,7 @@ _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_flujo_producto_diario`"
 _DETALLE_SQL = f"""
 SELECT
   fase, fecha, division_code, division, cedis, tipo_venta, unidad,
+  almacen_central, division_en_operacion,
   num_lineas, cantidad_total, cantidad_cajas_total, monto_total
 FROM {_TABLA}
 WHERE fecha BETWEEN @start AND @end
@@ -142,7 +143,26 @@ def build_flujo(
     # lleva la unidad dentro, y quien la pinte tiene que respetar ese desglose.
     por_unidad: dict = defaultdict(float)
 
+    # Los cuatro almacenes centrales (BO28, BO01, H723, H793) salen de la
+    # pantalla: el cliente confirmó el 25/08/2026 que no pasan por ningún CEDIS
+    # y no generan comisión, así que contarlos en un desglose por CEDIS no
+    # significa nada. Pero NO se descartan en silencio — se suman aparte y se
+    # devuelven, porque son el 47% de lo que factura DBC en las divisiones en
+    # operación y la pantalla tiene que poder decir cuánto está dejando fuera.
+    excluidos: dict = defaultdict(_nuevo)
+
     for fila in filas:
+        # Divisiones fuera de operación: se descartan sin más. El cliente
+        # confirmó cuáles opera (H, BO, IA, A, L) y las demás las llevan otros
+        # departamentos; se les nota en que entre el 82% y el 100% de su importe
+        # no cruza con ningún CEDIS. No llevan aviso propio a propósito: la
+        # pantalla desglosa por división, así que se ve de un vistazo cuáles
+        # hay, y un segundo cartel encima del de almacenes centrales sería ruido.
+        if fila.get("division_en_operacion") is False:
+            continue
+        if fila.get("almacen_central"):
+            _acumular(excluidos, "almacen_central", fila)
+            continue
         fase = fila["fase"]
         _acumular(por_fase, fase, fila)
         _acumular(por_fecha, (_iso(fila["fecha"]), fase), fila)
@@ -158,8 +178,19 @@ def build_flujo(
     for entrada in divisiones:
         entrada["division"] = nombre_division.get(entrada["division_code"])
 
+    fuera = excluidos["almacen_central"]
+    dentro = sum(datos["monto_total"] for datos in por_fase.values())
+
     return {
         "cobertura": cobertura(),
+        # Lo que se dejó fuera, para que la pantalla lo pueda decir con su cifra
+        # en vez de con un número escrito a mano que envejece.
+        "excluido_almacen_central": {
+            **fuera,
+            "pct_del_total": (fuera["monto_total"] / (fuera["monto_total"] + dentro) * 100)
+            if (fuera["monto_total"] + dentro)
+            else 0.0,
+        },
         "resumen": [{"fase": fase, **datos} for fase, datos in sorted(por_fase.items())],
         "por_fecha": [
             {"fecha": fecha, "fase": fase, **datos}
