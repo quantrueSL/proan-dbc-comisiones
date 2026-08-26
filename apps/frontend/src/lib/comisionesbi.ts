@@ -5,6 +5,8 @@
 import { getComisionesbiServiceUrl } from "@/lib/env";
 import type {
   ComisionesCatalog,
+  FlujoFilters,
+  FlujoResponse,
   ReconciliationFilters,
   ReconciliationResponse,
   ReportFilters,
@@ -66,6 +68,10 @@ async function comisionesbiFetchJson<T>(path: string, options: ComisionesbiFetch
 
 export async function getComisionesCatalog(): Promise<ComisionesCatalog> {
   return comisionesbiFetchJson<ComisionesCatalog>("/v1/comisionesbi/catalog");
+}
+
+export async function getFlujoProducto(filters: FlujoFilters): Promise<FlujoResponse> {
+  return comisionesbiFetchJson<FlujoResponse>("/v1/comisionesbi/flujo", { method: "POST", body: filters });
 }
 
 export async function getComisionesReport(filters: ReportFilters): Promise<ReportResponse> {

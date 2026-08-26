@@ -67,14 +67,13 @@ services:
       - GCP_PROJECT=proan-quantrue
       - FIRESTORE_DATABASE_ID=proan-lista-mails
       - ACCESS_LIST_ID=dbc_comisiones_acceso
-      # Firebase Authentication (LOGIN.md Capa 2). Mismo proyecto Firebase que
-      # proan-hidrocarburos (proan-quantrue) — TODO: registrar una app web
-      # propia "comisiones-dbc-frontend" en la consola de Firebase y sustituir
-      # estos valores (hoy son los de referencia de hidrocarburos, no válidos
-      # para este servicio hasta que se registre la app real).
-      - FIREBASE_API_KEY=TODO_registrar_app_web_en_firebase
+      # Firebase Authentication (LOGIN.md Capa 2). App web propia
+      # "comisiones-dbc-frontend" en el proyecto compartido proan-quantrue.
+      # Son valores PÚBLICOS: viajan en el JavaScript del navegador. Quien
+      # decide si entras es la lista de Firestore, no esta clave.
+      - FIREBASE_API_KEY=AIzaSyAcchQhwYV2RKGck3GQX6gOAsfdUThlTuc
       - FIREBASE_AUTH_DOMAIN=proan-quantrue.firebaseapp.com
-      - FIREBASE_APP_ID=TODO_registrar_app_web_en_firebase
+      - FIREBASE_APP_ID=1:272166156031:web:24712b699cf9bf2750beca
       # Bind mounts en Windows no propagan eventos de fichero → sin polling
       # next dev no recompila los cambios.
       - WATCHPACK_POLLING=true

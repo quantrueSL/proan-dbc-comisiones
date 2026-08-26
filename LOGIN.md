@@ -17,11 +17,21 @@ partir de ahí la aplicación no distingue por dónde entró nadie.
 ## 2. Proyecto Firebase / GCP
 
 Mismo proyecto que el resto del grupo (`proan-quantrue`), el mismo que ya usa
-`proan-hidrocarburos` para BigQuery y Firebase. **Pendiente**: registrar una
-app web propia "comisiones-dbc-frontend" en Firebase Console (Configuración
-del proyecto → Tus apps) — hoy `FIREBASE_API_KEY`/`FIREBASE_APP_ID` son
-placeholders sin configurar en `deploy/docker-compose.dev.yml` y
-`deploy/cloudrun/service.yaml`.
+`proan-hidrocarburos` para BigQuery y Firebase. Con app web propia,
+**`comisiones-dbc-frontend`** (`appId` acabado en `…24712b699cf9bf2750beca`),
+como tienen las demás herramientas del proyecto: `hidrocarburos-frontend`,
+`pedidos-dbc`, `MAKA-rentabilidad` y `portal-proan-web`.
+
+Su `apiKey` y su `appId` están puestos como valores planos en
+`deploy/cloudrun/service.yaml` y `deploy/docker-compose.dev.yml`. No es un
+descuido: son públicos por diseño, viajan en el JavaScript del navegador de
+cualquiera que abra el login. Lo que decide quién entra es la lista de
+Firestore (§4), no esa clave.
+
+Falta un paso que solo se puede dar **después del primer despliegue**: añadir la
+URL de Cloud Run en Firebase Console → *Authentication* → *Settings* →
+*Authorized domains*. Sin eso el botón de Google falla con
+`auth/unauthorized-domain`.
 
 ## 3. Roles — PROVISIONAL
 
@@ -59,13 +69,38 @@ rol irreconocible se degrada al menos privilegiado (`viewer`), nunca al revés.
 | `SESSION_COOKIE_NAME` | `dbc_comisiones_session` |
 | `HTPASSWD_PATH` | ruta al fichero de usuarios técnicos |
 | `GCP_PROJECT` / `FIRESTORE_DATABASE_ID` / `ACCESS_LIST_ID` | ubicación de la lista de acceso |
-| `FIREBASE_API_KEY` / `FIREBASE_AUTH_DOMAIN` / `FIREBASE_APP_ID` | config pública del SDK web (pendiente registrar app, ver §2) |
+| `FIREBASE_API_KEY` / `FIREBASE_AUTH_DOMAIN` / `FIREBASE_APP_ID` | config pública del SDK web (app ya registrada, ver §2). Si falta cualquiera de las tres, `getFirebaseWebConfig()` devuelve `null`, el botón de Google no se pinta y la pantalla se repliega al usuario/contraseña |
 
-## 6. Pendiente antes de producción
+Con `docker compose` estas variables las pone `deploy/docker-compose.dev.yml`.
+Levantando el frontend a mano (`pnpm dev`) no existen, así que hay plantilla:
+`cp apps/frontend/.env.local.example apps/frontend/.env.local`. Fue justo el
+motivo por el que el botón de Google no aparecía corriendo fuera de Docker.
 
-- Registrar la app web de Firebase (§2) y sustituir los placeholders.
-- Definir los roles reales con el cliente (§3).
-- Crear el documento `lists/dbc_comisiones_acceso` en Firestore con los
-  primeros usuarios.
-- Crear los secretos `dbc-comisiones-session-secret` y
-  `dbc-comisiones-htpasswd` (ver `deploy/cloudrun/README.md`).
+## 6. Estado
+
+Hecho (2026-08-13):
+
+- App web `comisiones-dbc-frontend` registrada y sus valores puestos (§2).
+- Secretos `dbc-comisiones-session-secret` y `dbc-comisiones-htpasswd` creados
+  en Secret Manager, legibles por la identidad del servicio (ver
+  `deploy/cloudrun/README.md`).
+- Documento `lists/dbc_comisiones_acceso` creado con los primeros cinco
+  correos, `enabled: true` y `roles` vacío — o sea, todos entran como `viewer`.
+
+Hecho (2026-08-14):
+
+- Botón de Google comprobado en local, con el stack de `docker compose`
+  (http://localhost:8080). La lista de acceso se leyó de Firestore y responde:
+  `enabled: true`, los cinco correos, `roles` vacío. Para entrar hay que usar
+  una de esas cinco cuentas; cualquier otra se rechaza (la lista es la puerta).
+- Plantilla `apps/frontend/.env.local.example` para levantar el frontend sin
+  Docker (§5).
+
+Pendiente:
+
+- **Definir los roles reales con el cliente** (§3). Hoy el rol no controla nada:
+  `isAdmin()` está definido en `roles.ts` y no se usa en ninguna pantalla ni en
+  ninguna ruta de API, así que un `admin` y un `viewer` ven exactamente lo
+  mismo. Lo único que decide algo es estar o no estar en `emails`.
+- **Autorizar el dominio de Cloud Run** en Firebase Console, después del primer
+  despliegue (§2).

@@ -10,8 +10,10 @@ export async function POST(request: Request) {
     return NextResponse.json(await getComisionesReport(body));
   } catch (error) {
     if (error instanceof BackendNotReadyError) {
-      // 501 se propaga tal cual: el frontend lo usa para mostrar el motivo
-      // real del bloqueo (GS03 / ZSDFI_001), no un error genérico.
+      // Comisiones dejó de devolver 501 el 25/08/2026, cuando el módulo
+      // empezó a calcular. La rama se queda porque el contrato sigue siendo
+      // ese: si algún día vuelve a bloquearse, el motivo llega al usuario en
+      // vez de un error genérico.
       return NextResponse.json({ detail: error.message }, { status: 501 });
     }
     return NextResponse.json(

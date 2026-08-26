@@ -31,7 +31,7 @@ type ProanAuthenticatedShellProps = {
 type NavKey = "flujoProducto" | "comisiones" | "conciliacion";
 type NavItem = {
   href: string;
-  key: NavKey;
+  key: string;
   label: string;
 };
 
@@ -40,6 +40,11 @@ const NAV_ITEMS: Record<NavKey, NavItem> = {
   comisiones: { href: "/comisiones", key: "comisiones", label: "Comisiones" },
   conciliacion: { href: "/conciliacion", key: "conciliacion", label: "Conciliación" }
 };
+
+// El manual abre la barra, antes que los módulos: los datos de esta herramienta
+// tienen trampas que hay que contar, y una ayuda que no se ve no la lee nadie.
+// No depende de `features` porque no es un módulo.
+const MANUAL_ITEM: NavItem = { href: "/manual", key: "manual", label: "Manual de usuario" };
 
 function UserIcon() {
   return (
@@ -81,9 +86,10 @@ export function ProanAuthenticatedShell({
   }, [pathname]);
 
   const homeHref = getHomeHref(features);
-  const navItems: NavItem[] = (Object.keys(NAV_ITEMS) as NavKey[])
-    .filter((key) => features[key].enabled)
-    .map((key) => NAV_ITEMS[key]);
+  const navItems: NavItem[] = [
+    MANUAL_ITEM,
+    ...(Object.keys(NAV_ITEMS) as NavKey[]).filter((key) => features[key].enabled).map((key) => NAV_ITEMS[key])
+  ];
 
   function isActive(item: NavItem) {
     return pathname === item.href || pathname?.startsWith(`${item.href}/`);

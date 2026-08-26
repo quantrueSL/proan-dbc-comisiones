@@ -11,6 +11,9 @@ Patrón calcado de `proan-hidrocarburos/deploy/cloudrun/`.
 
 ## Preparación (solo la primera vez)
 
+> Estado a 2026-08-13: los pasos 1 y 2 ya están hechos en `proan-quantrue` — los
+> dos secretos existen con su versión 1. Repetirlos daría `ALREADY_EXISTS`.
+
 **1. Secreto de firma de sesión.** Sin él el frontend no arranca, a propósito:
 una sesión sin firmar sería falsificable.
 
@@ -29,21 +32,34 @@ gcloud secrets create dbc-comisiones-htpasswd --data-file=deploy/nginx/.htpasswd
   --project=proan-quantrue --replication-policy=automatic
 ```
 
-**3. Permiso de lectura de secretos** para la identidad del servicio:
+**3. Permiso de lectura de secretos: no hay que hacer nada.** La identidad del
+servicio (`272166156031-compute@`) tiene `roles/secretmanager.secretAccessor`
+concedido **a nivel de proyecto**, así que lee cualquier secreto de
+`proan-quantrue` sin necesidad de un binding por secreto.
+
+Comprobado, no supuesto: los secretos de `proan-hidrocarburos`
+(`carb-session-secret`, `carb-htpasswd`) tienen la política IAM vacía y el
+servicio los lee igualmente. Si lo intentas de todas formas, el comando falla con
+`403 Permission 'secretmanager.secrets.setIamPolicy' denied` — hace falta
+`secretmanager.admin` para conceder un permiso que ya está concedido.
+
+Ojo con una trampa relacionada: el rol *Editor* **no** incluye leer el contenido
+de un secreto. Aquí funciona por el `secretAccessor` de proyecto, no por Editor.
+Si algún día se estrena una cuenta de servicio dedicada, entonces sí habrá que
+concederle el permiso secreto a secreto:
 
 ```bash
 for s in dbc-comisiones-session-secret dbc-comisiones-htpasswd; do
   gcloud secrets add-iam-policy-binding "$s" \
-    --member=serviceAccount:272166156031-compute@developer.gserviceaccount.com \
-    --role=roles/secretmanager.secretAccessor --project=proan-quantrue
+    --member=serviceAccount:LA-CUENTA-NUEVA@proan-quantrue.iam.gserviceaccount.com \
+    --role=roles/secretmanager.secretAccessor --condition=None --project=proan-quantrue
 done
 ```
 
-**4. App web de Firebase.** Registrar una app web nueva "comisiones-dbc-frontend"
-en Firebase Console (mismo proyecto `proan-quantrue` que ya usa
-`proan-hidrocarburos`) y sustituir los valores `FIREBASE_API_KEY`/`FIREBASE_APP_ID`
-en `service.yaml` y en `deploy/docker-compose.dev.yml` — hoy son placeholders sin
-configurar. Ver `LOGIN.md` para el detalle del patrón.
+**4. App web de Firebase: ya está hecho.** La app `comisiones-dbc-frontend` está
+registrada en `proan-quantrue` y sus valores puestos en `service.yaml` y en
+`deploy/docker-compose.dev.yml`. Van como valores planos porque son públicos:
+viajan en el JavaScript del navegador. Ver `LOGIN.md` §2.
 
 ## Desplegar
 
@@ -84,6 +100,12 @@ gestionan en la lista de Firestore desde el portal de listas (ver `LOGIN.md`).
 - **`min-instances: 0`.** Habrá arranque en frío en la primera petición, y el
   sidecar carga pandas y pyarrow, así que no es instantáneo. Subirlo a 1 lo evita
   a cambio de pagar la instancia 24×7.
+- **Caché del catálogo (`CATALOG_CACHE_TTL_SECONDS`, 3600).** El catálogo de
+  división/CEDIS se cachea en memoria del proceso, así que muere en cada arranque
+  en frío y cada instancia tiene la suya: no hay invalidación global sin
+  desplegar. Es también la ventana en la que un CEDIS nuevo tarda en aparecer en
+  los filtros. Si BigQuery falla y hay una copia caducada se sirve esa, con un
+  aviso en el log, antes que devolver un 503.
 - **`DOCKER_BUILDKIT=1`** en `cloudbuild.yaml`: el Dockerfile de `comisionesbi` usa
   `RUN --mount=type=cache`, que el constructor clásico no entiende.
 - **Sin `BQ_CREDENTIALS_PATH`**: `db.py` cae a credenciales de aplicación, que en

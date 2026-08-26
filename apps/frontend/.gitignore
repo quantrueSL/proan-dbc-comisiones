@@ -1,4 +1,11 @@
 node_modules
 .next
+# Builds de comprobación (NEXT_DIST_DIR, ver next.config.mjs): así no le pisan
+# los manifiestos al `next dev` que esté levantado.
+.next-*
 .env.local
+# La plantilla sí va a git. El .gitignore de la raíz excluye `.env.*` en bloque
+# (y solo perdona `.env.example`), así que hay que perdonarla aquí a mano: un
+# .gitignore de un subdirectorio manda sobre el de arriba.
+!.env.local.example
 *.tsbuildinfo

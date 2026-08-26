@@ -7,8 +7,11 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src")
     }
   },
+  // El tsconfig usa jsx "preserve" porque de eso se encarga Next; aquí hace
+  // falta transformarlo de verdad para poder renderizar componentes en test.
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"]
+    include: ["src/**/*.test.{ts,tsx}"]
   }
 });

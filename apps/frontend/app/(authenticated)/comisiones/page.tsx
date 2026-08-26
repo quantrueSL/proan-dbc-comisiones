@@ -1,14 +1,17 @@
 import { requireSession } from "@/lib/auth/session";
-import { BackendNotReadyError, getComisionesCatalog, getComisionesReport } from "@/lib/comisionesbi";
+import { getComisionesCatalog, getComisionesReport } from "@/lib/comisionesbi";
 import { ComisionesWorkspace } from "@/features/comisiones/comisiones-workspace";
 import { EMPTY_CATALOG, type ComisionesCatalog, type ReportResponse } from "@/types/comisiones";
+
+// El rango por defecto es todo 2026, que es lo que hay cargado. Un mes suelto
+// —lo que pedía antes— deja la pantalla casi vacía y parece que no calcula.
+const DESDE = "2026-01-01";
 
 export default async function ComisionesPage() {
   requireSession();
 
   let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let report: ReportResponse | null = null;
-  let blockedMessage: string | null = null;
   let error: string | null = null;
 
   try {
@@ -17,25 +20,29 @@ export default async function ComisionesPage() {
     error = cause instanceof Error ? cause.message : "No se pudo cargar el catálogo de división/CEDIS.";
   }
 
-  const now = new Date();
-  const defaultEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const hoy = new Date().toISOString().slice(0, 10);
 
   try {
-    report = await getComisionesReport({ division: null, cedis: null, start_period: defaultEnd, end_period: defaultEnd });
+    report = await getComisionesReport({
+      division: null,
+      cedis: null,
+      comisionista: null,
+      start_date: DESDE,
+      end_date: hoy
+    });
   } catch (cause) {
-    if (cause instanceof BackendNotReadyError) {
-      blockedMessage = cause.message;
-    } else {
-      error = error ?? (cause instanceof Error ? cause.message : "No se pudo generar el reporte de comisión.");
-    }
+    // Ya no hay rama de "bloqueado": el módulo calcula. Si falla, es un fallo
+    // de verdad y se dice, en vez de caer a una vista previa de ejemplo que
+    // disimulaba el problema.
+    error = error ?? (cause instanceof Error ? cause.message : "No se pudo generar el informe de comisión.");
   }
 
   return (
     <ComisionesWorkspace
-      initialBlockedMessage={blockedMessage}
       initialCatalog={catalog}
       initialError={error}
       initialReport={report}
+      rangoInicial={{ desde: DESDE, hasta: hoy }}
     />
   );
 }

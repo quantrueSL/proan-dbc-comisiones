@@ -25,3 +25,13 @@ node_modules/
 # Salidas y logs locales.
 *.log
 backup/
+data/sql
+
+# Ficheros que manda el cliente (Excel de comisiones, tarifas y diccionarios).
+# Son suyos, llegan por correo y los vuelve a mandar cada vez que cambia algo:
+# el repo versiona lo que sale de ellos (data/tablas_cliente/, generado por
+# scripts/tablas_cliente.py), no el original.
+reportes_proan/
+
+# Volcados de contexto de sesión, no forman parte del proyecto.
+contexto_claude_*.json

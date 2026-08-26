@@ -53,15 +53,17 @@ spec:
               value: proan-lista-mails
             - name: ACCESS_LIST_ID
               value: dbc_comisiones_acceso
-            # Configuración pública del SDK web de Firebase — TODO: registrar
-            # una app web propia "comisiones-dbc-frontend" en Firebase Console
-            # (mismo proyecto proan-quantrue) y sustituir estos valores.
+            # Configuración pública del SDK web de Firebase, app
+            # "comisiones-dbc-frontend" del proyecto compartido proan-quantrue.
+            # Va como valor plano y no por Secret Manager a propósito: son datos
+            # públicos que viajan en el JavaScript del navegador. El acceso lo
+            # decide la lista de Firestore, no esta clave.
             - name: FIREBASE_API_KEY
-              value: TODO_registrar_app_web_en_firebase
+              value: AIzaSyAcchQhwYV2RKGck3GQX6gOAsfdUThlTuc
             - name: FIREBASE_AUTH_DOMAIN
               value: proan-quantrue.firebaseapp.com
             - name: FIREBASE_APP_ID
-              value: TODO_registrar_app_web_en_firebase
+              value: "1:272166156031:web:24712b699cf9bf2750beca"
             # Sin este secreto la sesión no se firma: el arranque falla a propósito.
             - name: SESSION_SECRET
               valueFrom:
@@ -89,6 +91,13 @@ spec:
               value: us-west4
             # Sin BQ_CREDENTIALS_PATH a propósito: db.py cae a las credenciales
             # de aplicación, que aquí son la identidad del servicio.
+            # TTL de la caché del catálogo. Explícito aunque coincida con el
+            # valor por defecto: es la ventana en la que un CEDIS nuevo tarda en
+            # aparecer en los filtros. `0` la desactiva (solo para desarrollo).
+            - name: CATALOG_CACHE_TTL_SECONDS
+              value: "3600"
+            - name: LOG_LEVEL
+              value: INFO
           startupProbe:
             tcpSocket:
               port: 8091

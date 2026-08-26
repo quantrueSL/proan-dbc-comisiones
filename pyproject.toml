@@ -24,6 +24,10 @@ members = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "httpx>=0.27",
 ]
 
 [tool.uv]
+
+[tool.pytest.ini_options]
+testpaths = ["apps/comisionesbi/tests"]
