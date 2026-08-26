@@ -16,6 +16,7 @@ def _fila(
     cedis="Leon 1",
     fecha=date(2026, 7, 1),
     conjunto="HPORTALES",
+    tipo="VTA EN RUTA",
     base="kg",
     lineas=1,
     monto=1000.0,
@@ -33,7 +34,7 @@ def _fila(
         "cedis": cedis,
         "oficina": "0016",
         "comisionista": comisionista,
-        "tipo_venta": "VTA EN RUTA",
+        "tipo_venta": tipo,
         "set": conjunto,
         "base_unidad": base,
         "comision_estado": estado,
@@ -254,6 +255,35 @@ def test_la_serie_por_fecha_va_en_orden_cronologico(cliente):
     assert fechas == ["2026-07-01", "2026-07-02", "2026-07-03"]
 
 
+def test_agrupa_por_tipo_de_venta(cliente):
+    # El objetivo del proyecto pide la comisión "según tipo de venta", y el tipo
+    # ya venía en el grano de la tabla gold sin que nadie lo agregara.
+    cliente(
+        [
+            _fila(tipo="VTA EN RUTA", comision=40.0),
+            _fila(tipo="VTA EN RUTA", comision=10.0),
+            _fila(tipo="MAYOREO", comision=70.0),
+        ]
+    )
+
+    por = _informe()["por_tipo_venta"]
+
+    # Ordenado por comisión, como el resto de agrupaciones: primero lo que más pesa.
+    assert [f["tipo_venta"] for f in por] == ["MAYOREO", "VTA EN RUTA"]
+    assert por[1]["comision"] == 50.0
+
+
+def test_el_tipo_de_venta_sin_resolver_no_se_confunde_con_una_categoria(cliente):
+    # `None` significa "esta línea no trae tipo", no un tipo llamado "ninguno":
+    # va al final y con la clave a null, para que la pantalla pueda pintarlo
+    # aparte en vez de sumarlo a MAYOREO.
+    cliente([_fila(tipo=None, comision=5.0), _fila(tipo="MAYOREO", comision=70.0)])
+
+    por = _informe()["por_tipo_venta"]
+
+    assert [f["tipo_venta"] for f in por] == ["MAYOREO", None]
+
+
 def test_los_filtros_viajan_como_parametros_y_no_pegados_al_sql(cliente):
     falso = cliente([_fila()])
 
@@ -274,6 +304,7 @@ def test_un_rango_sin_datos_devuelve_estructura_vacia_pero_con_cobertura(cliente
     assert salida["totales"]["comision"] == 0.0
     assert salida["totales"]["pct_calculable"] == 0.0
     assert salida["por_comisionista"] == []
+    assert salida["por_tipo_venta"] == []
     assert salida["bloqueado"] == []
     # La cobertura es del dataset, no del rango: sigue estando.
     assert salida["cobertura"]["hasta"] == "2026-08-23"

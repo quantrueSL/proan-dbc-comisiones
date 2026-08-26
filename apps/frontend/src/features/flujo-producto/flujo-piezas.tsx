@@ -169,18 +169,26 @@ const DONUT_CENTRO = 60;
 
 export type SegmentoDato = BarraDato & { color: string };
 
+/**
+ * `estatico` apaga el clic en el donut y en su leyenda. Existe porque la
+ * pantalla de comisiones enseña el reparto por tipo de venta pero su endpoint
+ * no tiene ese filtro: un botón que no hace nada al pulsarlo es peor que un
+ * dato que se presenta como lo que es, de solo lectura.
+ */
 export function Donut({
   datos,
   metrica,
   seleccion,
   onSelect,
-  leyendaTotal
+  leyendaTotal,
+  estatico = false
 }: {
   datos: SegmentoDato[];
   metrica: Metrica;
   seleccion: string | null;
   onSelect: (valor: string | null) => void;
   leyendaTotal: string;
+  estatico?: boolean;
 }) {
   const total = datos.reduce((suma, d) => suma + d.cantidad, 0);
 
@@ -210,12 +218,14 @@ export function Donut({
               cx={DONUT_CENTRO}
               cy={DONUT_CENTRO}
               key={arco.etiqueta}
-              onClick={() => arco.valor !== null && onSelect(seleccion === arco.valor ? null : arco.valor)}
+              onClick={() =>
+                !estatico && arco.valor !== null && onSelect(seleccion === arco.valor ? null : arco.valor)
+              }
               r={DONUT_R}
               stroke={arco.color}
               strokeDasharray={`${arco.dash} ${DONUT_C - arco.dash}`}
               strokeDashoffset={arco.offset}
-              style={{ cursor: arco.valor === null ? "default" : "pointer" }}
+              style={{ cursor: estatico || arco.valor === null ? "default" : "pointer" }}
             />
           ))}
         </g>
@@ -229,20 +239,34 @@ export function Donut({
 
       {/* La leyenda es la identidad de verdad: el color solo acompaña. */}
       <ul className="dashboard-status-legend">
-        {datos.map((dato) => (
-          <li key={dato.etiqueta}>
-            <button
-              aria-pressed={seleccion === dato.valor}
-              className={seleccion === dato.valor ? "is-selected" : ""}
-              disabled={dato.valor === null}
-              onClick={() => onSelect(seleccion === dato.valor ? null : dato.valor)}
-              type="button"
-            >
+        {datos.map((dato) => {
+          const fila = (
+            <>
               <span className="dashboard-status-dot" style={{ background: dato.color }} aria-hidden="true" />
               {dato.etiqueta} <b>{formatearMetrica(dato.cantidad, metrica)}</b>
-            </button>
-          </li>
-        ))}
+            </>
+          );
+          return (
+            <li key={dato.etiqueta}>
+              {/* Estático: un <span>, no un <button disabled>. El botón
+                  deshabilitado se pinta al 45% de opacidad y la leyenda
+                  entera saldría apagada, como si el dato fuera dudoso. */}
+              {estatico ? (
+                <span className="flujo-donut-leyenda-fija">{fila}</span>
+              ) : (
+                <button
+                  aria-pressed={seleccion === dato.valor}
+                  className={seleccion === dato.valor ? "is-selected" : ""}
+                  disabled={dato.valor === null}
+                  onClick={() => onSelect(seleccion === dato.valor ? null : dato.valor)}
+                  type="button"
+                >
+                  {fila}
+                </button>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

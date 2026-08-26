@@ -6,21 +6,38 @@
 // cliente mandó los SETs y las tarifas el 24 de agosto de 2026. Ya no hay datos
 // de ejemplo en este fichero: lo que se ve es lo que hay.
 //
-// LA DECISIÓN QUE MANDA SOBRE TODA LA PANTALLA: todavía no se puede calcular
-// comisión sobre todo el facturado —hoy sale sobre un 58%—, y lo que falta no
-// es poco: $174 M de botana dependen de cuál de las dos hojas de tarifas del
-// cliente esté vigente, y eso mueve la comisión entre $13,7 M y $20,2 M.
-// Enseñar el total sin eso al lado sería construir una cifra que nadie puede
-// cuadrar. Así que el bloque
-// "lo que todavía no entra" va SIEMPRE visible, con su importe y su motivo, y
-// no detrás de un desplegable. La pregunta que tiene que poder contestar
-// cualquiera que abra esto es "¿esto está completo?", y la respuesta está a la
-// vista sin pulsar nada.
+// LA DECISIÓN QUE MANDA SOBRE TODA LA PANTALLA: todavía no se calcula comisión
+// sobre todo el facturado, así que el total de arriba NO es el total. La
+// pregunta que tiene que poder contestar cualquiera que abra esto es "¿esto está
+// completo?", y se contesta en dos sitios sin pulsar nada:
+//
+//   · el embudo de la cabecera, donde se ve el salto de "facturado en alcance" a
+//     "con tarifa aplicable" con su porcentaje;
+//   · el rótulo del desplegable del final, que dice cuánto dinero se queda fuera
+//     aunque esté cerrado.
+//
+// Lo que se pliega es el DESGLOSE POR MOTIVO, no el hecho de que falte dinero.
+// Esa distinción es la que hay que respetar si alguien reorganiza esto: el
+// importe bloqueado puede cambiar de sitio, pero no puede desaparecer de la
+// primera lectura.
+//
+// (Antes ese bloque iba desplegado y en medio de la pantalla, cuando lo que
+// faltaba eran $174 M de botana pendientes de saber qué hoja de tarifas valía.
+// Eso se resolvió el 26/08/2026 —`Sheet1`, confirmado por Diego— y lo que queda
+// bloqueado es más pequeño y menos urgente, así que ya no se lleva media
+// pantalla.)
 
-import { useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { AvisoBoton } from "@/components/aviso";
 import { FiltersSidebar } from "@/components/filters-sidebar";
+// Las piezas y la paleta salen de flujo de producto en vez de duplicarse: las
+// dos pantallas tienen que verse como la misma herramienta, y los colores de
+// `fases.ts` están validados contra la guía de visualización (contraste,
+// daltonismo). Inventar aquí un verde nuevo sería empezar a tener dos pieles.
+import { Donut, type SegmentoDato } from "@/features/flujo-producto/flujo-piezas";
+import { COLOR_FASE, COLOR_SIN_ASIGNAR, PALETA_CATEGORIAS } from "@/features/flujo-producto/fases";
+import { BarrasVerticales, type BarraVertical } from "@/features/comisiones/comisiones-barras";
 import type {
   CedisRow,
   ComisionesCatalog,
@@ -28,6 +45,16 @@ import type {
   ReportFilters,
   ReportResponse
 } from "@/types/comisiones";
+
+/** Lo que define una consulta. Se pasa entero a `load` para que un clic pueda
+ *  cambiar una pieza sin esperar a que React actualice el estado. */
+type Filtros = {
+  division: string;
+  cedis: string;
+  comisionista: string;
+  desde: string;
+  hasta: string;
+};
 
 type Props = {
   initialCatalog: ComisionesCatalog;
@@ -40,6 +67,16 @@ const dinero = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 0 });
 const numero = new Intl.NumberFormat("es-MX");
 const decimal = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 });
 const fechaLarga = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "long", year: "numeric" });
+const mesCorto = new Intl.DateTimeFormat("es-MX", { month: "short", year: "numeric" });
+const soloMes = new Intl.DateTimeFormat("es-MX", { month: "short" });
+
+/** El azul de marca de las barras de este skin. La comisión es la medida
+ *  principal de la pantalla, así que lleva el color principal; lo facturado
+ *  usa el verde de la fase "facturado" del flujo, que es de donde sale. */
+const COLOR_COMISION = "#3d3d7c";
+
+/** Barras de CEDIS que se dibujan antes de mandar la cola a la tabla. */
+const TOPE_CEDIS = 8;
 
 /** "2026-01-02" -> "2 de enero de 2026", sin que el huso horario reste un día.
  *  `new Date("2026-01-02")` se interpreta como UTC y al formatearlo en México
@@ -55,15 +92,55 @@ function pesos(valor: number) {
   return `$${dinero.format(valor)}`;
 }
 
-function Kpi({ etiqueta, valor, nota }: { etiqueta: string; valor: string; nota?: string }) {
-  return (
-    <div className="hydro-kpi">
-      <span>{etiqueta}</span>
-      <strong>{valor}</strong>
-      {nota ? <em className="hydro-kpi-nota">{nota}</em> : null}
-    </div>
-  );
+function pct(parte: number, total: number) {
+  return total ? `${decimal.format((parte / total) * 100)}%` : "—";
 }
+
+/** "2026-01" -> "ene", o "ene 2026" si la serie cruza de año. Se construye por
+ *  partes para no perder un día al huso horario, y se quita el año cuando es el
+ *  mismo en toda la serie: ocho barras repitiendo "2026" no informan de nada y
+ *  el rótulo deja de caber bajo su barra. */
+function etiquetaMes(mes: string, conAnio: boolean) {
+  const [a, m] = mes.split("-").map(Number);
+  const formato = conAnio ? mesCorto : soloMes;
+  return formato.format(new Date(a, m - 1, 1));
+}
+
+/** Recorta un nombre largo dejando rastro de que está recortado. Los rótulos de
+ *  CEDIS van girados bajo su barra: sin tope, uno largo se sale de la tarjeta.
+ *  El nombre completo sigue en el tooltip. */
+function recortar(texto: string, tope = 14) {
+  return texto.length > tope ? `${texto.slice(0, tope - 1)}…` : texto;
+}
+
+/** Primer y último día de un mes "2026-02", sin depender del huso: `Date.UTC`
+ *  con día 0 del mes siguiente da el último día del mes pedido. */
+function limitesDelMes(mes: string): { desde: string; hasta: string } {
+  const [anio, m] = mes.split("-").map(Number);
+  return {
+    desde: `${mes}-01`,
+    hasta: new Date(Date.UTC(anio, m, 0)).toISOString().slice(0, 10)
+  };
+}
+
+/**
+ * Un paso del embudo. `grupo` NO es decorativo: los dos primeros pasos son
+ * pesos facturados y los dos últimos pesos de comisión, que es el 2-3% de los
+ * primeros. Con una sola escala, las barras de comisión serían dos rayas
+ * invisibles y el embudo diría "aquí no queda nada", que es falso. Cada grupo
+ * escala contra su propio primer paso, y el corte se marca en la pantalla.
+ */
+type PasoEmbudo = {
+  clave: string;
+  etiqueta: string;
+  valor: number;
+  ancho: number;
+  color: string;
+  grupo: "facturado" | "comision";
+  /** Lo que se lee sobre la flecha que llega a este paso. */
+  conector: string | null;
+  nota?: string;
+};
 
 function divisionLabel(row: DivisionRow): string {
   const candidate = row.business_area_name;
@@ -81,16 +158,24 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
+  /**
+   * `cambios` existe porque ahora se filtra también pulsando una barra, y
+   * `setCedis(x)` seguido de `load()` recalcularía con el CEDIS ANTERIOR: el
+   * estado de React no ha cambiado todavía cuando `load` lee sus variables. El
+   * clic pasa aquí lo que acaba de elegir y el estado se actualiza en paralelo
+   * para que el panel lateral lo refleje.
+   */
+  async function load(cambios: Partial<Filtros> = {}) {
+    const f: Filtros = { division, cedis, comisionista, desde, hasta, ...cambios };
     setLoading(true);
     setError(null);
     try {
       const body: ReportFilters = {
-        division: division || null,
-        cedis: cedis || null,
-        comisionista: comisionista || null,
-        start_date: desde,
-        end_date: hasta
+        division: f.division || null,
+        cedis: f.cedis || null,
+        comisionista: f.comisionista || null,
+        start_date: f.desde,
+        end_date: f.hasta
       };
       const response = await fetch("/api/comisionesbi/report", {
         method: "POST",
@@ -120,6 +205,135 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   const montoBloqueado = bloqueado.reduce((suma, b) => suma + b.monto, 0);
   // La horquilla solo existe donde las dos hojas del cliente se contradicen.
   const horquilla = bloqueado.reduce((suma, b) => suma + (b.comision_max - b.comision_min), 0);
+
+  // Comisionistas a los que hay algo que pagarles. Ni el total de la tabla (que
+  // incluye a quien devengó cero) ni el del catálogo del cliente (57 nombres,
+  // muchos sin venta en el periodo): los que salen en la liquidación de ESTE
+  // periodo. El grupo sin nombre no cuenta, porque no se le puede pagar.
+  const comisionistas = (report?.por_comisionista ?? []).filter(
+    (f) => f.comisionista && f.comision > 0
+  ).length;
+
+  /** Los cuatro pasos, con el corte de unidad entre el segundo y el tercero. */
+  const embudo: PasoEmbudo[] = useMemo(() => {
+    if (!totales) return [];
+    const { monto, monto_calculable, comision, comision_con_cobro } = totales;
+    return [
+      {
+        clave: "facturado",
+        etiqueta: "Facturado en alcance",
+        valor: monto,
+        ancho: 100,
+        color: COLOR_FASE.facturado,
+        grupo: "facturado",
+        conector: null
+      },
+      {
+        clave: "con-tarifa",
+        etiqueta: "Con tarifa aplicable",
+        valor: monto_calculable,
+        ancho: monto ? (monto_calculable / monto) * 100 : 0,
+        color: COLOR_FASE.facturado,
+        grupo: "facturado",
+        conector: pct(monto_calculable, monto)
+      },
+      {
+        clave: "devengada",
+        etiqueta: "Comisión devengada",
+        valor: comision,
+        ancho: 100,
+        color: COLOR_COMISION,
+        grupo: "comision",
+        // Sin porcentaje a propósito: sería la tasa efectiva, y no es
+        // comparable de un periodo a otro porque cambia con la mezcla de
+        // divisiones (huevo se comisiona por kilo, abarrotes por margen).
+        conector: "genera"
+      },
+      {
+        clave: "con-cobro",
+        etiqueta: "Con cobro registrado",
+        valor: comision_con_cobro,
+        ancho: comision ? (comision_con_cobro / comision) * 100 : 0,
+        color: COLOR_COMISION,
+        grupo: "comision",
+        conector: pct(comision_con_cobro, comision),
+        nota: "suelo conocido, no lo pagable"
+      }
+    ];
+  }, [totales]);
+
+  // Recortado a las primeras posiciones: dieciocho barras verticales con nombre
+  // debajo no se leen, y la cola entera está en la tabla por comisionista y en
+  // el propio filtro de CEDIS del panel.
+  const barrasCedis: BarraVertical[] = useMemo(
+    () =>
+      (report?.por_cedis ?? [])
+        .filter((fila) => fila.comision > 0)
+        .slice(0, TOPE_CEDIS)
+        .map((fila) => ({
+          nombre: fila.cedis ?? "Sin CEDIS asignado",
+          valor: fila.cedis,
+          etiqueta: fila.cedis === null ? "Sin CEDIS" : recortar(fila.cedis),
+          cantidad: fila.comision,
+          // El grupo sin CEDIS no es un CEDIS más: va en naranja y no se pulsa,
+          // igual que en flujo de producto.
+          color: fila.cedis === null ? COLOR_SIN_ASIGNAR : undefined
+        })),
+    [report?.por_cedis]
+  );
+
+  const cedisOcultos = Math.max(0, (report?.por_cedis ?? []).filter((f) => f.comision > 0).length - TOPE_CEDIS);
+
+  const barrasMes: BarraVertical[] = useMemo(() => {
+    const acumulado = new Map<string, number>();
+    for (const fila of report?.por_fecha ?? []) {
+      const mes = fila.fecha.slice(0, 7);
+      acumulado.set(mes, (acumulado.get(mes) ?? 0) + fila.comision);
+    }
+    const conAnio = new Set(Array.from(acumulado.keys(), (mes) => mes.slice(0, 4))).size > 1;
+    // Cronológico, no por importe: es una serie, y ordenada por tamaño no se
+    // puede leer una tendencia.
+    return Array.from(acumulado.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([mes, cantidad]) => ({ valor: mes, etiqueta: etiquetaMes(mes, conAnio), cantidad }));
+  }, [report?.por_fecha]);
+
+  // El color se asigna por orden alfabético fijo de la categoría, nunca por
+  // posición en el ranking: si no, filtrar repintaría a los supervivientes.
+  const segmentosTipoVenta: SegmentoDato[] = useMemo(() => {
+    const filas = (report?.por_tipo_venta ?? []).filter((fila) => fila.comision > 0);
+    const claves = filas
+      .map((fila) => fila.tipo_venta)
+      .filter((c): c is string => c !== null)
+      .sort();
+    return filas.map((fila) => ({
+      valor: fila.tipo_venta,
+      etiqueta: fila.tipo_venta ?? "Sin tipo de venta",
+      cantidad: fila.comision,
+      color:
+        fila.tipo_venta === null
+          ? COLOR_SIN_ASIGNAR
+          : PALETA_CATEGORIAS[claves.indexOf(fila.tipo_venta) % PALETA_CATEGORIAS.length]
+    }));
+  }, [report?.por_tipo_venta]);
+
+  /** Pulsar un CEDIS lo pone en el filtro y recalcula; volver a pulsarlo lo quita. */
+  function filtrarPorCedis(valor: string) {
+    const elegido = valor === cedis ? "" : valor;
+    setCedis(elegido);
+    void load({ cedis: elegido });
+  }
+
+  /** Pulsar un mes acota el periodo a ese mes. No se deshace volviendo a
+   *  pulsarlo —para eso está el rango del panel—, igual que en flujo. */
+  function irAlMes(mes: string) {
+    const limites = limitesDelMes(mes);
+    setDesde(limites.desde);
+    setHasta(limites.hasta);
+    void load(limites);
+  }
+
+  const mesActivo = desde.slice(0, 7) === hasta.slice(0, 7) ? desde.slice(0, 7) : null;
 
   return (
     <div className="workspace-with-sidebar">
@@ -193,8 +407,11 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
           Hasta
           <input onChange={(e) => setHasta(e.target.value)} type="date" value={hasta} />
         </label>
+        <p className="flujo-pista">
+          El CEDIS y el mes también se eligen pulsando sobre las barras de la pantalla.
+        </p>
         <div className="filters-sidebar-actions">
-          <button className="hydro-button" disabled={loading} onClick={load} type="button">
+          <button className="hydro-button" disabled={loading} onClick={() => void load()} type="button">
             {loading ? "Calculando…" : "Calcular"}
           </button>
           <button
@@ -213,10 +430,10 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
         </div>
       </FiltersSidebar>
 
-      <div className="hydro-page" data-module="comisiones">
+      <div className="hydro-page comisiones-pagina" data-module="comisiones">
         {error ? <p className="hydro-error">{error}</p> : null}
 
-        <header className="operational-summary">
+        <header className="operational-summary comisiones-cabecera">
           <div className="operational-summary-title">
             <p>Cálculo de comisión</p>
             <h1>Comisiones</h1>
@@ -259,67 +476,140 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
               ) : null}
             </div>
           </div>
+          {/* Un solo número grande en vez de la fila de cuatro indicadores que
+              había antes. Los otros tres eran los pasos del embudo de abajo
+              escritos como cifras sueltas —facturado, con tarifa, con cobro—,
+              así que se decían dos veces y en ningún sitio se veía cómo se
+              relacionan. El cuarto era un conteo de líneas, que no es una
+              respuesta a ninguna pregunta. */}
           {totales ? (
-            <section className="hydro-module-kpis" aria-label="Indicadores de comisión">
-              <Kpi etiqueta="Comisión devengada" valor={pesos(totales.comision)} />
-              <Kpi
-                etiqueta="Con cobro registrado"
-                valor={pesos(totales.comision_con_cobro)}
-                nota="suelo conocido, no lo pagable"
-              />
-              <Kpi
-                etiqueta="Facturado con tarifa"
-                valor={`${decimal.format(totales.pct_calculable)}%`}
-                nota={`${pesos(totales.monto_calculable)} de ${pesos(totales.monto)}`}
-              />
-              <Kpi etiqueta="Líneas calculadas" valor={numero.format(totales.num_lineas)} />
-            </section>
+            <div className="comisiones-titular">
+              <span>Comisión devengada</span>
+              <strong>{pesos(totales.comision)}</strong>
+              <small>
+                {numero.format(comisionistas)} comisionistas ·{" "}
+                {numero.format(totales.num_lineas)} líneas
+              </small>
+            </div>
           ) : null}
         </header>
 
-        {/* Siempre visible, nunca plegado: es lo que impide leer el total como
-            si estuviera completo. */}
-        {bloqueado.length ? (
-          <section className="hydro-table-card" data-bloque="pendiente">
-            <div className="hydro-table-title">
-              <div>
-                <h2>Lo que todavía no entra en el cálculo</h2>
-                <span>
-                  {pesos(montoBloqueado)} facturados sin comisión aplicable
-                  {horquilla > 0 ? ` · ${pesos(horquilla)} dependen de qué hoja de tarifas valga` : null}
-                </span>
-              </div>
+        {/* ── Embudo ──────────────────────────────────────────────────────
+            De lo facturado a lo que se puede cobrar, en los cuatro pasos que
+            de verdad tiene el cálculo. La escala se rompe a propósito entre el
+            segundo y el tercero: ver `PasoEmbudo`. */}
+        {embudo.length ? (
+          <section className="comisiones-embudo" aria-label="Del facturado a la comisión">
+            <div className="comisiones-embudo-pasos">
+              {embudo.map((paso, indice) => (
+                <Fragment key={paso.clave}>
+                  {paso.conector ? (
+                    <div
+                      className="comisiones-embudo-flecha"
+                      data-corte={embudo[indice - 1]?.grupo !== paso.grupo ? "si" : undefined}
+                    >
+                      <span>{paso.conector}</span>
+                    </div>
+                  ) : null}
+                  <div className="comisiones-embudo-paso" data-grupo={paso.grupo}>
+                    <span className="comisiones-embudo-etiqueta">{paso.etiqueta}</span>
+                    <strong>{pesos(paso.valor)}</strong>
+                    <span className="comisiones-embudo-barra">
+                      <i style={{ background: paso.color, width: `${Math.max(1.5, paso.ancho)}%` }} />
+                    </span>
+                    {paso.nota ? <em>{paso.nota}</em> : null}
+                  </div>
+                </Fragment>
+              ))}
             </div>
-            <div className="hydro-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Motivo</th>
-                    <th className="n">Líneas</th>
-                    <th className="n">Facturado</th>
-                    <th className="n">Comisión si entrara</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {bloqueado.map((b) => (
-                    <tr key={b.motivo}>
-                      <td>{b.motivo}</td>
-                      <td className="n">{numero.format(b.num_lineas)}</td>
-                      <td className="n">{pesos(b.monto)}</td>
-                      <td className="n">
-                        {/* Donde hay conflicto de tarifas se sabe el rango; en el
-                            resto todavía no se sabe nada, y decirlo es más útil
-                            que un cero que parece una cifra. */}
-                        {b.comision_max > 0
-                          ? `${pesos(b.comision_min)} – ${pesos(b.comision_max)}`
-                          : "sin determinar"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <p className="comisiones-embudo-pie">
+              Los dos primeros pasos son pesos <b>facturados</b>; los dos últimos, pesos de{" "}
+              <b>comisión</b>, que son un 2-3% de los primeros. Cada mitad se dibuja a su propia
+              escala — comparar el largo de una barra verde con una azul no significa nada.
+            </p>
           </section>
+        ) : null}
+
+        {/* ── Tablero ─────────────────────────────────────────────────────
+            Tres gráficos en una fila. El CEDIS es el eje del proyecto y va el
+            más ancho; el mes contesta "cuánto llevamos este mes"; el tipo de
+            venta lo pide el objetivo ("el monto a pagar según tipo de venta"). */}
+        {report ? (
+          <div className="comisiones-tablero">
+            <section className="dashboard-card" data-zona="mes">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Comisión por mes</h2>
+                  <span>
+                    pulsa un mes para acotar el periodo
+                    {mesActivo ? " · viendo un mes suelto, la serie es de uno" : null}
+                  </span>
+                </div>
+              </div>
+              <BarrasVerticales
+                color={COLOR_COMISION}
+                datos={barrasMes}
+                onSelect={irAlMes}
+                seleccion={mesActivo}
+                titulo={(dato, activa) =>
+                  activa
+                    ? `Ya estás viendo ${dato.etiqueta}`
+                    : `Acotar el periodo a ${dato.etiqueta} · ${pesos(dato.cantidad)}`
+                }
+                vacio="Sin comisión en el periodo"
+              />
+            </section>
+
+            <section className="dashboard-card" data-zona="cedis">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Comisión por CEDIS</h2>
+                  <span>
+                    pulsa uno para filtrar toda la pantalla
+                    {cedisOcultos > 0 ? ` · los ${TOPE_CEDIS} primeros de ${TOPE_CEDIS + cedisOcultos}` : null}
+                  </span>
+                </div>
+              </div>
+              <BarrasVerticales
+                color={COLOR_COMISION}
+                datos={barrasCedis}
+                onSelect={filtrarPorCedis}
+                rotulosGirados
+                seleccion={cedis || null}
+                titulo={(dato, activa) => {
+                  // El nombre entero viaja en el propio dato: buscarlo por el
+                  // rótulo fallaba justo con los nombres que se recortan, que
+                  // son los que lo necesitan.
+                  const nombre = dato.nombre ?? dato.etiqueta;
+                  if (dato.valor === null) return `Sin CEDIS asignado · ${pesos(dato.cantidad)}`;
+                  return activa
+                    ? `Quitar el filtro de ${nombre}`
+                    : `Filtrar por ${nombre} · ${pesos(dato.cantidad)}`;
+                }}
+                vacio="Ningún CEDIS devengó comisión en el periodo"
+              />
+            </section>
+
+            <section className="dashboard-card" data-zona="tipo">
+              <div className="dashboard-card-head">
+                <div>
+                  {/* Sin "pulsa para filtrar": el endpoint de comisión no tiene
+                      filtro de tipo de venta, así que este donut se lee, no se
+                      pulsa. Por eso va `estatico`. */}
+                  <h2>Por tipo de venta</h2>
+                  <span>solo lectura</span>
+                </div>
+              </div>
+              <Donut
+                datos={segmentosTipoVenta}
+                estatico
+                leyendaTotal="tipos"
+                metrica="importe"
+                onSelect={() => undefined}
+                seleccion={null}
+              />
+            </section>
+          </div>
         ) : null}
 
         {report?.por_comisionista.length ? (
@@ -409,6 +699,51 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
             e importe cero. Se comisionan porque hay producto entregado, y quedan marcadas por si el
             cliente decide que no deberían.
           </p>
+        ) : null}
+
+        {/* Al final de la página y plegado, pero CON SU CIFRA EN EL RÓTULO: lo
+            que se pliega es el desglose por motivo, no el hecho de que falte
+            dinero por entrar. Cerrado sigue diciendo cuánto es, así que la
+            pregunta "¿esto está completo?" se contesta sin pulsar nada. */}
+        {bloqueado.length ? (
+          <details className="comisiones-plegable">
+            <summary>
+              <span className="comisiones-plegable-titulo">Lo que todavía no entra en el cálculo</span>
+              <span className="comisiones-plegable-cifra">
+                {pesos(montoBloqueado)} facturados sin comisión aplicable
+                {horquilla > 0 ? ` · ${pesos(horquilla)} dependen de qué hoja de tarifas valga` : null}
+              </span>
+            </summary>
+            <div className="hydro-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Motivo</th>
+                    <th className="n">Líneas</th>
+                    <th className="n">Facturado</th>
+                    <th className="n">Comisión si entrara</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bloqueado.map((b) => (
+                    <tr key={b.motivo}>
+                      <td>{b.motivo}</td>
+                      <td className="n">{numero.format(b.num_lineas)}</td>
+                      <td className="n">{pesos(b.monto)}</td>
+                      <td className="n">
+                        {/* Donde hay conflicto de tarifas se sabe el rango; en el
+                            resto todavía no se sabe nada, y decirlo es más útil
+                            que un cero que parece una cifra. */}
+                        {b.comision_max > 0
+                          ? `${pesos(b.comision_min)} – ${pesos(b.comision_max)}`
+                          : "sin determinar"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
         ) : null}
       </div>
     </div>

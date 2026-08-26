@@ -96,7 +96,7 @@ SELECT * FROM UNNEST([
   STRUCT('EXTRAS',       CAST(NULL AS STRING),
          FALSE, 'sin contrapartida en las tarifas, $11,0 M en las cinco divisiones'),
   STRUCT(CAST(NULL AS STRING), 'MENUDEO',
-         FALSE, '812 tarifas de botana y croqueta sin uso, cubriría hasta $273,1 M — preguntado'),
+         FALSE, 'sin equivalencia literal a propósito: se resuelve por otra vía, ver dim_tarifa_unica_v1, confirmada por Diego el 26/08/2026'),
   STRUCT(CAST(NULL AS STRING), 'ABASTOS',
          FALSE, '8 tarifas de huevo sin uso, no hay "abastos" en dm_cedis — preguntado')
 ]);
@@ -201,8 +201,31 @@ SELECT * FROM UNNEST([
 --    LA LLAVE es división + oficina + SET + tipo de venta. El fichero del
 --    cliente trae además centro y almacén, pero vienen vacíos en botana y
 --    croqueta, así que meterlos en la llave partiría filas sin ganar nada.
+--
+--    BOTANA (BO) es un caso aparte desde el 26/08/2026. Sus 619 casillas en
+--    conflicto no son un empate entre hojas igual de válidas: son una hoja
+--    vieja que Alejandro dejó oculta en el fichero ("Sheet1 ... esa fue como
+--    iniciamos pero esta es la actual"). De las 949 llaves de botana, 624
+--    están en las dos hojas (y 619 de esas se contradicen), 236 están solo en
+--    `Sheet1` y 89 solo en `DIVISIÓN BOTANA (BO)`. Antes de agrupar, `vigente`
+--    descarta `DIVISIÓN BOTANA (BO)` en toda llave donde exista la misma
+--    llave en `Sheet1`, y la conserva en las 89 donde `Sheet1` no llega. El
+--    resto de divisiones no tiene este problema (huevo sí duplica hoja con
+--    "ayuda SMA", pero esa la sigue sin confirmar el cliente, así que no se
+--    toca aquí).
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_tarifa_v1` AS
+WITH vigente AS (
+  SELECT t.*
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa` t
+  WHERE t.division != 'BO'
+     OR t.hoja = 'Sheet1'
+     OR NOT EXISTS (
+          SELECT 1 FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa` s
+          WHERE s.division = t.division AND s.oficina = t.oficina
+            AND s.`set` = t.`set` AND s.tipo_venta = t.tipo_venta
+            AND s.hoja = 'Sheet1')
+)
 SELECT
   division,
   oficina,
@@ -216,7 +239,7 @@ SELECT
   -- salga un número que nadie puede defender.
   IF(COUNT(DISTINCT tarifa) = 1, MIN(tarifa), NULL) AS tarifa,
   STRING_AGG(DISTINCT hoja, ' | ' ORDER BY hoja)    AS hojas
-FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa`
+FROM vigente
 GROUP BY division, oficina, `set`, tipo_venta;
 
 
@@ -247,10 +270,11 @@ GROUP BY division, oficina, `set`, tipo_venta;
 --     mapeo de CEDIS, y la misma cautela — donde haya más de una y ninguna
 --     case por la vía literal, la línea se queda sin comisión y se ve.
 --
---     PENDIENTE DE CONFIRMAR EN EL CORREO. La deducción es sólida pero sigue
---     siendo nuestra: `tipo_venta_origen` marca cada línea con el escalón que
---     la resolvió, así que si el cliente desmiente algo, se aísla filtrando por
---     esa columna sin rehacer nada.
+--     CONFIRMADO el 26/08/2026. Diego: "el primero es correcto solo aplica
+--     comisión en base a su tipo de operación". Sigue siendo la deducción
+--     original, no algo que el cliente nos haya dado hecho — así que
+--     `tipo_venta_origen` se deja tal cual, marcando cada línea con el
+--     escalón que la resolvió, por si hiciera falta aislar algo más adelante.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_tarifa_unica_v1` AS
 -- Lee la tabla cruda y no `dim_tarifa_v1` porque esa vista ya es una
@@ -290,15 +314,13 @@ HAVING COUNT(DISTINCT t.tipo_venta) = 1;
 --        croqueta     6,09        1,22%        7,31%   <- DUDOSO, ver abajo
 --        leche         n/a        6,33%          n/a   <- pieza
 --
---    CROQUETA ESTÁ MAL A PROPÓSITO. La aritmética dice kilo con la misma
---    claridad con que lo dijo en huevo: por caja sale al 1,22%, que no existe
---    en distribución, y por kilo al 7,31%, en línea con botana. Y el patrón es
---    coherente —lo que se vende al peso (huevo, croqueta) por kilo; lo que se
---    vende por pieza (el paquete de botana de 60 g, el cartón de leche) por
---    unidad—. Aun así se deja en `caja` hasta que el cliente lo confirme:
---    deducir bien no es lo mismo que saber, y ya nos pasó con "CEDIS SAN JUAN",
---    que se llamaba CEDIS y no lo era. La consecuencia está medida y es que la
---    comisión de croqueta sale al 0,17% en vez de a lo que debería.
+--    CROQUETA: confirmado por Alejandro el 26/08/2026 ("Es por Kilogramo"),
+--    contestando al punto 2 del correo. La aritmética ya lo decía con la misma
+--    claridad que en huevo —por caja sale al 1,22%, que no existe en
+--    distribución, y por kilo al 7,31%, en línea con botana— pero se dejó en
+--    `caja` hasta tener la confirmación: deducir bien no es lo mismo que
+--    saber, y ya nos pasó con "CEDIS SAN JUAN", que se llamaba CEDIS y no lo
+--    era.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_base_comision_v1` AS
 SELECT * FROM UNNEST([
@@ -308,8 +330,8 @@ SELECT * FROM UNNEST([
          'aritmética concluyente: 8,59% por paquete contra 0,53% por kilo. El paquete pesa 60 g'),
   STRUCT('L',  'caja', FALSE,
          'aritmética: 6,33% por pieza. El cartón de leche se vende por pieza, no al peso'),
-  STRUCT('IA', 'caja', FALSE,
-         'PENDIENTE Y PROBABLEMENTE MAL: la aritmética apunta a kilo (7,31% contra 1,22% por caja) pero no está confirmado. Se deja por caja a la espera de respuesta'),
+  STRUCT('IA', 'kg', TRUE,
+         'el cliente lo confirmó el 26/08/2026: "Es por Kilogramo". Por caja daba 1,22% del facturado, que no existe en distribución; por kilo, 7,31%, en línea con botana'),
   STRUCT('A',  CAST(NULL AS STRING), FALSE,
          'abarrotes no usa ni SET ni tipo de venta: va por margen sobre el precio de cada material, en DBC_dim_comision_abarrotes. Necesita su propio motor')
 ]);

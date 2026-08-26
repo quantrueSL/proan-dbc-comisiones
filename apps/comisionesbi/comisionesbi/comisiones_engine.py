@@ -156,6 +156,10 @@ def build_report(
     por_cedis: dict = defaultdict(_nuevo)
     por_fecha: dict = defaultdict(_nuevo)
     por_set: dict = defaultdict(_nuevo)
+    # El objetivo del proyecto pide la comisión "según tipo de venta" (ruta,
+    # mayoreo, medio mayoreo…), y el tipo ya venía en el grano de la tabla gold
+    # sin que nadie lo agregara.
+    por_tipo_venta: dict = defaultdict(_nuevo)
     # `cantidad_base` no se suma entre unidades (punto 2 del docstring): la
     # clave lleva la unidad dentro.
     por_unidad: dict = defaultdict(float)
@@ -174,6 +178,7 @@ def build_report(
         _acumular(por_cedis, fila["cedis"], fila)
         _acumular(por_fecha, _iso(fila["fecha"]), fila)
         _acumular(por_set, fila["set"], fila)
+        _acumular(por_tipo_venta, fila["tipo_venta"], fila)
         _acumular({None: total}, None, fila)
         lineas_sin_importe += fila["lineas_sin_importe"] or 0
 
@@ -211,6 +216,7 @@ def build_report(
         "por_division": divisiones,
         "por_cedis": _ordenadas(por_cedis, "cedis"),
         "por_set": _ordenadas(por_set, "set"),
+        "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
         # Por fecha va en orden cronológico, no por comisión: es una serie.
         "por_fecha": [
             {"fecha": fecha, **datos} for fecha, datos in sorted(por_fecha.items())

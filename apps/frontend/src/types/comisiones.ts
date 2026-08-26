@@ -142,6 +142,8 @@ export type ComisionPorDivision = ComisionTotales & {
 };
 export type ComisionPorCedis = ComisionTotales & { cedis: string | null };
 export type ComisionPorSet = ComisionTotales & { set: string | null };
+/** `null` = la línea no trae tipo de venta, no es un tipo llamado "ninguno". */
+export type ComisionPorTipoVenta = ComisionTotales & { tipo_venta: string | null };
 export type ComisionPorFecha = ComisionTotales & { fecha: string };
 
 /** Por qué un trozo del facturado no llega a tener comisión, y cuánto vale. */
@@ -162,6 +164,7 @@ export type ReportResponse = {
   por_division: ComisionPorDivision[];
   por_cedis: ComisionPorCedis[];
   por_set: ComisionPorSet[];
+  por_tipo_venta: ComisionPorTipoVenta[];
   por_fecha: ComisionPorFecha[];
   /** La cantidad NO se suma entre unidades: huevo se comisiona por kilo y el
    *  resto por caja. Viaja siempre desglosada. */
@@ -184,6 +187,7 @@ export const EMPTY_REPORT: ReportResponse = {
   por_division: [],
   por_cedis: [],
   por_set: [],
+  por_tipo_venta: [],
   por_fecha: [],
   cantidad_por_unidad: [],
   bloqueado: []
