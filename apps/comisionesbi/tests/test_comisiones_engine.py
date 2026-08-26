@@ -284,6 +284,73 @@ def test_el_tipo_de_venta_sin_resolver_no_se_confunde_con_una_categoria(cliente)
     assert [f["tipo_venta"] for f in por] == ["MAYOREO", None]
 
 
+# ─── El desglose de la cascada ────────────────────────────────────────────
+
+def test_el_desglose_llega_al_grano_de_la_tarifa(cliente):
+    # Una fila por llave de tarifa (división + oficina + SET + tipo de venta):
+    # es el único nivel que se puede cuadrar contra la hoja del cliente.
+    cliente(
+        [
+            _fila(conjunto="HPORTALES", comision=40.0, cantidad=100.0),
+            _fila(conjunto="HPORTALES", comision=10.0, cantidad=25.0),
+            _fila(conjunto="HSANJUAN", comision=70.0, cantidad=200.0),
+        ]
+    )
+
+    desglose = _informe()["desglose"]
+
+    assert len(desglose) == 2
+    primero = desglose[0]
+    assert primero["set"] == "HSANJUAN"
+    assert primero["comision"] == 70.0
+    # Las columnas de la hoja: la oficina es lo que hace verificable la tarifa.
+    assert primero["oficina"] == "0016"
+    assert primero["tipo_venta"] == "VTA EN RUTA"
+    assert primero["base_unidad"] == "kg"
+    # Y la cantidad se acumula, que es lo que multiplica la tarifa.
+    assert desglose[1]["cantidad_base"] == 125.0
+
+
+def test_el_desglose_no_parte_la_hoja_por_estado_pero_dice_cuanto_se_calculo(cliente):
+    # Partirla dejaría dos filas para la misma llave de tarifa, una calculada y
+    # otra bloqueada, y nadie sabría que son la misma cosa. Va una fila, y
+    # dentro `monto_calculable` dice cuánto de ella llegó a tener tarifa.
+    cliente(
+        [
+            _fila(monto=1000.0, comision=40.0),
+            _fila(monto=600.0, comision=0.0, estado="tarifa en conflicto entre hojas"),
+        ]
+    )
+
+    desglose = _informe()["desglose"]
+
+    assert len(desglose) == 1
+    assert desglose[0]["monto"] == 1600.0
+    assert desglose[0]["monto_calculable"] == 1000.0
+
+
+def test_el_desglose_separa_las_unidades_para_no_sumar_kilos_con_cajas(cliente):
+    cliente(
+        [
+            _fila(division="H", base="kg", cantidad=100.0, comision=40.0),
+            _fila(division="BO", base="caja", cantidad=7.0, comision=10.0),
+        ]
+    )
+
+    por_unidad = {f["base_unidad"]: f["cantidad_base"] for f in _informe()["desglose"]}
+
+    assert por_unidad == {"kg": 100.0, "caja": 7.0}
+
+
+def test_el_desglose_se_niega_a_agrupar_sin_la_unidad_en_la_llave(cliente):
+    # Es la comprobación que evita el número que parece una cantidad y no lo es.
+    cliente([_fila()])
+    filas = [_fila()]
+
+    with pytest.raises(ValueError, match="base_unidad"):
+        comisiones_engine._desglose(filas, ("comisionista", "set"))
+
+
 def test_los_filtros_viajan_como_parametros_y_no_pegados_al_sql(cliente):
     falso = cliente([_fila()])
 

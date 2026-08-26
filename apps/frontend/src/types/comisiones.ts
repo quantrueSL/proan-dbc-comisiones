@@ -146,6 +146,32 @@ export type ComisionPorSet = ComisionTotales & { set: string | null };
 export type ComisionPorTipoVenta = ComisionTotales & { tipo_venta: string | null };
 export type ComisionPorFecha = ComisionTotales & { fecha: string };
 
+/**
+ * Una fila del desglose: el grano más fino que tiene sentido enseñar, que es la
+ * llave de la tarifa (división + oficina + SET + tipo de venta). Por debajo no
+ * hay nada que cuadrar contra la hoja del cliente; por encima hay sumas que no
+ * se pueden verificar contra nada.
+ *
+ * Las dos cascadas de la pantalla son anidamientos distintos de estas mismas
+ * columnas, así que este único array las sirve a las dos y abrir un nodo no
+ * pide nada al servidor.
+ */
+export type ComisionDesgloseRow = ComisionTotales & {
+  comisionista: string | null;
+  division_code: string | null;
+  division: string | null;
+  cedis: string | null;
+  oficina: string | null;
+  set: string | null;
+  tipo_venta: string | null;
+  /** `kg` o `caja`. Va en la llave: sin ella la cantidad mezcla unidades. */
+  base_unidad: string | null;
+  /** Lo que multiplica la tarifa. Solo se puede sumar entre filas de la MISMA
+   *  `base_unidad` — por eso la cascada la deja en blanco por encima de la
+   *  división, que es donde deja de haber una sola unidad. */
+  cantidad_base: number;
+};
+
 /** Por qué un trozo del facturado no llega a tener comisión, y cuánto vale. */
 export type ComisionBloqueo = {
   motivo: string;
@@ -166,6 +192,7 @@ export type ReportResponse = {
   por_set: ComisionPorSet[];
   por_tipo_venta: ComisionPorTipoVenta[];
   por_fecha: ComisionPorFecha[];
+  desglose: ComisionDesgloseRow[];
   /** La cantidad NO se suma entre unidades: huevo se comisiona por kilo y el
    *  resto por caja. Viaja siempre desglosada. */
   cantidad_por_unidad: { base_unidad: string; cantidad: number }[];
@@ -189,6 +216,7 @@ export const EMPTY_REPORT: ReportResponse = {
   por_set: [],
   por_tipo_venta: [],
   por_fecha: [],
+  desglose: [],
   cantidad_por_unidad: [],
   bloqueado: []
 };

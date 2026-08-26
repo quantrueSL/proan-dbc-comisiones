@@ -11113,6 +11113,69 @@ body.proan-report-assistant-open .proan-content-scroll {
   box-shadow: inset 0 -1px 0 #e2ddd5;
 }
 
+/* ── Cascada: la tabla que se abre con "+" ─────────────────────────────────
+   La sangría la pone el componente en píxeles (el nivel × 17), porque el nivel
+   es un dato y no una clase. Aquí van el botón, el filete de profundidad y el
+   trato de la fila «otros N», que no es un grupo sino un resto. */
+/* Más alto que las tablas planas: un árbol abierto crece hacia abajo, y con los
+   322 px de las tablas normales bastaba abrir dos nodos para quedarse mirando
+   por una rendija. Sigue siendo una caja con scroll, no la página entera. */
+.comisiones-pagina > .hydro-table-card .hydro-table-wrap.cascada { max-height: 460px; }
+
+/* LOS SUBTÍTULOS DE ESTAS TABLAS SE VUELVEN A ENCENDER.
+   La piel trae `.hydro-table-title span { display: none }` (busca «cabecera de
+   tabla compacta»), heredado de Hidrocarburos y sin acotar a ninguna pantalla:
+   oculta el subtítulo de CUALQUIER tabla de la app. Aquí esos span no son
+   decoración —llevan la jerarquía de la cascada y qué mide la columna de
+   tarifa—, así que se reactivan, y solo en esta pantalla para no cambiarle el
+   aspecto a las demás. */
+.comisiones-pagina .hydro-table-title span { display: block; }
+
+/* La jerarquía dentro del título: mismo renglón, pero claramente subordinada al
+   nombre de la tabla. Sin negrita, más pequeña y en gris, para que el título
+   siga leyéndose como un título y no como una fórmula. `inline` y no `block`:
+   la regla de arriba la mandaría a su propio renglón, y va pegada al nombre. */
+.comisiones-pagina .hydro-table-title h2 .cascada-jerarquia { display: inline; }
+.cascada-jerarquia {
+  color: #918a80; font-family: inherit; font-size: 12px; font-weight: 500; letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.cascada .cascada-sangria { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cascada .cascada-etiqueta { display: grid; min-width: 0; }
+.cascada .cascada-etiqueta em {
+  color: #918a80; font-size: 10.5px; font-style: normal; line-height: 1.3;
+}
+.cascada .cascada-mas {
+  display: grid; place-items: center; flex: none; width: 18px; height: 18px;
+  border: 1px solid #ddd7cd; border-radius: 5px; background: #fff;
+  color: #3d3d7c; cursor: pointer; font-size: 12px; font-weight: 700; line-height: 1; padding: 0;
+}
+.cascada .cascada-mas:hover, .cascada .cascada-mas:focus-visible {
+  border-color: #b9b3e0; background: #f6f5fe; outline: none;
+}
+/* Hueco del mismo tamaño donde no hay botón: sin él, las hojas se desalinean
+   respecto a sus hermanas desplegables y la sangría deja de leerse. */
+.cascada .cascada-mas-hueco { border-color: transparent; background: transparent; cursor: default; }
+
+/* El filete de profundidad. Solo a partir del segundo nivel: en el primero
+   sería una raya al lado de todas las filas y no distinguiría nada. */
+.cascada tbody tr[data-nivel="1"] td:first-child { box-shadow: inset 3px 0 0 -1px #e6e0d6; }
+.cascada tbody tr[data-nivel="2"] td:first-child { box-shadow: inset 3px 0 0 -1px #dbd4c8; }
+.cascada tbody tr[data-nivel="3"] td:first-child { box-shadow: inset 3px 0 0 -1px #cfc7b9; }
+
+/* Los niveles hondos pesan menos, para que el ojo vuelva solo a las filas de
+   arriba, que son las que se liquidan. */
+.cascada tbody tr[data-nivel="0"] td { font-weight: 650; }
+.cascada tbody tr[data-nivel="2"] td, .cascada tbody tr[data-nivel="3"] td { font-size: 12px; }
+.cascada tbody tr[data-nivel="3"] .cascada-etiqueta { color: #55524d; }
+
+/* «otros N» no es un grupo, es lo que no se está enseñando: en cursiva y en
+   gris para que nadie lo lea como una categoría más. */
+.cascada tbody tr[data-resto="si"] td { color: #8b8880; font-style: italic; }
+
+.cascada .cascada-etiqueta small, .cascada td small { color: #918a80; font-size: 10px; font-style: normal; }
+
 /* ── Lo que no entra en el cálculo: plegable, al final ─────────────────────
    El ámbar es "ojo con esto", no "está roto": son datos correctos esperando una
    respuesta del cliente. Cerrado sigue enseñando el importe — lo que se pliega
@@ -11367,10 +11430,33 @@ body.proan-report-assistant-open .proan-content-scroll {
      `minmax(0, …)`.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* EL MANUAL SE LEE BAJANDO, y para eso tiene que poder bajar. Le pasaba lo
+   mismo que a comisiones: hereda `height: 100%` de `.hydro-page` (ver el bloque
+   de @media 1100px), la shell apaga su propio scroll a partir de ese ancho
+   dando por hecho que cada pantalla se hace cargo del suyo, y esta no lo hacía.
+   El resultado era el primer apartado entero y el siguiente cortado, sin manera
+   de llegar al resto — no es que sobrara contenido, es que no había cómo verlo.
+
+   `grid-auto-rows: min-content` + `align-content: start` por el mismo motivo que
+   allí: sin ellos la rejilla de alto fijo aplasta las filas en vez de desbordar,
+   y lo que se desborda es justo lo que tiene que recoger el scroll.
+
+   Que se lee del tirón y no de uno en uno lo dice la propia pantalla: el índice
+   lateral va pegajoso, con barra de avance de lectura y anclas a cada apartado.
+   Nada de eso significa nada en una vista de uno en uno. */
 .hydro-page.manual-page {
   max-width: 1520px; margin-inline: auto; gap: 16px;
   grid-template-rows: none; grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: min-content; align-content: start;
   padding: 4px 4px 44px;
+}
+
+@media (min-width: 1100px) {
+  .hydro-page.manual-page {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
 }
 
 /* Cabecera: título a la izquierda y cifras a la derecha, que para eso hay

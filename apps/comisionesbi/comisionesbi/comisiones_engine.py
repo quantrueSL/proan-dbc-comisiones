@@ -125,6 +125,63 @@ def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
     ]
 
 
+# ─── Desglose para la cascada de la pantalla ──────────────────────────────
+#
+# El GRANO MÁS FINO que tiene sentido enseñar, y no es una elección estética: la
+# tarifa se busca por división + oficina + SET + tipo de venta, así que por
+# debajo de esa llave no hay nada que cuadrar contra la hoja del cliente, y por
+# encima hay sumas que no se pueden verificar contra nada.
+#
+# Va SIN `fecha` y SIN `comision_estado`. Sin fecha porque la cascada es de
+# liquidación, no de serie temporal, y con ella el desglose se multiplicaría por
+# los días del periodo. Sin estado porque partiría cada hoja en dos filas —una
+# calculada y otra bloqueada— cuando lo que hace falta es lo contrario: una fila
+# por llave de tarifa, y dentro `monto_calculable` diciendo cuánto de ella llegó
+# a tener tarifa.
+#
+# Las dos cascadas de la pantalla son ANIDAMIENTOS DISTINTOS DE ESTAS MISMAS
+# COLUMNAS (por división: división → CEDIS → comisionista → hoja; por
+# comisionista: comisionista → división → hoja), así que un solo array las sirve
+# a las dos y el navegador no tiene que pedir nada al abrir un nodo.
+DIMENSIONES_DESGLOSE = (
+    "comisionista",
+    "division_code",
+    "division",
+    "cedis",
+    "oficina",
+    "set",
+    "tipo_venta",
+    "base_unidad",
+)
+
+
+def _desglose(filas: list[dict], dimensiones: tuple[str, ...]) -> list[dict]:
+    """Agrega por la llave compuesta que se le pida.
+
+    `base_unidad` TIENE que ir en la llave, y se comprueba en vez de confiar:
+    sin ella `cantidad_base` sumaría kilos con cajas (punto 2 del docstring del
+    módulo), y saldría un número que parece una cantidad y no lo es.
+    """
+    if "base_unidad" not in dimensiones:
+        raise ValueError(
+            "el desglose necesita `base_unidad` en la llave: sin ella la cantidad mezcla unidades"
+        )
+
+    acumulado: dict = defaultdict(lambda: {**_nuevo(), "cantidad_base": 0.0})
+    for fila in filas:
+        clave = tuple(fila[dimension] for dimension in dimensiones)
+        _acumular(acumulado, clave, fila)
+        acumulado[clave]["cantidad_base"] += fila["cantidad_base_total"] or 0.0
+
+    # Por comisión descendente y sin comparar las claves entre sí: llevan nulos
+    # dentro y `None < str` reventaría. `sorted` es estable, así que el empate lo
+    # rompe el orden de aparición.
+    return [
+        {**dict(zip(dimensiones, clave)), **datos}
+        for clave, datos in sorted(acumulado.items(), key=lambda item: -item[1]["comision"])
+    ]
+
+
 def build_report(
     *,
     division: str | None,
@@ -217,6 +274,8 @@ def build_report(
         "por_cedis": _ordenadas(por_cedis, "cedis"),
         "por_set": _ordenadas(por_set, "set"),
         "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
+        # La cascada de la pantalla se construye con esto, sin más viajes.
+        "desglose": _desglose(filas, DIMENSIONES_DESGLOSE),
         # Por fecha va en orden cronológico, no por comisión: es una serie.
         "por_fecha": [
             {"fecha": fecha, **datos} for fecha, datos in sorted(por_fecha.items())

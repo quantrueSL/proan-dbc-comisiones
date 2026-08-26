@@ -92,6 +92,57 @@ const INFORME: ReportResponse = {
       monto_calculable: 1_000_000
     }
   ],
+  // Hojas del desglose: el grano de la tarifa. De aquí salen las dos cascadas.
+  desglose: [
+    {
+      comisionista: "ELIAS BARBA",
+      division_code: "H",
+      division: "Huevo",
+      cedis: "Leon 1",
+      oficina: "0016",
+      set: "HSANJUAN",
+      tipo_venta: "VTA EN RUTA",
+      base_unidad: "kg",
+      cantidad_base: 400_000,
+      num_lineas: 60,
+      monto: 6_000_000,
+      comision: 700_000,
+      comision_con_cobro: 200_000,
+      monto_calculable: 6_000_000
+    },
+    {
+      comisionista: "ELIAS BARBA",
+      division_code: "BO",
+      division: "Botana",
+      cedis: "Leon 1",
+      oficina: "0016",
+      set: "BOVUALA",
+      tipo_venta: "MAYOREO",
+      base_unidad: "caja",
+      cantidad_base: 9_000,
+      num_lineas: 40,
+      monto: 4_000_000,
+      comision: 459_105,
+      comision_con_cobro: 100_000,
+      monto_calculable: 2_000_000
+    },
+    {
+      comisionista: "JAIME ROJAS",
+      division_code: "H",
+      division: "Huevo",
+      cedis: "Queretaro",
+      oficina: "0021",
+      set: "HPORTALES",
+      tipo_venta: "VTA EN RUTA",
+      base_unidad: "kg",
+      cantidad_base: 150_000,
+      num_lineas: 20,
+      monto: 2_000_000,
+      comision: 250_000,
+      comision_con_cobro: 0,
+      monto_calculable: 2_000_000
+    }
+  ],
   bloqueado: [
     {
       motivo: "tarifa en conflicto entre hojas",
@@ -159,7 +210,7 @@ describe("lo que no entra en el cálculo", () => {
     expect(resumen).toMatch(/\$193,396,122 facturados sin comisión aplicable/);
 
     // Al final: después de las dos tablas de detalle.
-    expect(html.indexOf("comisiones-plegable")).toBeGreaterThan(html.indexOf("<h2>Por división</h2>"));
+    expect(html.indexOf("comisiones-plegable")).toBeGreaterThan(html.indexOf("Comisión por división"));
   });
 
   it("mantiene el desglose por motivo dentro del desplegable", () => {
@@ -274,7 +325,9 @@ describe("el tablero", () => {
     // primer mes de la serie saldría como diciembre.
     const t = texto();
     expect(t).toMatch(/ene/);
-    expect(t).not.toMatch(/dic/);
+    // Con frontera de palabra: sin ella, cualquier "dice" o "indicador" del
+    // texto de la pantalla haría fallar este test sin que hubiera nada roto.
+    expect(t).not.toMatch(/dic/);
   });
 
   it("no repite color entre tipos de venta", () => {
@@ -303,12 +356,18 @@ describe("las dos tablas de detalle", () => {
     const html = pantalla();
     const embudo = html.indexOf("comisiones-embudo");
     const porComisionista = html.indexOf("Comisión por comisionista");
-    const porDivision = html.indexOf("<h2>Por división</h2>");
+    const porDivision = html.indexOf("Comisión por división");
 
     expect(porComisionista).toBeGreaterThan(embudo);
     expect(porDivision).toBeGreaterThan(porComisionista);
     expect(texto()).toMatch(/ELIAS BARBA/);
     expect(texto()).toMatch(/Huevo/);
+  });
+
+  it("lleva la jerarquía escrita en cada título", () => {
+    const t = texto();
+    expect(t).toMatch(/Comisión por comisionista \(Comisionista → División → SET\)/);
+    expect(t).toMatch(/Comisión por división \(División → CEDIS → Comisionista → SET\)/);
   });
 });
 

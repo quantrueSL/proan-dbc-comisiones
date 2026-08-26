@@ -38,6 +38,12 @@ import { FiltersSidebar } from "@/components/filters-sidebar";
 import { Donut, type SegmentoDato } from "@/features/flujo-producto/flujo-piezas";
 import { COLOR_FASE, COLOR_SIN_ASIGNAR, PALETA_CATEGORIAS } from "@/features/flujo-producto/fases";
 import { BarrasVerticales, type BarraVertical } from "@/features/comisiones/comisiones-barras";
+import {
+  ComisionesCascada,
+  jerarquia,
+  NIVELES_POR_COMISIONISTA,
+  NIVELES_POR_DIVISION
+} from "@/features/comisiones/comisiones-cascada";
 import type {
   CedisRow,
   ComisionesCatalog,
@@ -612,84 +618,52 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
           </div>
         ) : null}
 
-        {report?.por_comisionista.length ? (
+        {report?.desglose.length ? (
           <section className="hydro-table-card">
             <div className="hydro-table-title">
               <div>
-                <h2>Comisión por comisionista</h2>
+                {/* La jerarquía va en el título y sale de los propios niveles:
+                    escrita a mano podría decir una cosa y la tabla hacer otra. */}
+                <h2>
+                  Comisión por comisionista{" "}
+                  <span className="cascada-jerarquia">({jerarquia(NIVELES_POR_COMISIONISTA)})</span>
+                </h2>
                 <span>
-                  {numero.format(report.por_comisionista.length)} comisionistas · ordenados por lo
-                  que se les debe
+                  {numero.format(comisionistas)} comisionistas · pulsa <b>+</b> para bajar un nivel
                 </span>
               </div>
             </div>
-            <div className="hydro-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Comisionista</th>
-                    <th className="n">Facturado</th>
-                    <th className="n">Con tarifa</th>
-                    <th className="n">Comisión devengada</th>
-                    <th className="n">Con cobro registrado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.por_comisionista.map((fila) => (
-                    <tr key={fila.comisionista ?? "sin-asignar"}>
-                      <td>{fila.comisionista ?? "Sin comisionista asignado"}</td>
-                      <td className="n">{pesos(fila.monto)}</td>
-                      <td className="n">
-                        {fila.monto ? `${decimal.format((fila.monto_calculable / fila.monto) * 100)}%` : "—"}
-                      </td>
-                      <td className="n">{pesos(fila.comision)}</td>
-                      <td className="n">{pesos(fila.comision_con_cobro)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* El CEDIS va como columna y no como nivel: un comisionista trabaja
+                normalmente en uno, así que ese nivel sería un clic para llegar a
+                un único hijo. */}
+            <ComisionesCascada
+              columnaCedis
+              encabezado="Comisionista"
+              filas={report.desglose}
+              niveles={NIVELES_POR_COMISIONISTA}
+            />
           </section>
         ) : null}
 
-        {report?.por_division.length ? (
+        {report?.desglose.length ? (
           <section className="hydro-table-card">
             <div className="hydro-table-title">
               <div>
-                <h2>Por división</h2>
-                <span>La tasa sale sobre el facturado que sí tiene tarifa, no sobre el total</span>
+                <h2>
+                  Comisión por división{" "}
+                  <span className="cascada-jerarquia">({jerarquia(NIVELES_POR_DIVISION)})</span>
+                </h2>
+                <span>
+                  La columna «con tarifa» dice qué parte del facturado llegó a tener una, no sobre el
+                  total
+                </span>
               </div>
             </div>
-            <div className="hydro-table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>División</th>
-                    <th className="n">Facturado</th>
-                    <th className="n">Con tarifa</th>
-                    <th className="n">Comisión</th>
-                    <th className="n">Tasa</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.por_division.map((fila) => (
-                    <tr key={fila.division_code ?? "sin"}>
-                      <td>{fila.division ?? fila.division_code ?? "Sin división"}</td>
-                      <td className="n">{pesos(fila.monto)}</td>
-                      <td className="n">
-                        {fila.monto ? `${decimal.format((fila.monto_calculable / fila.monto) * 100)}%` : "—"}
-                      </td>
-                      <td className="n">{pesos(fila.comision)}</td>
-                      <td className="n">
-                        {fila.monto_calculable
-                          ? `${decimal.format((fila.comision / fila.monto_calculable) * 100)}%`
-                          : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ComisionesCascada
+              encabezado="División"
+              filas={report.desglose}
+              niveles={NIVELES_POR_DIVISION}
+            />
           </section>
         ) : null}
 
