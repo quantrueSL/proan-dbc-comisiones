@@ -10993,6 +10993,18 @@ body.proan-report-assistant-open .proan-content-scroll {
   align-content: start;
 }
 
+/* El scroll es de la pantalla, no de la ventana: a partir de 1100 px la shell
+   apaga el suyo dando por hecho que cada pantalla se hace cargo del propio.
+   Sin esto, igual que le pasaba a flujo/manual/comisiones antes de su
+   arreglo, el contenido más alto que la ventana se corta sin poder bajar. */
+@media (min-width: 1100px) {
+  .hydro-page.conciliacion-pagina {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+}
+
 /* ── Titular ───────────────────────────────────────────────────────────────
    Un número, no una fila de tarjetas: los otros tres indicadores que había
    son los pasos del embudo, y repetidos arriba como cifras sueltas no dejaban
