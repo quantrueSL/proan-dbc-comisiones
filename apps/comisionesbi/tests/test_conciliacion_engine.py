@@ -11,6 +11,7 @@ from comisionesbi import conciliacion_engine, db
 def _fila(
     *,
     semana=date(2026, 8, 29),
+    periodo_fin=date(2026, 9, 4),
     comisionista="EDGARDO TRUJILLO",
     division="IA",
     cedis="Leon 1",
@@ -30,6 +31,7 @@ def _fila(
 ):
     return {
         "semana": semana,
+        "periodo_fin": periodo_fin,
         "division_code": division,
         "division": {"IA": "Alimento", "H": "Huevo", "BO": "Botana"}.get(division, division),
         "cedis": cedis,
@@ -254,6 +256,7 @@ def _fila_diaria(**extra):
     fila = _fila(**{k: v for k, v in extra.items() if k != "fecha"})
     fila["fecha"] = extra.get("fecha", date(2026, 4, 25))
     del fila["semana"]
+    del fila["periodo_fin"]
     return fila
 
 
@@ -279,6 +282,74 @@ def test_detalle_diario_pasa_los_filtros_como_parametros(cliente):
     falso = cliente([_fila_diaria()])
 
     conciliacion_engine.detalle_diario(
+        division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+    )
+
+    _, config = falso.llamadas[0]
+    valores = {p.name: p.value for p in config.query_parameters}
+    assert valores["division"] == "IA"
+    assert valores["comisionista"] == "EDGARDO TRUJILLO"
+
+
+# ─── Detalle de factura (trazabilidad máxima, con cobro) ──────────────────
+
+
+def _fila_factura(*, billing_document="2071163278", item_number="1", fecha=date(2026, 4, 25), se_cobro=False,
+                   monto_cobrado=None, cantidad_cobrada=None, comision_cobrada=None, fecha_cobro=None, **extra):
+    fila = _fila(**{k: v for k, v in extra.items() if k not in ("fecha", "semana")})
+    del fila["semana"]
+    del fila["periodo_fin"]
+    fila.update(
+        billing_document=billing_document,
+        item_number=item_number,
+        fecha=fecha,
+        se_cobro=se_cobro,
+        monto_cobrado=monto_cobrado,
+        cantidad_cobrada=cantidad_cobrada,
+        comision_cobrada=comision_cobrada,
+        fecha_cobro=fecha_cobro,
+    )
+    return fila
+
+
+def test_detalle_factura_trae_billing_document_e_item_number(cliente):
+    cliente([_fila_factura(billing_document="2071163278", item_number="1")])
+
+    filas = conciliacion_engine.detalle_factura(
+        division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+    )
+
+    assert filas[0]["billing_document"] == "2071163278"
+    assert filas[0]["item_number"] == "1"
+
+
+def test_detalle_factura_trae_cobro_por_linea(cliente):
+    # A diferencia de diario/semanal, esta sí trae cobro -- es la excepción a
+    # propósito a "en pausa perseguir cobro".
+    cliente(
+        [
+            _fila_factura(se_cobro=True, monto_cobrado=1000.0, comision_cobrada=40.0, fecha_cobro=date(2026, 5, 5)),
+            _fila_factura(billing_document="2071163279", se_cobro=False),
+        ]
+    )
+
+    filas = conciliacion_engine.detalle_factura(
+        division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+    )
+
+    cobrada = next(f for f in filas if f["se_cobro"])
+    sin_cobrar = next(f for f in filas if not f["se_cobro"])
+    assert cobrada["monto_cobrado"] == 1000.0
+    assert cobrada["comision_cobrada"] == 40.0
+    assert cobrada["fecha_cobro"] == "2026-05-05"
+    assert sin_cobrar["monto_cobrado"] is None
+    assert sin_cobrar["fecha_cobro"] is None
+
+
+def test_detalle_factura_pasa_los_filtros_como_parametros(cliente):
+    falso = cliente([_fila_factura()])
+
+    conciliacion_engine.detalle_factura(
         division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 

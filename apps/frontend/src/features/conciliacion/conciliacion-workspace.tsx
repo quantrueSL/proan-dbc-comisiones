@@ -25,6 +25,7 @@ import { FiltersSidebar } from "@/components/filters-sidebar";
 import type {
   ConciliacionDetalleRow,
   ConciliacionDiarioRow,
+  ConciliacionFacturaRow,
   ConciliacionFilters,
   ConciliacionPorComisionista,
   ConciliacionResponse
@@ -90,69 +91,79 @@ function compararCantidadDescNulosAlFinal(a: number | null, b: number | null): n
 
 const AZUL_MARCA = "FF3D3D7C"; // mismo azul que el resto de la pantalla de comisiones
 const GRIS_ZEBRA = "FFF3F4F6";
+const GRIS_TOTAL = "FFE5E7EB";
 const BLANCO = "FFFFFFFF";
 
-type ColumnaExcel = { encabezado: string; ancho: number; alinear?: "left" | "right"; formato?: string };
-
-/** Mismas columnas en las dos hojas del libro -- solo cambia el rótulo de la
- *  primera (Periodo/Fecha), por eso es una función y no una constante. */
-function columnasExcel(etiquetaPrimeraColumna: string): ColumnaExcel[] {
-  return [
-    { encabezado: etiquetaPrimeraColumna, ancho: 13 },
-    { encabezado: "CEDIS", ancho: 16 },
-    { encabezado: "Oficina", ancho: 10 },
-    { encabezado: "Tipo de venta", ancho: 16 },
-    { encabezado: "Material", ancho: 13 },
-    { encabezado: "Descripción", ancho: 32 },
-    { encabezado: "Cantidad vendida", ancho: 16, alinear: "right", formato: "#,##0.00" },
-    { encabezado: "Unidad vendida", ancho: 12 },
-    { encabezado: "Cantidad base", ancho: 15, alinear: "right", formato: "#,##0.00" },
-    { encabezado: "Unidad base", ancho: 11 },
-    { encabezado: "Tarifa", ancho: 11, alinear: "right", formato: '"$"#,##0.00' },
-    { encabezado: "Comisión", ancho: 13, alinear: "right", formato: '"$"#,##0.00' },
-    { encabezado: "Importe facturado", ancho: 17, alinear: "right", formato: '"$"#,##0.00' }
-  ];
-}
-
-type FilaComun = {
-  cedis: string | null;
-  oficina: string | null;
-  tipo_venta: string | null;
-  matnr: string;
-  descripcion: string | null;
-  cantidad_venta_total: number | null;
-  unidad_venta: string | null;
-  cantidad_base_total: number | null;
-  base_unidad: string | null;
-  tarifa: number | null;
-  comision_total: number;
-  monto_total: number;
+/** `sumable` decide si la columna lleva fórmula `SUBTOTAL` en la fila de
+ *  total -- tarifa, por ejemplo, no se suma (es una tasa, no una cantidad). */
+type ColumnaExcel = {
+  encabezado: string;
+  ancho: number;
+  alinear?: "left" | "right";
+  formato?: string;
+  sumable?: boolean;
 };
 
+/** 1 -> "A", 2 -> "B", ..., 27 -> "AA". Para escribir rangos de fórmula
+ *  (`SUBTOTAL(109,G6:G40)`) sin hardcodear letras de columna. */
+function columnaLetra(indice: number): string {
+  let n = indice;
+  let letra = "";
+  while (n > 0) {
+    const resto = (n - 1) % 26;
+    letra = String.fromCharCode(65 + resto) + letra;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letra;
+}
+
+const MONEDA = '"$"#,##0.00';
+const NUMERO2 = "#,##0.00";
+
+/** Las columnas de producto/tarifa/comisión que comparten las tres hojas —
+ *  cada una las antecede o las sigue con lo que la distingue (periodo/fecha
+ *  al inicio, factura+línea+cobro al final en la de detalle de factura). */
+const COLUMNAS_PRODUCTO: ColumnaExcel[] = [
+  { encabezado: "CEDIS", ancho: 16 },
+  { encabezado: "Oficina", ancho: 10 },
+  { encabezado: "Tipo de venta", ancho: 16 },
+  { encabezado: "Material", ancho: 13 },
+  { encabezado: "Descripción", ancho: 32 },
+  { encabezado: "Cantidad vendida", ancho: 16, alinear: "right", formato: NUMERO2, sumable: true },
+  { encabezado: "Unidad vendida", ancho: 12 },
+  { encabezado: "Cantidad base", ancho: 15, alinear: "right", formato: NUMERO2, sumable: true },
+  { encabezado: "Unidad base", ancho: 11 },
+  { encabezado: "Tarifa", ancho: 11, alinear: "right", formato: MONEDA },
+  { encabezado: "Comisión", ancho: 13, alinear: "right", formato: MONEDA, sumable: true },
+  { encabezado: "Importe facturado", ancho: 17, alinear: "right", formato: MONEDA, sumable: true }
+];
+
 /** Una hoja del libro: encabezado con color de marca, título con comisionista
- *  /división/periodo, bandas de color cada dos filas y fila de total -- para
- *  que se pueda entregar tal cual a Hacienda, no un volcado plano de datos.
- *  `etiquetaPeriodo(fila)` saca el valor de la primera columna (el periodo
- *  agregado en la hoja de conciliación, la fecha exacta en la de detalle
- *  diario): es lo único que distingue a las dos hojas del libro. */
-function agregarHoja<T extends FilaComun>(
+ *  /división/periodo, bandas de color cada dos filas y una fila de TOTAL con
+ *  fórmulas `SUBTOTAL` -- a diferencia de una suma fija, esta sí cambia si se
+ *  filtra la hoja en Excel (autofiltro ya puesto), que es justo lo que hacía
+ *  confuso el total fijo de antes. Va pegada al encabezado (fila 5, congelada
+ *  junto con él) para verse siempre, no al final de cientos de filas. */
+function agregarHoja<T>(
   libro: import("exceljs").Workbook,
   opciones: {
     nombreHoja: string;
     tituloPrincipal: string;
     subtitulo: string;
-    etiquetaPrimeraColumna: string;
-    etiquetaPeriodo: (fila: T) => string;
+    columnas: ColumnaExcel[];
+    valores: (fila: T) => (string | number | boolean | null)[];
     filas: T[];
   }
 ) {
-  const columnas = columnasExcel(opciones.etiquetaPrimeraColumna);
-  const hoja = libro.addWorksheet(opciones.nombreHoja, { views: [{ state: "frozen", ySplit: 4 }] });
+  const { columnas, filas } = opciones;
+  const hoja = libro.addWorksheet(opciones.nombreHoja, { views: [{ state: "frozen", ySplit: 5 }] });
   hoja.columns = columnas.map((c) => ({ width: c.ancho }));
 
   const FILA_TITULO = 1;
   const FILA_SUBTITULO = 2;
   const FILA_ENCABEZADO = 4;
+  const FILA_TOTAL = 5;
+  const FILA_DATOS = 6;
   const numColumnas = columnas.length;
 
   hoja.mergeCells(FILA_TITULO, 1, FILA_TITULO, numColumnas);
@@ -177,23 +188,32 @@ function agregarHoja<T extends FilaComun>(
   filaEncabezado.height = 20;
   hoja.autoFilter = { from: { row: FILA_ENCABEZADO, column: 1 }, to: { row: FILA_ENCABEZADO, column: numColumnas } };
 
-  opciones.filas.forEach((f, indice) => {
-    const valores = [
-      opciones.etiquetaPeriodo(f),
-      f.cedis ?? "",
-      f.oficina ?? "",
-      f.tipo_venta ?? "",
-      f.matnr,
-      f.descripcion ?? "",
-      f.cantidad_venta_total,
-      f.unidad_venta ?? "",
-      f.cantidad_base_total,
-      f.base_unidad ?? "",
-      f.tarifa,
-      f.comision_total,
-      f.monto_total
-    ];
-    const fila = hoja.getRow(FILA_ENCABEZADO + 1 + indice);
+  // Fila de total: SUBTOTAL(109, ...) ignora las filas que el autofiltro deje
+  // ocultas, así que el número siempre coincide con lo que se está viendo, no
+  // con el total original. 109 = SUMA, variante que además ignora filas
+  // ocultas a mano (no solo filtradas), por si acaso.
+  const filaTotal = hoja.getRow(FILA_TOTAL);
+  const primeraFilaDatos = FILA_DATOS;
+  const ultimaFilaDatos = FILA_DATOS + filas.length - 1;
+  columnas.forEach((columna, indice) => {
+    const celda = filaTotal.getCell(indice + 1);
+    if (columna.sumable && filas.length) {
+      const col = columnaLetra(indice + 1);
+      celda.value = { formula: `SUBTOTAL(109,${col}${primeraFilaDatos}:${col}${ultimaFilaDatos})` };
+      if (columna.formato) celda.numFmt = columna.formato;
+    } else if (indice === 0) {
+      celda.value = "TOTAL";
+    }
+    celda.font = { bold: true };
+    celda.alignment = { horizontal: columna.alinear ?? "left" };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GRIS_TOTAL } };
+    celda.border = { top: { style: "thin", color: { argb: "FF9CA3AF" } }, bottom: { style: "thin", color: { argb: "FF9CA3AF" } } };
+  });
+  filaTotal.height = 20;
+
+  filas.forEach((f, indice) => {
+    const valores = opciones.valores(f);
+    const fila = hoja.getRow(FILA_DATOS + indice);
     valores.forEach((valor, columnaIndice) => {
       const columna = columnas[columnaIndice];
       const celda = fila.getCell(columnaIndice + 1);
@@ -203,32 +223,14 @@ function agregarHoja<T extends FilaComun>(
       if (indice % 2 === 1) celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: GRIS_ZEBRA } };
     });
   });
-
-  const filaTotal = hoja.getRow(FILA_ENCABEZADO + 1 + opciones.filas.length);
-  const totalComision = opciones.filas.reduce((suma, f) => suma + f.comision_total, 0);
-  const totalMonto = opciones.filas.reduce((suma, f) => suma + f.monto_total, 0);
-  const celdaEtiqueta = filaTotal.getCell(numColumnas - 2);
-  celdaEtiqueta.value = "TOTAL";
-  celdaEtiqueta.font = { bold: true };
-  celdaEtiqueta.alignment = { horizontal: "right" };
-  const celdaComision = filaTotal.getCell(numColumnas - 1);
-  celdaComision.value = totalComision;
-  celdaComision.numFmt = '"$"#,##0.00';
-  celdaComision.font = { bold: true };
-  const celdaMonto = filaTotal.getCell(numColumnas);
-  celdaMonto.value = totalMonto;
-  celdaMonto.numFmt = '"$"#,##0.00';
-  celdaMonto.font = { bold: true };
-  for (let c = 1; c <= numColumnas; c++) {
-    filaTotal.getCell(c).border = { top: { style: "thin", color: { argb: "FF9CA3AF" } } };
-  }
 }
 
-/** El libro completo: la hoja de conciliación (por periodo de pago, lo que
- *  ella compara contra su factura) y una segunda hoja de detalle día por día
- *  -- la transparencia para el borde de mes, ver la cabecera del archivo.
- *  `exceljs` se importa dinámico: es una librería pesada que solo hace falta
- *  al pulsar el botón. */
+/** El libro completo: conciliación por periodo de pago (lo que ella compara
+ *  contra su factura), detalle día por día (transparencia del borde de mes) y
+ *  detalle de línea de factura real, con cobro (trazabilidad máxima -- y de
+ *  donde saldrá el cálculo el día que se pueda usar lo cobrado en vez de lo
+ *  facturado). `exceljs` se importa dinámico: es una librería pesada que solo
+ *  hace falta al pulsar el botón. */
 async function construirExcel(datos: {
   comisionista: string;
   division: string;
@@ -236,6 +238,7 @@ async function construirExcel(datos: {
   hasta: string;
   filas: ConciliacionDetalleRow[];
   filasDiarias: ConciliacionDiarioRow[];
+  filasFactura: ConciliacionFacturaRow[];
 }): Promise<Blob> {
   const ExcelJS = (await import("exceljs")).default;
   const libro = new ExcelJS.Workbook();
@@ -244,12 +247,40 @@ async function construirExcel(datos: {
 
   const subtitulo = `Del ${datos.desde} al ${datos.hasta} · generado el ${new Date().toLocaleDateString("es-MX")}`;
 
+  const valoresProducto = (f: {
+    cedis: string | null;
+    oficina: string | null;
+    tipo_venta: string | null;
+    matnr: string;
+    descripcion: string | null;
+    cantidad_venta_total: number | null;
+    unidad_venta: string | null;
+    cantidad_base_total: number | null;
+    base_unidad: string | null;
+    tarifa: number | null;
+    comision_total: number;
+    monto_total: number;
+  }) => [
+    f.cedis ?? "",
+    f.oficina ?? "",
+    f.tipo_venta ?? "",
+    f.matnr,
+    f.descripcion ?? "",
+    f.cantidad_venta_total,
+    f.unidad_venta ?? "",
+    f.cantidad_base_total,
+    f.base_unidad ?? "",
+    f.tarifa,
+    f.comision_total,
+    f.monto_total
+  ];
+
   agregarHoja(libro, {
     nombreHoja: "Conciliación",
     tituloPrincipal: `Conciliación de comisión — ${datos.comisionista} · ${datos.division}`,
     subtitulo,
-    etiquetaPrimeraColumna: "Periodo",
-    etiquetaPeriodo: (f: ConciliacionDetalleRow) => f.semana,
+    columnas: [{ encabezado: "Periodo", ancho: 24 }, ...COLUMNAS_PRODUCTO],
+    valores: (f: ConciliacionDetalleRow) => [`${f.semana} - ${f.periodo_fin}`, ...valoresProducto(f)],
     filas: datos.filas
   });
 
@@ -257,9 +288,47 @@ async function construirExcel(datos: {
     nombreHoja: "Detalle diario",
     tituloPrincipal: `Detalle diario — ${datos.comisionista} · ${datos.division}`,
     subtitulo: `${subtitulo} · el periodo de arriba se corta en fin de mes, esta hoja lo verifica día por día`,
-    etiquetaPrimeraColumna: "Fecha",
-    etiquetaPeriodo: (f: ConciliacionDiarioRow) => f.fecha,
+    columnas: [{ encabezado: "Fecha", ancho: 13 }, ...COLUMNAS_PRODUCTO],
+    valores: (f: ConciliacionDiarioRow) => [f.fecha, ...valoresProducto(f)],
     filas: datos.filasDiarias
+  });
+
+  agregarHoja(libro, {
+    nombreHoja: "Detalle de factura",
+    tituloPrincipal: `Detalle de factura — ${datos.comisionista} · ${datos.division}`,
+    subtitulo: `${subtitulo} · una fila por factura real, con su estado de cobro`,
+    columnas: [
+      { encabezado: "Factura", ancho: 13 },
+      { encabezado: "Línea", ancho: 8 },
+      { encabezado: "Fecha", ancho: 13 },
+      ...COLUMNAS_PRODUCTO,
+      { encabezado: "Cobrada", ancho: 10 },
+      { encabezado: "Importe cobrado", ancho: 16, alinear: "right", formato: MONEDA, sumable: true },
+      { encabezado: "Comisión cobrada", ancho: 16, alinear: "right", formato: MONEDA, sumable: true },
+      { encabezado: "Fecha de cobro", ancho: 13 }
+    ],
+    valores: (f: ConciliacionFacturaRow) => [
+      f.billing_document,
+      f.item_number,
+      f.fecha,
+      f.cedis ?? "",
+      f.oficina ?? "",
+      f.tipo_venta ?? "",
+      f.matnr,
+      f.descripcion ?? "",
+      f.cantidad_venta,
+      f.unidad_venta ?? "",
+      f.cantidad_base,
+      f.base_unidad ?? "",
+      f.tarifa,
+      f.comision,
+      f.monto,
+      f.se_cobro ? "Sí" : "No",
+      f.monto_cobrado,
+      f.comision_cobrada,
+      f.fecha_cobro ?? ""
+    ],
+    filas: datos.filasFactura
   });
 
   const buffer = await libro.xlsx.writeBuffer();
@@ -371,33 +440,47 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
     const div = seleccion.division_code ?? "sd";
     setExportando(true);
     try {
-      // El detalle diario se pide aparte, solo al exportar: es la misma
-      // combinación comisionista+división+periodo, sin agregar por periodo de
-      // pago -- la segunda hoja del Excel (ver construirExcel).
-      const respuestaDiaria = await fetch("/api/comisionesbi/reconciliation/diario", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          division: seleccion.division_code,
-          comisionista: seleccion.comisionista,
-          start_date: desde,
-          end_date: hasta
-        } satisfies ConciliacionFilters)
-      });
-      const payloadDiario = (await respuestaDiaria.json().catch(() => null)) as
-        | ConciliacionDiarioRow[]
-        | { detail?: string }
-        | null;
-      if (!respuestaDiaria.ok) {
-        const detalle = payloadDiario && !Array.isArray(payloadDiario) ? payloadDiario.detail : undefined;
-        throw new Error(detalle || "No se pudo generar el detalle diario.");
-      }
-      const filasDiarias = (Array.isArray(payloadDiario) ? payloadDiario : [])
-        .slice()
-        .sort((a, b) => {
-          if (a.fecha !== b.fecha) return a.fecha < b.fecha ? -1 : 1;
-          return compararConNulosAlFinal(a.cedis, b.cedis) || compararConNulosAlFinal(a.oficina, b.oficina);
+      // El detalle diario y el de factura se piden aparte, solo al exportar:
+      // es la misma combinación comisionista+división+periodo, sin agregar --
+      // la segunda y tercera hoja del Excel (ver construirExcel).
+      const filtro: ConciliacionFilters = {
+        division: seleccion.division_code,
+        comisionista: seleccion.comisionista,
+        start_date: desde,
+        end_date: hasta
+      };
+      async function pedir<T>(ruta: string, mensajeError: string): Promise<T[]> {
+        const respuesta = await fetch(ruta, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(filtro)
         });
+        const payload = (await respuesta.json().catch(() => null)) as T[] | { detail?: string } | null;
+        if (!respuesta.ok) {
+          const detalle = payload && !Array.isArray(payload) ? payload.detail : undefined;
+          throw new Error(detalle || mensajeError);
+        }
+        return Array.isArray(payload) ? payload : [];
+      }
+
+      const [filasDiariasCrudas, filasFacturaCrudas] = await Promise.all([
+        pedir<ConciliacionDiarioRow>("/api/comisionesbi/reconciliation/diario", "No se pudo generar el detalle diario."),
+        pedir<ConciliacionFacturaRow>("/api/comisionesbi/reconciliation/factura", "No se pudo generar el detalle de factura.")
+      ]);
+
+      const filasDiarias = filasDiariasCrudas.slice().sort((a, b) => {
+        if (a.fecha !== b.fecha) return a.fecha < b.fecha ? -1 : 1;
+        return compararConNulosAlFinal(a.cedis, b.cedis) || compararConNulosAlFinal(a.oficina, b.oficina);
+      });
+      const filasFactura = filasFacturaCrudas.slice().sort((a, b) => {
+        if (a.fecha !== b.fecha) return a.fecha < b.fecha ? -1 : 1;
+        return (
+          compararConNulosAlFinal(a.cedis, b.cedis) ||
+          compararConNulosAlFinal(a.oficina, b.oficina) ||
+          a.billing_document.localeCompare(b.billing_document) ||
+          a.item_number.localeCompare(b.item_number)
+        );
+      });
 
       const blob = await construirExcel({
         comisionista: nombreComisionista(seleccion.comisionista),
@@ -407,7 +490,8 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
         desde,
         hasta,
         filas: detalleSeleccion,
-        filasDiarias
+        filasDiarias,
+        filasFactura
       });
       descargarBlob(`conciliacion_${nombreArchivo}_${div}_${desde}_${hasta}.xlsx`, blob);
     } catch (cause) {
@@ -615,13 +699,13 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                         agosto de 2026" y una descripción larga de producto se
                         desbordaban una encima de otra y no se leía nada. */}
                     <colgroup>
-                      <col style={{ width: "9%" }} />
-                      <col style={{ width: "11%" }} />
-                      <col style={{ width: "8%" }} />
                       <col style={{ width: "13%" }} />
-                      <col style={{ width: "24%" }} />
                       <col style={{ width: "10%" }} />
-                      <col style={{ width: "10%" }} />
+                      <col style={{ width: "8%" }} />
+                      <col style={{ width: "12%" }} />
+                      <col style={{ width: "21%" }} />
+                      <col style={{ width: "9%" }} />
+                      <col style={{ width: "9%" }} />
                       <col style={{ width: "7%" }} />
                       <col style={{ width: "10%" }} />
                     </colgroup>
@@ -641,7 +725,9 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                     <tbody>
                       {detalleSeleccion.map((d, indice) => (
                         <tr key={indice}>
-                          <td title={enPalabras(d.semana) ?? d.semana}>{semanaCorta(d.semana)}</td>
+                          <td title={`${enPalabras(d.semana) ?? d.semana} al ${enPalabras(d.periodo_fin) ?? d.periodo_fin}`}>
+                            {semanaCorta(d.semana)}–{semanaCorta(d.periodo_fin)}
+                          </td>
                           <td title={d.cedis ?? ""}>{d.cedis ?? "—"}</td>
                           <td>{d.oficina ?? "—"}</td>
                           <td title={d.tipo_venta ?? ""}>{d.tipo_venta ?? "—"}</td>

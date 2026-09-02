@@ -48,7 +48,20 @@ WITH periodo_pago AS (
         THEN DATE_TRUNC(semana_natural, MONTH)
       -- Semana normal, sin cruce en ningún lado.
       ELSE semana_natural
-    END AS periodo_inicio
+    END AS periodo_inicio,
+    -- Espejo exacto del CASE de arriba, para el otro extremo del rango -- se
+    -- pidió mostrar "inicio - fin" en vez de solo el inicio (parecía un solo
+    -- día). Probado que es constante dentro de cada grupo de periodo_inicio:
+    -- ej. 25-30 abril y 1-8 mayo dan aquí 30 abril y 8 mayo respectivamente
+    -- para TODAS sus fechas, así que agregar con ANY_VALUE es seguro.
+    CASE
+      WHEN DATE_TRUNC(semana_natural, MONTH) != DATE_TRUNC(fin_natural, MONTH)
+           AND fecha <= LAST_DAY(semana_natural)
+        THEN LAST_DAY(semana_natural)
+      WHEN DATE_TRUNC(semana_natural, MONTH) != DATE_TRUNC(fin_natural, MONTH)
+        THEN DATE_ADD(semana_natural, INTERVAL 13 DAY)
+      ELSE fin_natural
+    END AS periodo_fin
   FROM (
     SELECT DISTINCT
       fecha,
@@ -59,6 +72,7 @@ WITH periodo_pago AS (
 )
 SELECT
   pp.periodo_inicio AS semana,
+  ANY_VALUE(pp.periodo_fin) AS periodo_fin,
   d.division_code, d.division, d.cedis, d.oficina, d.comisionista, d.tipo_venta,
   d.matnr, d.descripcion, d.unidad_venta, d.base_unidad,
   -- Una sola tarifa por grupo: ya viene fija por división+oficina+SET+canal.

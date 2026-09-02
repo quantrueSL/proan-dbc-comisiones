@@ -263,6 +263,9 @@ export type ConciliacionDetalleRow = {
    *  arrancar el día 1 de un mes y durar más si absorbió los días sueltos del
    *  cierre anterior, ver ConciliacionFilters). */
   semana: string;
+  /** Fin del periodo -- para mostrar el rango completo ("inicio - fin"), no
+   *  solo el arranque, que por sí solo parece un único día. */
+  periodo_fin: string;
   division_code: string | null;
   division: string | null;
   cedis: string | null;
@@ -301,6 +304,39 @@ export type ConciliacionResponse = {
  *  aparte (no viene en `ConciliacionResponse`) porque solo hace falta al
  *  exportar UN comisionista, no en cada carga de pantalla. */
 export type ConciliacionDiarioRow = Omit<ConciliacionDetalleRow, "semana"> & { fecha: string };
+
+/** Un renglón por línea de factura real -- el nivel de trazabilidad máximo:
+ *  de la comisión calculada a la factura exacta que la compone. A diferencia
+ *  de `ConciliacionDetalleRow`/`ConciliacionDiarioRow`, sí trae cobro
+ *  (`se_cobro`/`monto_cobrado`/`comision_cobrada`): es la excepción a
+ *  propósito a "en pausa perseguir cobro" (2026-09-02) -- cuando se pueda
+ *  calcular comisión sobre lo cobrado, sale de esta fuente. */
+export type ConciliacionFacturaRow = {
+  billing_document: string;
+  item_number: string;
+  fecha: string;
+  division_code: string | null;
+  division: string | null;
+  cedis: string | null;
+  oficina: string | null;
+  comisionista: string | null;
+  tipo_venta: string | null;
+  matnr: string;
+  descripcion: string | null;
+  unidad_venta: string | null;
+  cantidad_venta: number | null;
+  base_unidad: string | null;
+  cantidad_base: number | null;
+  tarifa: number | null;
+  monto: number;
+  comision: number;
+  comision_estado: string | null;
+  se_cobro: boolean;
+  monto_cobrado: number | null;
+  cantidad_cobrada: number | null;
+  comision_cobrada: number | null;
+  fecha_cobro: string | null;
+};
 
 export const EMPTY_CONCILIACION: ConciliacionResponse = {
   cobertura: {},

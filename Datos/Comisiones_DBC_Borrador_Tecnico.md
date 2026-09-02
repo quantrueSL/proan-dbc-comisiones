@@ -385,18 +385,24 @@ La tabla de conciliación por producto (creada en sesión paralela, [`Datos/sql/
 | 25 abr - 30 abr (6 días, correcta) | $59,392.34 | $4,819.90 | 2,570.7 kg |
 | 25 abr - 1 may (7 días, la que usa la tabla) | $78,176.18 | $6,287.15 | 3,429.7 kg |
 
-El segundo renglón reproduce exacto los totales del Excel que genera esa tabla ([`pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx`](../pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx), a pesar de que el nombre del archivo dice "2026-04-30"). O sea: el archivo que le llegaría al usuario final trae un día completo de más (+31% de volumen), fecha de corte incluida en el nombre del archivo pero no en los datos. **Pendiente de corregir** en esa consulta — no se tocó porque es de otra sesión, queda documentado para que se arregle ahí.
+El segundo renglón reproduce exacto los totales del Excel que genera esa tabla ([`pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx`](../pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx), a pesar de que el nombre del archivo dice "2026-04-30"). O sea: el archivo que le llegaría al usuario final trae un día completo de más (+31% de volumen), fecha de corte incluida en el nombre del archivo pero no en los datos.
 
-### 17.4 Comparado contra una captura de una reunión del cliente — mismo CEDIS, misma tarifa, distinto volumen
+**Corregido el mismo día**, en sesión paralela: `v1_conciliacion_producto_semanal.sql` reemplazó el corte fijo de `WEEK(SATURDAY)` por una regla de corte en fin de mes (el mes que termina se queda con sábado hasta su último día; los días sueltos del mes nuevo se suman al periodo siguiente) — ver [[conciliacion_periodo_pago_fin_de_mes]]. Reproduce exacto "25 abril" a "30 abril" para este caso. Sigue siendo un supuesto de Silvana sin confirmar con el cliente, no una regla que él haya dado.
 
-Silvana compartió 2 capturas de un Excel armado a mano por el cliente en una reunión ("CALCULO DE FLORENTINO CROQUETA"), un solo CEDIS (oficina 0011). Comparado contra nuestra tabla en la ventana correcta (6 días):
+### 17.4 Comparado contra una captura de una reunión del cliente — la fecha ya cuadra, la comisión no
 
-| | Importe facturado | Comisión |
-|---|---|---|
-| Cálculo manual del cliente (captura) | $44,749.87 | $2,831.50 |
-| Nuestra tabla, oficina 0011, 6 días | $59,392.34 | $4,819.90 |
-| Diferencia | +33% | +70% |
+Silvana compartió 2 capturas de un Excel armado a mano por el cliente en una reunión ("CALCULO DE FLORENTINO CROQUETA"), un solo CEDIS (oficina 0011). Primera comparación, contra la ventana de 6 días (25-30 abril), dio +33% de más en importe y +70% en comisión — demasiado grande para ser solo tarifa, con la tarifa ya confirmada igual en ambas fuentes (WOOFI ADULTO 20 kg = 1.75).
 
-La tarifa de WOOFI ADULTO 20 kg se confirmó igual (1.75) en ambas fuentes, así que no es un problema de tarifa — es que el importe facturado ya difiere en +33% con la misma tarifa y el mismo CEDIS, lo que apunta a que el cálculo manual no incluyó todas las facturas/materiales de la semana (fue "un ss que hice en una reunión", no un cálculo cerrado). No se pudo verificar línea por línea contra la captura: la resolución de la imagen no permite leer con certeza las columnas de un renglón individual — solo los totales en negrita son confiables.
+Silvana planteó que la captura del cliente quizás cortaba el 29, no el 30. Verificado con la tabla diaria nueva (`dbc_comisiones_calculadas_cobro` por día):
 
-**Cierre de este hilo:** sin el archivo original (solo capturas) y con el detalle de BSIK agotado desde 16.3, la conciliación factura-por-factura del pago a comisionista queda como límite de datos conocido, no como bug pendiente de arreglar en nuestras consultas.
+| | Importe | Peso (cantidad base) | Comisión |
+|---|---|---|---|
+| Nuestra tabla, 25-29 abril (5 días, sin el 30) | $44,511.94 | 1,947.6 kg | $3,641.20 |
+| Captura del cliente | $44,749.87 | 1,947.10 kg | $2,831.50 |
+| Diferencia | 0.5% | ~0% | +28.6% |
+
+**Importe y peso confirman la hipótesis casi exacto** (diferencia <1%, contra el +33%/+70% de comparar contra la ventana equivocada) — la captura del cliente sí corta el 29 de abril, no el 30. Eso cierra por completo el hueco de volumen: mismas facturas, mismo material, misma tarifa.
+
+**La comisión sigue sin cuadrar, y ahora es un hueco más claro.** Con importe y peso ya alineados al mismo periodo, $3,641.20 contra $2,831.50 (confirmado por Silvana que el real es ~$2,8 mil) es una diferencia real de +28.6% que la fecha no explica — mismo patrón que 17.1/17.2 (calculado por encima del pago real en IA, allá +25.4% para la semana completa), ahora con un tercer punto de datos que apunta en la misma dirección.
+
+**Cierre de este hilo:** el desfase de fecha queda resuelto (era el 25-29 vs 25-30, no un problema de datos). El desfase de comisión no — sin el archivo original de la captura (solo imagen, resolución insuficiente para leer tarifa por línea) y con el detalle de BSIK agotado desde 16.3, la conciliación factura-por-factura del pago a comisionista sigue como límite de datos conocido, no como bug identificado en nuestras consultas.

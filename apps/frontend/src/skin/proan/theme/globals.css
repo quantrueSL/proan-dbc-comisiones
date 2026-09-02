@@ -7244,7 +7244,12 @@ body.proan-report-assistant-open .proan-content-scroll {
 .dashboard-bar-label { grid-area: label; overflow: hidden; color: #343735; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-bar-value { grid-area: value; color: #292d2c; font-weight: 750; text-align: right; white-space: nowrap; }
 .dashboard-bar-track { grid-area: track; height: 8px; border-radius: 999px; background: #f0e4d8; overflow: hidden; }
-.dashboard-bar-fill { height: 100%; border-radius: 999px; background: #3d3d7c; transition: width .2s ease; }
+/* Es un <span>, y un <span> es "inline" por defecto: un inline ignora width y
+   height. Sin este display el ancho del relleno (puesto por JS como % del
+   máximo) nunca se aplicaba, así que solo se veía el carril de fondo -- una
+   línea del mismo color y el mismo largo en todas las filas, sin relación
+   con el dato. */
+.dashboard-bar-fill { display: block; height: 100%; border-radius: 999px; background: #3d3d7c; transition: width .2s ease; }
 
 /* Tendencia mensual -- SVG línea + área, un tono; hit targets HTML aparte del SVG. */
 .dashboard-trend-wrap { position: relative; }

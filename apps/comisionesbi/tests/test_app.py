@@ -93,6 +93,26 @@ def test_reconciliation_diario_rechaza_un_rango_al_reves():
     assert response.status_code == 422
 
 
+def test_reconciliation_factura_devuelve_el_resultado_del_motor(monkeypatch):
+    monkeypatch.setattr(app_module, "detalle_factura", lambda **_: [{"billing_document": "2071163278"}])
+
+    response = client.post(
+        "/v1/comisionesbi/reconciliation/factura",
+        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista": "FLORENTINO GONZALEZ GARCIA"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"billing_document": "2071163278"}]
+
+
+def test_reconciliation_factura_rechaza_un_rango_al_reves():
+    response = client.post(
+        "/v1/comisionesbi/reconciliation/factura",
+        json={"start_date": "2026-08-31", "end_date": "2026-01-01"},
+    )
+    assert response.status_code == 422
+
+
 # ─── GET /catalog frente a fallos de BigQuery ────────────────────────────
 
 

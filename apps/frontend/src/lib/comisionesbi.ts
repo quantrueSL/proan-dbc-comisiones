@@ -6,6 +6,7 @@ import { getComisionesbiServiceUrl } from "@/lib/env";
 import type {
   ComisionesCatalog,
   ConciliacionDiarioRow,
+  ConciliacionFacturaRow,
   ConciliacionFilters,
   ConciliacionResponse,
   FlujoFilters,
@@ -86,6 +87,15 @@ export async function getComisionesReconciliation(filters: ConciliacionFilters):
  *  transparencia del Excel exportado (ver ConciliacionDiarioRow). */
 export async function getComisionesReconciliationDiario(filters: ConciliacionFilters): Promise<ConciliacionDiarioRow[]> {
   return comisionesbiFetchJson<ConciliacionDiarioRow[]>("/v1/comisionesbi/reconciliation/diario", {
+    method: "POST",
+    body: filters
+  });
+}
+
+/** Detalle a nivel línea de factura real, con cobro -- la hoja de máximo
+ *  detalle del Excel exportado (ver ConciliacionFacturaRow). */
+export async function getComisionesReconciliationFactura(filters: ConciliacionFilters): Promise<ConciliacionFacturaRow[]> {
+  return comisionesbiFetchJson<ConciliacionFacturaRow[]>("/v1/comisionesbi/reconciliation/factura", {
     method: "POST",
     body: filters
   });

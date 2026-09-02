@@ -10,7 +10,7 @@ from pydantic import BaseModel, model_validator
 
 from comisionesbi.catalog_engine import catalog as build_catalog
 from comisionesbi.comisiones_engine import build_report
-from comisionesbi.conciliacion_engine import build_conciliacion, detalle_diario
+from comisionesbi.conciliacion_engine import build_conciliacion, detalle_diario, detalle_factura
 from comisionesbi.db import BigQueryConfigError, BigQueryQueryError
 from comisionesbi.flujo_engine import build_flujo
 
@@ -172,6 +172,19 @@ def post_reconciliation_diario(body: ReconciliationQuery) -> list[dict]:
     ver conciliacion_engine.detalle_diario.
     """
     return detalle_diario(
+        division=body.division,
+        comisionista=body.comisionista,
+        start_date=body.start_date,
+        end_date=body.end_date,
+    )
+
+
+@app.post("/v1/comisionesbi/reconciliation/factura")
+def post_reconciliation_factura(body: ReconciliationQuery) -> list[dict]:
+    """Detalle a nivel línea de factura real, con cobro — la hoja de máximo
+    detalle del Excel exportado. Ver conciliacion_engine.detalle_factura.
+    """
+    return detalle_factura(
         division=body.division,
         comisionista=body.comisionista,
         start_date=body.start_date,
