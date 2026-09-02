@@ -1,17 +1,29 @@
 """Módulo 1 · Comisión — cuánto se ha devengado, y qué falta para el resto.
 
-Lee `ZZ_PRUEBAS.DBC_gold_comision_diaria`, que construye
-`data/consultas/DBC_gold_comision_diaria.sql` a partir de la vista
-`v1_comision_linea` (definida en `Datos/sql/v1_comision_dbc.sql`). No se
-consulta la vista directamente porque cada consulta escanea 0,53 GiB: filtrar en
-pantalla sobre eso sería pagar medio giga por clic. La tabla gold son ~12 MB.
+Lee `ZZ_PRUEBAS.DBC_gold_comision_diaria_v2` (`Datos/sql/v1_comision_dbc_gold_v2.sql`),
+agregado sobre `dbc_comisiones_calculadas_cobro`
+(`Datos/sql/v1_comision_dbc_completo_cobro.sql`) — reemplaza a partir del
+2026-09-01 la cadena anterior (`v1_comision_linea` → `DBC_gold_comision_diaria`,
+`data/consultas/`), validada contra ella antes del cambio (mismo total
+facturado al peso, una vez igualadas fechas). Cobertura de tarifa subió de
+~82% a ~92% del facturado en alcance. Dos pendientes conocidos, no resueltos
+por este cambio:
+  - `base_unidad`/`cantidad_base` solo vienen para H e IA (kg, vía
+    `net_weight`). Para BO/L/A siguen NULL: usar `cantidad_cajas` ahí depende
+    de que se cierre la auditoría de esa columna (sospechosa, en curso).
+  - `comisionista` sigue en NULL en el 100% de Botana y Abarrotes —
+    `DBC_dim_almacen_oficina` no trae `persona` para esas 2 divisiones. Con la
+    tarifa nueva Botana pasó de 0,2% a 87,6% de cobertura, así que este hueco
+    ahora es mucho más visible en pantalla que antes.
+Las 4 oficinas de venta directa/bodega (0001/0174/0175/0181, ~$51 M) ya NO
+cuentan en `monto_total`: se excluyen desde el origen (antes se incluían y se
+marcaban como bloqueadas). No se consulta la tabla base directamente porque
+cada consulta escanea varios GiB: filtrar en pantalla sobre eso sería pagar
+de más por clic. La tabla gold son unos MB.
 
 ESTE MÓDULO DEVUELVE UN NÚMERO INCOMPLETO, Y ESO NO ES UN FALLO
-Hoy alrededor del 58% del facturado en alcance llega a tener tarifa aplicable.
-El resto está bloqueado por cosas concretas que el cliente tiene que contestar,
-y la mayor con diferencia es cuál de sus dos hojas de tarifas de botana está
-vigente: son $174 M de facturado cuya comisión está entre $13,7 M y $20,2 M. La
-respuesta trae por eso dos bloques que hay que leer juntos:
+El resto está bloqueado por cosas concretas que el cliente tiene que contestar.
+La respuesta trae por eso dos bloques que hay que leer juntos:
 
   `totales`   lo devengado, y sobre cuánto facturado se ha podido calcular.
   `bloqueado` por qué el resto no entra, cuánto factura cada motivo, y cuánto
@@ -26,19 +38,19 @@ TRES COSAS QUE NO SON EVIDENTES:
 1. LA COMISIÓN SE CALCULA SOBRE LO FACTURADO, aunque se pague sobre lo cobrado.
    No es una decisión de diseño sino de datos: `sap_pago` da una fila por
    factura, sin material, así que sobre lo cobrado no hay SET y no hay tarifa
-   posible. Además esa fuente solo ve el 27% del importe facturado, con un
-   ratio plano en los ocho meses de 2026 — si fuera retraso de cobro, enero
-   estaría muy por encima de agosto, y está igual. Por eso `comision_con_cobro`
-   se devuelve aparte y NO se llama "pagable": es el suelo conocido.
+   posible. `comision_cobrada`/`monto_cobrado` sí vienen prorrateados por línea
+   (no por documento completo, ver `v1_comision_dbc_completo_cobro.sql`), pero
+   `sap_pago` sigue sin ver todo el cobro real — por eso NO se llaman
+   "pagable": son el suelo conocido.
 
-2. `cantidad_base` MEZCLA KILOS Y CAJAS si se suma entre divisiones. Huevo se
-   comisiona por kilo y el resto por caja (ver `dim_base_comision_v1`), así que
-   la cantidad viaja siempre desglosada por `base_unidad` y nunca como un total
-   único. El importe y la comisión sí se suman: son pesos.
+2. `cantidad_base` MEZCLA KILOS Y CAJAS si se suma entre divisiones. Hoy solo
+   viene para H e IA (kg, confirmado). BO/L/A vienen con `base_unidad` NULL a
+   propósito — pendiente de la auditoría de `cantidad_cajas` — así que su
+   comisión SÍ está calculada pero sin cantidad que mostrar todavía.
 
-3. LO QUE ESTÁ EN CONFLICTO NO SE INVENTA. Donde las dos hojas de tarifas del
-   cliente se contradicen, la comisión es NULL y en su lugar viaja una horquilla
-   (`comision_min`/`comision_max`). Botana tiene 619 llaves así.
+3. `comision_min`/`comision_max` (horquilla de tarifas en conflicto) ya no
+   aplican con esta fuente: verificado que las tablas de tarifa oficial
+   (`proan_ZTSD_OV_COM_*`) no traen llaves duplicadas. Vienen siempre NULL.
 """
 
 from __future__ import annotations
@@ -48,7 +60,7 @@ from datetime import date
 
 from comisionesbi.db import run_query
 
-_TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria`"
+_TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 
 # Mismo patrón que flujo_engine: `(@x IS NULL OR columna = @x)` para que un solo
 # SQL sirva a todas las combinaciones de filtro sin construir la cadena a trozos.

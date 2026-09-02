@@ -10,7 +10,7 @@ from pydantic import BaseModel, model_validator
 
 from comisionesbi.catalog_engine import catalog as build_catalog
 from comisionesbi.comisiones_engine import build_report
-from comisionesbi.conciliacion_engine import build_reconciliation
+from comisionesbi.conciliacion_engine import build_conciliacion, detalle_diario
 from comisionesbi.db import BigQueryConfigError, BigQueryQueryError
 from comisionesbi.flujo_engine import build_flujo
 
@@ -73,9 +73,19 @@ class ReportQuery(BaseModel):
 
 
 class ReconciliationQuery(BaseModel):
-    provider_id: str | None = None
-    start_period: str
-    end_period: str
+    """Fechas de verdad: la tabla gold de conciliación es por periodo de pago
+    (normalmente sáb-vie, pero no siempre — ver v1_conciliacion_producto_semanal.sql)."""
+
+    division: str | None = None
+    comisionista: str | None = None
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def _rango_coherente(self) -> "ReconciliationQuery":
+        if self.start_date > self.end_date:
+            raise ValueError("start_date no puede ser posterior a end_date.")
+        return self
 
 
 class FlujoQuery(BaseModel):
@@ -145,9 +155,25 @@ def post_report(body: ReportQuery) -> dict:
 
 @app.post("/v1/comisionesbi/reconciliation")
 def post_reconciliation(body: ReconciliationQuery) -> dict:
-    """Módulo de conciliación documental — ver conciliacion_engine.py (bloqueado)."""
-    return build_reconciliation(
-        provider_id=body.provider_id,
-        start_period=body.start_period,
-        end_period=body.end_period,
+    """Conciliación por comisionista, detalle por producto — ver conciliacion_engine.py."""
+    return build_conciliacion(
+        division=body.division,
+        comisionista=body.comisionista,
+        start_date=body.start_date,
+        end_date=body.end_date,
+    )
+
+
+@app.post("/v1/comisionesbi/reconciliation/diario")
+def post_reconciliation_diario(body: ReconciliationQuery) -> list[dict]:
+    """Detalle día por día, para la pestaña de transparencia del Excel exportado.
+
+    Mismo filtro que /reconciliation, pero sin agregar por periodo de pago —
+    ver conciliacion_engine.detalle_diario.
+    """
+    return detalle_diario(
+        division=body.division,
+        comisionista=body.comisionista,
+        start_date=body.start_date,
+        end_date=body.end_date,
     )

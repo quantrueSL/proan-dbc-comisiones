@@ -6848,6 +6848,25 @@ body.proan-report-assistant-open .proan-content-scroll {
 .hydro-pagination { display: flex; justify-content: center; align-items: center; gap: 12px; border-top: 1px solid #e2e8f0; padding: 12px; font-size: 13px; }.hydro-pagination button { padding: 7px 10px; }
 .hydro-error { margin: 0; border-radius: 8px; background: #fef2f2; color: #b91c1c; padding: 11px 13px; }.hydro-empty, .hydro-muted { color: #64748b; padding: 16px; }
 .hydro-detail { position: fixed; z-index: 20; top: 0; right: 0; width: min(480px, 100vw); height: 100vh; overflow-y: auto; background: #fff; box-shadow: -10px 0 32px rgba(15, 23, 42, .2); }.hydro-detail-header { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #e2e8f0; padding: 22px; }.hydro-detail-header p { margin: 0; color: #64748b; font-size: 12px; }.hydro-detail-header h2 { margin: 4px 0 0; }.hydro-detail-header button { border: 0; background: transparent; color: #475569; cursor: pointer; font-size: 30px; line-height: 1; }.hydro-detail-body { display: grid; gap: 20px; padding: 22px; }.hydro-detail-body h3 { margin: 0 0 10px; font-size: 15px; }.hydro-detail-body dl { display: grid; grid-template-columns: minmax(110px, .8fr) minmax(0, 1.4fr); gap: 8px 12px; margin: 0; font-size: 13px; }.hydro-detail-body dt { color: #64748b; }.hydro-detail-body dd { margin: 0; overflow-wrap: anywhere; }.hydro-uuid { font-family: monospace; font-size: 11px; }
+/* Conciliación: el panel trae una tabla de 9 columnas (semana, CEDIS, oficina,
+   tipo de venta, producto, cantidades, tarifa, comisión) -- a 480px no se lee. */
+/* Selector compuesto (2 clases) a propósito: más abajo en este mismo archivo
+   (línea ~7120) el tema de Proan REDEFINE `.hydro-detail` como modal centrado
+   con `width: min(660px, ...)` -- misma especificidad que un solo `.hydro-
+   detail--conciliacion`, y esa regla gana por venir después en el archivo. Con
+   las dos clases juntas la especificidad es mayor y esto gana pase lo que
+   pase, sin depender del orden. Esto era la causa real del panel angosto, no
+   el `backdrop-filter` que se sospechó antes. */
+.hydro-detail.hydro-detail--conciliacion { width: min(1700px, 96vw); max-height: min(900px, calc(100vh - 72px)); }
+/* `table-layout: fixed` + `<colgroup>` (en el componente) en vez de auto: con
+   auto, un nombre de comisionista o una descripción de producto largos hacían
+   que el navegador repartiera el ancho mal y una columna se pintaba encima de
+   la vecina -- visto en producción, no una hipótesis. `overflow: hidden` +
+   elipsis en vez de desbordar: si no cabe, se corta y se ve entero en el título
+   (tooltip) del navegador, nunca se monta sobre la celda de al lado. */
+.conciliacion-tabla-fija { table-layout: fixed; }
+.conciliacion-tabla-fija th, .conciliacion-tabla-fija td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conciliacion-tabla-fija td.conciliacion-col-ancha { white-space: normal; overflow-wrap: anywhere; }
 /* ── Comisiones ─────────────────────────────────────────────────────────
    La nota bajo el indicador existe para una cifra concreta: "con cobro
    registrado" se lee como "lo que hay que pagar" si no se dice lo contrario,
@@ -10956,6 +10975,18 @@ body.proan-report-assistant-open .proan-content-scroll {
 .comisiones-cabecera { grid-template-columns: minmax(0, 1fr) auto; gap: 24px; padding: 2px 10px 2px 2px; }
 .comisiones-cabecera .operational-summary-title h1 { font-size: clamp(19px, 1.5vw, 24px); }
 .comisiones-cabecera .operational-summary-title span { max-width: 470px; }
+
+/* Conciliación: mismo problema que Comisiones arriba -- la fila de 94px fija
+   de `.hydro-page:has(> .operational-summary)` está pensada para una cabecera
+   de una sola línea de descripción, y aquí la cabecera trae etiqueta + título
+   + descripción de dos líneas + el periodo activo debajo: no cabe en 94px y
+   se monta sobre la tabla de comisionistas. Mismo arreglo: cada fila mide su
+   contenido y se apilan desde arriba. */
+.hydro-page.conciliacion-pagina {
+  grid-template-rows: none;
+  grid-auto-rows: min-content;
+  align-content: start;
+}
 
 /* ── Titular ───────────────────────────────────────────────────────────────
    Un número, no una fila de tarjetas: los otros tres indicadores que había

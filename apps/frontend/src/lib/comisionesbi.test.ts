@@ -124,12 +124,13 @@ describe("cómo se llama al backend", () => {
   });
 
   it("manda la conciliación a su propia ruta", async () => {
-    responde(200, { filas: [] });
+    responde(200, { por_comisionista: [], detalle: [] });
 
     await getComisionesReconciliation({
-      provider_id: null,
-      start_period: "2026-01-01",
-      end_period: "2026-01-31"
+      division: null,
+      comisionista: null,
+      start_date: "2026-08-01",
+      end_date: "2026-08-31"
     });
 
     expect(fetchMock.mock.calls[0][0]).toBe("http://localhost:8091/v1/comisionesbi/reconciliation");
@@ -143,13 +144,14 @@ describe("cómo se llama al backend", () => {
 
 describe("errores", () => {
   it("distingue el 501 de módulo bloqueado y conserva el motivo del backend", async () => {
-    // Comisiones ya no devuelve 501 —calcula desde el 25/08/2026—, pero
-    // conciliación sí, y el mecanismo tiene que seguir funcionando: la página
-    // enseña por qué está bloqueado, no un "algo salió mal".
+    // Ningún módulo devuelve 501 hoy (comisiones desde el 25/08, conciliación
+    // desde el 02/09), pero el mecanismo se queda: si algún día vuelve a hacer
+    // falta bloquear un módulo, la página tiene que poder seguir enseñando el
+    // motivo en vez de un "algo salió mal" genérico.
     responde(501, { detail: "Falta explorar FBL1N / sap_bsik_open_items." });
 
     await expect(
-      getComisionesReconciliation({ provider_id: null, start_period: "2026-01-01", end_period: "2026-01-31" })
+      getComisionesReconciliation({ division: null, comisionista: null, start_date: "2026-08-01", end_date: "2026-08-31" })
     ).rejects.toThrow("Falta explorar FBL1N / sap_bsik_open_items.");
   });
 

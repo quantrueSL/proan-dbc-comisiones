@@ -2,6 +2,14 @@
 
 _Ajustar destinatario, saludo y firma antes de enviar._
 
+> **Antes de enviar (nota del 1 de septiembre de 2026): la mitad de esta lista ya se
+> resolvió el 24-25 de agosto.** El párrafo de GS03/`ZSDFI_001` (líneas 15) ya no
+> aplica — el cliente mandó ambos. Lo de comisionista↔oficinas (línea 17) sigue
+> vigente, pero ahora con más detalle: ver
+> `Datos/Comisiones_DBC_Borrador_Tecnico.md` sección 16.3 (el hueco real es solo
+> en Botana y Abarrote, y en Botana se pudo tapar la mayor parte sin el cliente).
+> No mandar este correo sin reescribir esos párrafos.
+
 ---
 
 **Asunto:** Comisiones DBC — algunos pendientes para seguir avanzando

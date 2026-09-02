@@ -51,12 +51,46 @@ def test_report_rechaza_una_fecha_que_no_lo_es():
     assert response.status_code == 422
 
 
-def test_reconciliation_returns_501_bloqueado():
+def test_reconciliation_ya_no_esta_bloqueado(monkeypatch):
+    # Devolvía 501: no había fuente para bajar del pago agregado a factura.
+    # Desde el 2026-09-02 arma la conciliación por comisionista/producto sin
+    # necesitar esa fuente (ver conciliacion_engine.py).
+    monkeypatch.setattr(app_module, "build_conciliacion", lambda **_: {"por_comisionista": [], "detalle": []})
+
     response = client.post(
         "/v1/comisionesbi/reconciliation",
-        json={"start_period": "2026-01-01", "end_period": "2026-01-31"},
+        json={"start_date": "2026-08-01", "end_date": "2026-08-31"},
     )
-    assert response.status_code == 501
+
+    assert response.status_code == 200
+
+
+def test_reconciliation_rechaza_un_rango_al_reves():
+    response = client.post(
+        "/v1/comisionesbi/reconciliation",
+        json={"start_date": "2026-08-31", "end_date": "2026-01-01"},
+    )
+    assert response.status_code == 422
+
+
+def test_reconciliation_diario_devuelve_el_resultado_del_motor(monkeypatch):
+    monkeypatch.setattr(app_module, "detalle_diario", lambda **_: [{"fecha": "2026-04-25"}])
+
+    response = client.post(
+        "/v1/comisionesbi/reconciliation/diario",
+        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista": "FLORENTINO GONZALEZ GARCIA"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [{"fecha": "2026-04-25"}]
+
+
+def test_reconciliation_diario_rechaza_un_rango_al_reves():
+    response = client.post(
+        "/v1/comisionesbi/reconciliation/diario",
+        json={"start_date": "2026-08-31", "end_date": "2026-01-01"},
+    )
+    assert response.status_code == 422
 
 
 # ─── GET /catalog frente a fallos de BigQuery ────────────────────────────

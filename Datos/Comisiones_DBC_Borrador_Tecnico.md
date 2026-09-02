@@ -1,7 +1,7 @@
 
 # Comisiones DBC — Borrador técnico de hallazgos
 
-_Última actualización: 3 de agosto de 2026_
+_Última actualización: 1 de septiembre de 2026 — ver sección 16_
 
 ## 1. Objetivo
 
@@ -38,7 +38,7 @@ Un reporte de ejemplo recibido del cliente trae `Sociedad = PAN` para división 
 | Canal de distribución | `distribution_channel` | `D20_DIMENSION.dm_distribution_channel` | Resuelto — 100% cobertura |
 | CEDIS + tipo de venta (ruta/mayoreo/medio mayoreo) | `storage_location` + `sales_office` | `D20_DIMENSION.dm_cedis` | Resuelto — ~92.5% cobertura |
 | Tipo de factura | `billing_type` | `D00_SANDBOX.proan_TVFKT_Cobranza_20260728` | Parcial — ~14-32%. No crítico |
-| Momento de cobro | `billing_document` | `D50_AGGREGATE_CHATBI.sap_pago` | Resuelto — 75% cobertura; 99.7% de esas ya pagadas |
+| Momento de cobro | `billing_document` | `D50_AGGREGATE_CHATBI.sap_pago` | **Ver sección 16.1** — el 75% es cobertura en facturas, no en importe; en dinero real ronda 24-53% según el corte |
 | Nombre de oficina de venta | `sales_office` | `D00_SANDBOX.proan_TVKBT_20260728` (VKBUR+BEZEI) | Resuelto — más completo que lo que tiene el propio cliente |
 
 Divisiones confirmadas (`Mapeo Divisiones` del cliente): `H` = Huevo (PAN, DBC), `BO` = Botana (DBC), `A` = Abarrote (DBC), `IA` = Alimento (DBC). Coincide con lo ya mapeado vía `dm_business_area`.
@@ -284,3 +284,119 @@ Cifras vigentes, ya con los dos fixes de la rama "cobrado" aplicados: `company_c
 | Cobrado | 51,763 | $1,758,736,858.44 | 2026-01-02 a 2026-07-31 | 12,822 (24.8%) |
 
 El hueco de CEDIS en vendido/facturado (~6-7%) es consistente con la cobertura de `dm_cedis` ya documentada en la sección 3 (~92.5%). El de cobrado bajó de un pico intermedio de 50.2% (39,203 de 78,146, cuando el filtro de `company_code` ya estaba directo pero `document_category` todavía no) a 24.8% — ahora consistente con el resto del flujo, y también con el 75% de cobertura ya documentado en la sección 3 para "Momento de cobro" (son la misma relación medida en direcciones opuestas: aquí es pago→CEDIS heredado de la factura, allá es facturado→pago). El monto total no cambió en ningún punto de este proceso ($1,758,736,858.44 en las tres corridas), confirmando que las filas descartadas en cada fix nunca representaron dinero real, solo movimientos contables sin sitio/factura asociados.
+
+## 16. Sesión del 1 de septiembre de 2026 — motor de comisiones completo y límites de la conciliación por comisionista
+
+Auditoría a fondo de `v1_flujo_producto_dbc` a partir de datos que no cuadraban, que terminó en una consulta de comisiones completa (las 5 divisiones, con fuentes oficiales) y en agotar — sin cerrarlo — el problema de bajar el pago a un comisionista hasta la factura que lo compone.
+
+### 16.1 Limpieza — qué de este documento ya no aplica
+
+- **Sección 5**, "`SETLEAF`/`SETHEADER`/`SETNODE`... no existen replicadas": **ya no es cierto**. `D00_SANDBOX.sap_setleaf_comisiones` existe: 748 filas, 30 SETs, 745 materiales — más grande que nuestra propia `DBC_dim_set_material` (162 filas, 23 SETs). Confirmado por Silvana como fuente real el 1 sep 2026. El bloqueante de material→SET queda resuelto.
+- **Sección 15.2, punto 2**, "Export real de la tabla `ZSDFI_001`": las tablas `D00_SANDBOX.proan_ZTSD_OV_COM_{H,BO,IA,L,A}_20260829` son esa tabla oficial de tarifas — confirmadas por Silvana, sin duplicados por llave (a diferencia de `DBC_dim_comision_tarifa`, la derivada empírica de la sección 6.1). Pendiente resuelto.
+- **Sección 7 / 15.1 punto 5 / 15.2 puntos 3-4**, relación comisionista↔oficinas y rango de proveedor: parcialmente resuelto, con un matiz importante — ver 16.3. La relación oficina↔comisionista sí existe (Excel del cliente, tabla `ZZ_PRUEBAS.DBC_dim_almacen_oficina`), pero está **incompleta**: 0% de cobertura en Botana y Abarrote. El rango de número de proveedor sigue sin aparecer en ningún lado.
+- **Sección 14**, "Sin validar contra BigQuery real todavía": obsoleto. `v1_flujo_producto_dbc.sql` lleva semanas corriendo contra datos reales y se auditó línea por línea esta sesión.
+- **Sección 8**, "Conversión a caja — RESUELTO": Silvana marcó duda sobre esta lógica en esta misma sesión (sin detalle específico todavía, no se tocó el SQL) — ya no se debe leer esta sección como cerrada sin más. Pendiente que ella la retome.
+- **Sección 3**, fila "Momento de cobro — 75% cobertura": el 75% (verificado hoy: 73.0% exacto, sin filtro de fecha/categoría) es **facturas con algún pago registrado, sin importar el monto** — no dinero cobrado. Es la misma trampa que la propia sección de CEDIS ya señala para líneas vs. importe, pero nunca quedó anotada aquí. En importe real, medido hoy con `document_category = 'M'`: 53.1% sobre toda la empresa, 28.4% restringido a las 5 divisiones activas de comisión (H/BO/IA/A/L) — la métrica que de verdad importa para pagar comisión es esta última, no el 75%.
+
+### 16.2 Comisiones DBC — consulta completa, con filtros y fuentes cerrados
+
+Punto de partida: una consulta de referencia (del senior) que ya calculaba comisión completa para las 5 divisiones con tarifa oficial y SET real, pero con 3 defectos encontrados y corregidos. Resultado: [`Datos/sql/v1_comision_dbc_completo.sql`](./sql/v1_comision_dbc_completo.sql).
+
+**Fuentes confirmadas por Silvana (1 sep 2026):**
+- SET: `D00_SANDBOX.sap_setleaf_comisiones` (`MATNR` → `SETNAME`; 2 materiales traen doble SET, se dedupea con `ANY_VALUE`).
+- Tarifa oficial: `D00_SANDBOX.proan_ZTSD_OV_COM_{H,BO,IA,L,A}_20260829`, llave planta+almacén+oficina (+material en Abarrote) — sin duplicados de llave, a diferencia de `DBC_dim_comision_tarifa`.
+
+**Los 3 defectos de la consulta de referencia, corregidos:**
+1. `cancel_lg` (su filtro de cancelaciones) es `NULL` en el 100% de las 101.6M de filas de la tabla completa — no filtraba nada. Cambiado a `document_category = 'M'`, que sí excluye cancelaciones (`N`, -$109.4M en 2026) y notas de crédito (`O`, -$10.0M).
+2. `tipo_venta = 'PISO'` nunca cruzaba — `dm_cedis` solo trae `'VTA EN PISO'` (299 filas), nunca `'PISO'` a secas. Afectaba la tarifa de división H y la derivación de canal MENUDEO/MAYOREO. Corregido en los 16 puntos donde aparecía.
+3. El cruce de CEDIS de la consulta de referencia solo tenía el escalón exacto almacén+oficina contra `dm_cedis`. Se agregaron los 2 escalones adicionales de `v1_flujo_producto_dbc.sql` (solo almacén, solo oficina) — **sin** el escalón de mapeo manual por nombre, descartado a propósito por ser hardcodeado.
+
+**Resultado, medido (cobertura de comisión por división, 2026 a la fecha):**
+
+| División | Cobertura antes (tarifa derivada empíricamente, sección 6.1) | Cobertura ahora |
+|---|---|---|
+| H | 82.5% | 93.6% |
+| **BO** | **0.2%** | **87.6%** |
+| IA | 12.2% | 95.7% |
+| A | 0% (sin motor) | ~100% |
+| L | 79.5% | 89.8% |
+
+Botana pasó de estar completamente bloqueada a casi resuelta — era, según la sección 6, la pregunta más cara abierta del proyecto ($174M de facturado sin tarifa aplicable).
+
+**Variante con cobro:** [`Datos/sql/v1_comision_dbc_completo_cobro.sql`](./sql/v1_comision_dbc_completo_cobro.sql) — misma base, agrega `se_cobro`/`monto_cobrado`/`cantidad_cobrada`/`comision_cobrada` por línea, prorrateado igual que en `v1_flujo_producto_dbc_prototipo_v2.sql`. Validado sin huecos de completitud (0 filas con `se_cobro=TRUE` y `monto_cobrado` NULL).
+
+**Flujo de producto, facturado+cobrado fusionado:** [`Datos/sql/v1_flujo_producto_dbc_prototipo_v2.sql`](./sql/v1_flujo_producto_dbc_prototipo_v2.sql) — reemplaza la rama "cobrado" separada de `v1_flujo_producto_dbc.sql` por columnas de cobro sobre la propia fila de facturado, eliminando `factura_sitio_v1` y su desempate arbitrario de almacén en facturas repartidas entre 2 almacenes (pendiente #9, sección 9). Mismos filtros de `document_category`/división/oficina/almacén que en 16.2. Prototipo, no reemplaza todavía a `v1_flujo_producto_dbc.sql`.
+
+### 16.3 Conciliación por comisionista — opciones probadas, ninguna baja al detalle
+
+Objetivo: partiendo de lo que un comisionista cobró (vía BSIK), llegar a la factura/material que lo compone — el módulo de conciliación de la sección 7. Caso de prueba: Florentino González García (proveedor `0000001019`, Salamanca/oficina `0011`), semana 25-30 abril 2026, división IA (croqueta): pagado real **$3,842.77** (`sap_bsik_open_items`/`proan_BSAK_20260708`, texto `'COMISION CROQUETA 25-30 ABRIL'`) contra **$4,784.90** calculados por `v1_comision_dbc_completo.sql` para esa oficina+división+semana — ~20% de diferencia sin explicar.
+
+**La asignación oficina→comisionista existe, pero está incompleta.** `ZZ_PRUEBAS.DBC_dim_almacen_oficina` (cargada por `scripts/tablas_cliente.py` desde los Excel del cliente, columna `persona`) tiene el nombre por (oficina, división) — pero **0 de 93 filas de Botana y 0 de 18 de Abarrote traen persona** (los Excel de esas 2 divisiones nunca trajeron esa columna llena); H/IA/L sí (94-96% de cobertura). Cualquier comisión de Botana o Abarrote sale sin dueño en la pantalla actual, en las 93 y 18 oficinas respectivamente — confirmado que no es un caso aislado de Salamanca, es sistémico en esas 2 divisiones.
+
+**Opciones probadas para bajar del pago agregado (BSIK) al detalle de factura/material — todas descartadas:**
+
+| Opción | Resultado |
+|---|---|
+| Cruce por nombre: `DBC_dim_almacen_oficina.persona` ↔ `dm_vendors.razon_social` | Exacto: 1 de 26 personas. Por primer nombre (flexible): hasta 871 candidatos para nombres comunes — `dm_vendors` es el maestro de proveedores de todo el grupo Proan, no solo comisionistas. |
+| `reference_document_number` de la factura | Es el número de **entrega** (delivery), no de pago — espacio de numeración sin relación con BSIK. |
+| `int_ACDOCA_historico` (libro mayor universal, tiene `MATNR`/`KDAUF` por línea) | El proveedor no aparece ahí ni una vez. |
+| `proan_MSEG_Croqueta_20260409` | Movimientos de mercancía en planta de producción — dominio equivocado, no es de ventas. |
+| Otro campo dentro de BSIK (`SAKNR`, `KOSTL`, `PRCTR`, `BUPLA`) | Los 25 proveedores que cobraron "COMISION CROQUETA" esa semana comparten exactamente la misma cuenta contable, sin centro de costo ni nada más que varíe entre ellos. |
+| `comision_cobrada` (columna propia, ya cruzada con `sap_pago`) | Va en la dirección contraria: $344 contra $3,842.77 — `sap_pago` ve muy poco del cobro real (documentado en la sección 3, ~75% de cobertura y con matices). |
+| Fecha/monto de compensación (`clearing`) coincidente contra `sap_pago` | `sap_bsik_open_items` no guarda la fecha de pago ya hecho (desaparece de "partidas abiertas" al liquidarse) — hubo que sacarla de `D00_SANDBOX.proan_BSAK_20260708` (partidas **compensadas**, sí conserva `AUGDT`/`AUGBL`): pago exacto el **08/05/2026**, documento `1500003047`. Con la fecha exacta, cero cobros de cliente coinciden en oficina ni en monto ese día (191 cobros en total, $14.9M, ninguno relacionado). |
+
+**Conclusión:** el detalle que compone el pago agregado de BSIK no vive en BigQuery. Se calculó en algún proceso externo al cliente (probablemente una hoja de cálculo semanal) y solo el total llegó a SAP como una línea contable por proveedor+división+semana. `SGTXT` (el texto libre de la línea) es la única pista de contenido, y no baja de "COMISION CROQUETA 25-30 ABRIL" — ni un material, ni una factura.
+
+**El hueco de comisionista en Botana sí se puede tapar sin el cliente, en un 87%.** `ZZ_PRUEBAS.DBC_dim_comision_tarifa` (la tabla de tarifas, distinta de `DBC_dim_almacen_oficina`) también trae columna `persona` — y su hoja `Sheet1` de Botana (la misma que ya se usa como "vigente" para tarifa en `dim_tarifa_v1`, sección 2 de `v1_comision_dbc.sql`) la trae llena al 100% (860 de 860 filas, 29 personas distintas, incluye a Florentino en oficina `0011` con su nombre completo — `FLORENTINO GONZALEZ GARCIA`, igual que en `dm_vendors`). Verificado: de las 93 oficinas de Botana sin persona en `DBC_dim_almacen_oficina`, **81 sí la tienen en `Sheet1` de la tarifa**. Abarrote no tiene esta salida: `DBC_dim_comision_tarifa` no trae ninguna fila de división `A` (Abarrote usa su propio modelo, `DBC_dim_comision_abarrotes`, sin columna de persona). Pendiente: incorporar este segundo cruce a `data/consultas/DBC_gold_comision_diaria.sql`, que hoy solo lee `DBC_dim_almacen_oficina`.
+
+## 17. Sesión del 2 de septiembre de 2026 — cierre de la conciliación BSIK con Florentino (4 divisiones) y un bug real encontrado
+
+Continuación directa de 16.3, con la tabla `ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` ya cerrada. Objetivo: agotar hipótesis sobre la diferencia calculado-vs-BSIK usando a Florentino (oficina `0011`, semana 25-30 abril 2026) como caso de referencia en sus 4 divisiones.
+
+### 17.1 La diferencia se sostiene en las 4 divisiones, sin sesgo consistente
+
+| División | Calculado (oficina 0011, ventana correcta) | Real (BSAK, `BUKRS='DBC'`) | Diferencia |
+|---|---|---|---|
+| H | $48,986.82 | $55,006.89 | -10.9% |
+| BO | $21,561.02 (0011+0094) | $24,482.59 | -11.9% |
+| IA | $4,819.90 | $3,842.77 | +25.4% |
+| L | $3,367.50 | $2,874.02 | +17.2% |
+
+Nota H: existe una segunda partida BSAK ese día con texto parecido ("COMISIONES DEL 25 AL 30 DE ABRIL DEL 2026" = $44,602.33) pero es `BUKRS='PAN'` — otra razón social, fuera del alcance de esta consulta (que filtra `company_code='DBC'`). No es un duplicado a conciliar, es dinero de otro negocio.
+
+Dos divisiones arriba, dos abajo — descarta que sea una tarifa desfasada de forma pareja (un multiplicador único no explicaría signos opuestos).
+
+### 17.2 Hipótesis descartadas con datos (no es un bug de la consulta)
+
+Para H y L, verificado explícitamente contra `dbc_comisiones_calculadas_cobro`:
+- **Cobertura**: 100% de las líneas de las 4 divisiones esa semana tienen `status='OK'` — cero material sin SET/tarifa que se esté perdiendo en silencio.
+- **Tarifa**: la hoja del cliente (`DBC_dim_comision_tarifa`) coincide exacto con la oficial (`ZTSD_OV_COM_*`) para los SETs de Florentino en H e IA (incluido el caso puntual WOOFI vs BALTO, confirmado igual a 1.75 por Silvana).
+- **Ventana de fecha**: la suma diaria del 25 al 30 de abril (5 días con venta; el 26 es domingo, sin venta) ya da exacto el total usado — sumar o quitar un día no acerca el número al pago real.
+- **Almacenes excluidos**: el filtro `storage_location NOT IN ('BO28','H793','BO01','H723')` de `v1_comision_dbc_completo_cobro.sql` no le quita nada a Florentino — cero venta suya en esos almacenes esa semana.
+
+Conclusión de 17.1+17.2: la metodología (SET, tarifa, ventana, cobertura) es internamente consistente y no tiene fugas conocidas, y aun así el pago real difiere -12% a +25% según división. Es coherente con la conclusión de 16.3 (el detalle que compone el pago de BSIK no vive en BigQuery) — probablemente hay mínimos, bonos o ajustes en el proceso real de nómina de comisión que no están en las facturas.
+
+### 17.3 Bug real encontrado: `DBC_gold_conciliacion_producto_semanal` usa semana de 7 días, BSAK paga 6
+
+La tabla de conciliación por producto (creada en sesión paralela, [`Datos/sql/v1_conciliacion_producto_semanal.sql`](./sql/v1_conciliacion_producto_semanal.sql)) agrupa con `DATE_TRUNC(billing_date, WEEK(SATURDAY))`, que en la semana del 25 de abril incluye sábado a **viernes** (7 días, hasta el 1 de mayo). El texto de pago real en BSAK dice "25 AL 30 DE ABRIL" — sábado a **jueves** (6 días). Verificado con la oficina 0011 de Florentino en IA:
+
+| Ventana | Importe | Comisión | Cantidad base |
+|---|---|---|---|
+| 25 abr - 30 abr (6 días, correcta) | $59,392.34 | $4,819.90 | 2,570.7 kg |
+| 25 abr - 1 may (7 días, la que usa la tabla) | $78,176.18 | $6,287.15 | 3,429.7 kg |
+
+El segundo renglón reproduce exacto los totales del Excel que genera esa tabla ([`pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx`](../pruebas/conciliacion_FLORENTINO_GLEZ_IA_2026-04-25_2026-04-30.xlsx), a pesar de que el nombre del archivo dice "2026-04-30"). O sea: el archivo que le llegaría al usuario final trae un día completo de más (+31% de volumen), fecha de corte incluida en el nombre del archivo pero no en los datos. **Pendiente de corregir** en esa consulta — no se tocó porque es de otra sesión, queda documentado para que se arregle ahí.
+
+### 17.4 Comparado contra una captura de una reunión del cliente — mismo CEDIS, misma tarifa, distinto volumen
+
+Silvana compartió 2 capturas de un Excel armado a mano por el cliente en una reunión ("CALCULO DE FLORENTINO CROQUETA"), un solo CEDIS (oficina 0011). Comparado contra nuestra tabla en la ventana correcta (6 días):
+
+| | Importe facturado | Comisión |
+|---|---|---|
+| Cálculo manual del cliente (captura) | $44,749.87 | $2,831.50 |
+| Nuestra tabla, oficina 0011, 6 días | $59,392.34 | $4,819.90 |
+| Diferencia | +33% | +70% |
+
+La tarifa de WOOFI ADULTO 20 kg se confirmó igual (1.75) en ambas fuentes, así que no es un problema de tarifa — es que el importe facturado ya difiere en +33% con la misma tarifa y el mismo CEDIS, lo que apunta a que el cálculo manual no incluyó todas las facturas/materiales de la semana (fue "un ss que hice en una reunión", no un cálculo cerrado). No se pudo verificar línea por línea contra la captura: la resolución de la imagen no permite leer con certeza las columnas de un renglón individual — solo los totales en negrita son confiables.
+
+**Cierre de este hilo:** sin el archivo original (solo capturas) y con el detalle de BSIK agotado desde 16.3, la conciliación factura-por-factura del pago a comisionista queda como límite de datos conocido, no como bug pendiente de arreglar en nuestras consultas.

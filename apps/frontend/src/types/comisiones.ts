@@ -221,44 +221,89 @@ export const EMPTY_REPORT: ReportResponse = {
   bloqueado: []
 };
 
-// ─── Conciliación documental (M3) — el módulo menos avanzado ───────────────
+// ─── Conciliación por comisionista (M3) — reemplaza al M3 documental ───────
+//
+// El plan original (bajar de un pago agregado en BSIK a factura/material, con
+// "confianza" de match) se abandonó el 2026-09-02: no existe esa fuente en
+// BigQuery (Datos/Comisiones_DBC_Borrador_Tecnico.md, sección 16.3). Esto es
+// otra cosa: reproducir, automáticamente, la hoja que hoy arma a mano quien
+// concilia — producto por producto, semana por semana — para que solo tenga
+// que comparar el total contra lo que le pagaron, no reconstruir la hoja.
 
-export type ReconciliationFilters = {
-  provider_id: string | null;
-  start_period: string;
-  end_period: string;
+export type ConciliacionFilters = {
+  division: string | null;
+  comisionista: string | null;
+  /** ISO `YYYY-MM-DD`. La tabla de origen agrupa por PERIODO DE PAGO, no
+   *  semana a secas: normalmente sábado-viernes (7 días), pero se corta antes
+   *  si cruza de mes (supuesto pendiente de confirmar con el cliente — ver
+   *  `ConciliacionDetalleRow.semana`). */
+  start_date: string;
+  end_date: string;
 };
 
-export type ReconciliationConfidence = "alta" | "media" | "baja";
-export type ReconciliationStatus = "conciliado" | "revisar" | "pendiente";
-
-export type ReconciliationItem = {
-  id: string;
-  comisionista: string;
-  proveedor_id: string;
-  factura_serie: string | null;
-  factura_folio: string;
-  periodo: string;
-  monto_factura: number;
-  monto_pagado: number | null;
-  confianza: ReconciliationConfidence;
-  estado: ReconciliationStatus;
+/** Nivel 1 de la pantalla: a quién hay que pagarle. Una fila por
+ *  (comisionista, división) — la misma persona cobra cada división aparte. */
+export type ConciliacionPorComisionista = {
+  comisionista: string | null;
+  division_code: string | null;
+  division: string | null;
+  num_lineas: number;
+  monto_total: number;
+  comision_total: number;
+  /** Cantidad entregada con importe cero — no es un error, ver comisiones. */
+  lineas_sin_comision: number;
+  num_semanas: number;
 };
 
-export type ReconciliationEvidencia = { etiqueta: string; valor: string };
-
-export type ReconciliationDetail = ReconciliationItem & {
-  documento_pago: string | null;
-  fecha_pago: string | null;
-  diferencia: number | null;
-  evidencia: ReconciliationEvidencia[];
-  notas: string | null;
+/** Nivel 2: una fila por producto — el mismo grano que ella escribe a mano.
+ *  `matnr` es de SAP; `descripcion` sale de MAKT (SPRAS='S'), no siempre
+ *  necesaria para leer la fila pero sí para justificarla ante Hacienda. */
+export type ConciliacionDetalleRow = {
+  /** Inicio del periodo de pago (normalmente el sábado, 7 días — pero puede
+   *  arrancar el día 1 de un mes y durar más si absorbió los días sueltos del
+   *  cierre anterior, ver ConciliacionFilters). */
+  semana: string;
+  division_code: string | null;
+  division: string | null;
+  cedis: string | null;
+  oficina: string | null;
+  comisionista: string | null;
+  tipo_venta: string | null;
+  matnr: string;
+  descripcion: string | null;
+  /** Unidad tal como se facturó (SAC, PZA...), no la que multiplica la tarifa. */
+  unidad_venta: string | null;
+  /** `kg` o `caja` — la que sí multiplica la tarifa. `caja` en BO/L/A es un
+   *  supuesto pendiente de confirmar (ver ComisionTotales en este archivo). */
+  base_unidad: string | null;
+  tarifa: number | null;
+  num_lineas: number;
+  cantidad_venta_total: number | null;
+  monto_total: number;
+  cantidad_base_total: number | null;
+  comision_total: number;
+  lineas_sin_comision: number;
 };
 
-export type ReconciliationResponse = {
-  filas: ReconciliationItem[];
-  detalle: Record<string, ReconciliationDetail>;
-  conciliados: number;
-  por_revisar: number;
-  pendientes: number;
+export type ConciliacionResponse = {
+  cobertura: { desde?: string; hasta?: string };
+  por_comisionista: ConciliacionPorComisionista[];
+  /** Sin agregar más allá del grano de producto: filtrado a un comisionista y
+   *  unas semanas son decenas de filas, así que la pantalla arma la cascada
+   *  CEDIS → oficina → tipo de venta agrupando esto en memoria. */
+  detalle: ConciliacionDetalleRow[];
+};
+
+/** Mismo grano que `ConciliacionDetalleRow` pero por día (`fecha`) en vez de
+ *  periodo de pago -- la transparencia para el borde de mes: el periodo
+ *  agregado es un supuesto, así que el Excel también trae el desglose día por
+ *  día para verificar o ajustar a mano si un caso concreto no encaja. Se pide
+ *  aparte (no viene en `ConciliacionResponse`) porque solo hace falta al
+ *  exportar UN comisionista, no en cada carga de pantalla. */
+export type ConciliacionDiarioRow = Omit<ConciliacionDetalleRow, "semana"> & { fecha: string };
+
+export const EMPTY_CONCILIACION: ConciliacionResponse = {
+  cobertura: {},
+  por_comisionista: [],
+  detalle: []
 };

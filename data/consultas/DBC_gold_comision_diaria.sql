@@ -24,11 +24,18 @@
 -- Por eso `base_unidad` va también en el grano. Quien pinte esto: no sumes
 -- `cantidad_base_total` sin separar por `base_unidad`.
 --
--- EL COMISIONISTA sale de `DBC_dim_almacen_oficina`, que es la única fuente
--- limpia: 104 oficinas, 86 con persona, y ninguna con dos. La tabla de tarifas
--- también trae `persona`, pero ahí 46 pares (división, oficina) tienen más de
--- una y no sirve para atribuir. El 99,2% de la comisión calculada cae en una
--- oficina con comisionista con nombre.
+-- EL COMISIONISTA sale de `DBC_dim_almacen_oficina`, la fuente principal:
+-- 104 oficinas, 86 con persona, ninguna con dos. La tabla de tarifas también
+-- trae `persona`, y en general no sirve para atribuir (46 pares división+oficina
+-- con más de un valor) -- salvo en Botana, donde SÍ es segura: la hoja `Sheet1`
+-- (la misma que ya gana como "vigente" en `dim_tarifa_v1`) trae persona en el
+-- 100% de sus filas, sin duplicados, y `DBC_dim_almacen_oficina` no trae
+-- NINGUNA persona para Botana (0 de 93 oficinas -- el Excel de esa división
+-- nunca trajo esa columna llena). Por eso el fallback de abajo va SOLO para
+-- Botana, no para las demás divisiones: Huevo tiene dos hojas con persona sin
+-- confirmar cuál es la vigente (la misma ambigüedad de tarifa ya documentada),
+-- así que ahí no se toca. 1 sep 2026: 81 de las 93 oficinas de Botana se
+-- resuelven con este fallback.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria`
@@ -45,6 +52,20 @@ WITH comisionista AS (
     ANY_VALUE(NULLIF(TRIM(persona), '')) AS persona
   FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_oficina`
   GROUP BY oficina, division
+),
+
+-- Fallback SOLO Botana (ver comentario de cabecera). `hoja = 'Sheet1'` es un
+-- valor real del Excel del cliente, no un nombre nuestro -- confirmado que
+-- ninguna otra división tiene una hoja con ese nombre exacto, así que este
+-- filtro no puede colarse en Huevo/Croqueta/Leche/Abarrote por accidente.
+comisionista_bo_tarifa AS (
+  SELECT
+    oficina,
+    division,
+    ANY_VALUE(NULLIF(TRIM(persona), '')) AS persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa`
+  WHERE division = 'BO' AND hoja = 'Sheet1'
+  GROUP BY oficina, division
 )
 SELECT
   v.fecha,
@@ -52,7 +73,7 @@ SELECT
   v.division,
   v.cedis,
   v.oficina,
-  c.persona AS comisionista,
+  COALESCE(c.persona, cb.persona) AS comisionista,
   v.tipo_venta,
   v.`set`,
   v.base_unidad,
@@ -88,6 +109,8 @@ SELECT
 FROM `proan-quantrue.ZZ_PRUEBAS.v1_comision_linea` v
 LEFT JOIN comisionista c
        ON c.oficina = v.oficina AND c.division = v.division_code
+LEFT JOIN comisionista_bo_tarifa cb
+       ON c.persona IS NULL AND cb.oficina = v.oficina AND cb.division = v.division_code
 GROUP BY
   v.fecha, v.division_code, v.division, v.cedis, v.oficina, comisionista,
   v.tipo_venta, v.`set`, v.base_unidad, v.comision_estado, v.tipo_venta_origen;

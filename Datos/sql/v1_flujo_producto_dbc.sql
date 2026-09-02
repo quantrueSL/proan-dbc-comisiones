@@ -553,7 +553,7 @@ LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = f.sales_office
 WHERE f.receiving_plant IN (SELECT planta FROM plantas_dbc)
-  AND f.company_code = 'DBC'                -- filtro maestro (sección 2), confirmado como campo real por la consulta de referencia del senior
+  AND f.company_code = 'DBC' --Revisar porque puede haber cosas que facture proteina                -- filtro maestro (sección 2), confirmado como campo real por la consulta de referencia del senior
   AND CAST(f.billing_date AS DATE) BETWEEN '2026-01-01' AND CURRENT_DATE()  -- excluye años inválidos (2201/2202 — sección 2, pendiente #4)
 
 UNION ALL

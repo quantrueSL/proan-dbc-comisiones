@@ -376,3 +376,14 @@ comisionistas, y al menos un `LIFNR` no sigue el formato numérico estándar
 (`BBV-670730`) — el "rango de número de proveedor" que se le pidió al cliente
 quizá no sea un rango numérico limpio. Sigue dependiendo de esa respuesta;
 esto no se resuelve con más SQL.
+
+> **Corrección del 1 de septiembre de 2026: sí existe.** `D20_DIMENSION.dm_vendors`
+> es exactamente ese maestro tipo `LFA1` — `razon_social`, `nombre_comercial`, RFC,
+> dirección — y no se había buscado con ese nombre. Usado con éxito para identificar
+> a un comisionista real (Florentino González García, proveedor `0000001019`). El
+> problema real no es que falte la tabla: es que cruzarla por nombre contra los
+> apodos/abreviaturas de las tablas de comisionistas del cliente casi no funciona
+> (1 de 26 nombres cruza exacto; por primer nombre, hasta 871 candidatos para
+> nombres comunes, porque `dm_vendors` es el maestro de proveedores de todo el
+> grupo Proan, no solo comisionistas). Detalle completo en
+> `Datos/Comisiones_DBC_Borrador_Tecnico.md`, sección 16.3.

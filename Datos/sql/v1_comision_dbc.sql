@@ -490,14 +490,22 @@ SELECT
     -- "varias tarifas posibles" estaba antes que las dos de abajo y se tragaba
     -- $41,8 M que en realidad eran la oficina 0001 y oficinas que no están en
     -- la matriz. La regla: de la causa más concreta a la más genérica.
+    -- Confirmado por el cliente el 26/08/2026: estas cuatro oficinas son venta
+    -- directa o bodega, no venta con comisionista, así que "se excluyen del
+    -- análisis" —sus palabras—. Por eso esta rama va PRIMERA, antes incluso
+    -- que abarrotes y que `set IS NULL`: no importa qué venden ni si el
+    -- material tiene SET, la oficina ya decide que no hay comisión. 0001
+    -- además es el destino por defecto del catálogo —una fila en dm_cedis, 70
+    -- almacenes en el flujo, y sin filtrarla le habría regalado $418 M a
+    -- "Mexico 1"—, hoy $45,0 M en 356 líneas. Las otras tres SÍ tenían tarifa
+    -- para parte de sus líneas y antes calculaban $0,6 M que no debían salir.
+    WHEN oficina IN ('0001', '0174', '0175', '0181')
+                                      THEN 'confirmado por el cliente: venta directa o bodega, sin comisión'
+    -- La cuarta oficina de la pregunta, 0227 (Celaya Genaro, botana), sigue
+    -- sin respuesta — el cliente dijo que está pendiente de posibles
+    -- actualizaciones. No se toca hasta que conteste.
     WHEN division_code = 'A'          THEN 'abarrotes: modelo aparte, sin motor'
     WHEN `set` IS NULL                THEN 'material sin SET'
-    -- La 0001 no es una oficina: es el destino por defecto del catálogo. Ya se
-    -- topó con ella el mapeo de CEDIS —una fila en dm_cedis, 70 almacenes en el
-    -- flujo, y sin filtrarla le habría regalado $418 M a "Mexico 1"—. Aquí sale
-    -- otra vez: $31,9 M en 168 líneas de $190.000 y 430 cajas de media, que no
-    -- son ventas de ruta. No le falta la tarifa: no tiene a quién comisionar.
-    WHEN oficina = '0001'             THEN 'oficina 0001: cajón de sastre, sin comisionista'
     WHEN NOT hay_alguna_tarifa        THEN 'esa oficina no tiene tarifa para ese SET'
     -- Llegados aquí la oficina SÍ está en la matriz, así que el problema es de
     -- canal: no sabemos por cuál se vendió esta línea. Y las dos razones de que

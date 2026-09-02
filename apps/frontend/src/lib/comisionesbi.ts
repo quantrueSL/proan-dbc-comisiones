@@ -5,18 +5,18 @@
 import { getComisionesbiServiceUrl } from "@/lib/env";
 import type {
   ComisionesCatalog,
+  ConciliacionDiarioRow,
+  ConciliacionFilters,
+  ConciliacionResponse,
   FlujoFilters,
   FlujoResponse,
-  ReconciliationFilters,
-  ReconciliationResponse,
   ReportFilters,
   ReportResponse
 } from "@/types/comisiones";
 
-// El backend usa 501 a propósito (no un error genérico) cuando un módulo
-// todavía no está construido -- ver comisiones_engine.py / conciliacion_engine.py.
-// Se distingue con su propio tipo de error para que cada página pueda mostrar
-// el motivo real en vez de un "algo salió mal" genérico.
+// El backend usaba 501 cuando un módulo todavía no estaba construido. Ya no
+// queda ninguno así (comisiones y conciliación calculan desde 2026-09), pero
+// el tipo se queda por si el patrón vuelve a hacer falta.
 export class BackendNotReadyError extends Error {}
 
 type ComisionesbiFetchOptions = {
@@ -78,6 +78,15 @@ export async function getComisionesReport(filters: ReportFilters): Promise<Repor
   return comisionesbiFetchJson<ReportResponse>("/v1/comisionesbi/report", { method: "POST", body: filters });
 }
 
-export async function getComisionesReconciliation(filters: ReconciliationFilters): Promise<ReconciliationResponse> {
-  return comisionesbiFetchJson<ReconciliationResponse>("/v1/comisionesbi/reconciliation", { method: "POST", body: filters });
+export async function getComisionesReconciliation(filters: ConciliacionFilters): Promise<ConciliacionResponse> {
+  return comisionesbiFetchJson<ConciliacionResponse>("/v1/comisionesbi/reconciliation", { method: "POST", body: filters });
+}
+
+/** Detalle día por día, sin agregar por periodo de pago -- para la pestaña de
+ *  transparencia del Excel exportado (ver ConciliacionDiarioRow). */
+export async function getComisionesReconciliationDiario(filters: ConciliacionFilters): Promise<ConciliacionDiarioRow[]> {
+  return comisionesbiFetchJson<ConciliacionDiarioRow[]>("/v1/comisionesbi/reconciliation/diario", {
+    method: "POST",
+    body: filters
+  });
 }

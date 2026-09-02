@@ -2,6 +2,12 @@
 
 _Preparado para dar continuidad al proyecto mientras Silvana está fuera. Fecha: 7 de agosto de 2026._
 
+> **Superado — 1 de septiembre de 2026.** Este traspaso cumplió su función; casi
+> todo lo que marca como "falta" (GS03, `ZSDFI_001`, agrupación comisionista↔oficinas)
+> se resolvió entre el 24 de agosto y hoy. Para el estado actual, ir directo a
+> `Datos/Comisiones_DBC_Borrador_Tecnico.md`, sección 16. Se deja el resto del
+> documento sin tocar como registro de en qué punto estaba el proyecto en esa fecha.
+
 ## Qué es el proyecto
 
 Plataforma para DBC (distribuidor del grupo Proan) que consolida datos de SAP (vía BigQuery) para dar visión del flujo de producto por CEDIS — traspasos → vendido → facturado → cobrado —, calcula la comisión de los comisionistas (se paga solo sobre lo efectivamente cobrado) y concilia las facturas de los comisionistas contra sus pagos para cumplimiento SAT.

@@ -86,6 +86,42 @@ Las otras cuatro respuestas:
   0001 es legítima ahí. `dm_cedis` ya lo mapea; no había nada que arreglar.
 - **Botana**: pendiente de Alejandro Vázquez.
 
+## Actualización del 1 de septiembre de 2026 (Silvana)
+
+Cuatro cosas de esta nota quedaron superadas al construir la consulta de
+comisiones completa (`Datos/sql/v1_comision_dbc_completo.sql`, ver
+`Datos/Comisiones_DBC_Borrador_Tecnico.md` sección 16):
+
+- **El SET ya no depende de recargar el Excel de GS03.** `D00_SANDBOX.sap_setleaf_comisiones`
+  existe en BigQuery: 748 filas, 30 SETs, 745 materiales — más grande que
+  `DBC_dim_set_material` (162 filas, 23 SETs) de esta nota. Confirmado como
+  fuente válida.
+- **La tarifa oficial también está en BigQuery**, no solo derivada de reportes:
+  `D00_SANDBOX.proan_ZTSD_OV_COM_{H,BO,IA,L,A}_20260829`, sin duplicados de
+  llave (a diferencia de `DBC_dim_comision_tarifa`, que sigue teniendo las 635
+  combinaciones con más de un valor documentadas más abajo). Con esta fuente
+  la cobertura de tarifa por división sube mucho respecto a la tabla "división
+  por división" de esta nota: BO de 33.6% a 87.6%, H de 51.1% a 93.6%, IA de
+  81.0% a 95.7%, A a ~100%.
+- **`DBC_dim_almacen_oficina` (483 filas) no trae persona para Botana ni Abarrote:**
+  0 de 93 filas de BO y 0 de 18 de A. No es un hueco nuevo — es el mismo hecho
+  que esta nota ya documentaba de otra forma ("«DIVISIÓN BOTANA (BO)» no tiene
+  personas" en la sección de los dos modelos de comisión), pero nunca se dijo
+  explícito sobre esta tabla en particular.
+- **Ese hueco de Botana sí se tapa en un 87% sin el cliente.** La hoja `Sheet1`
+  de `DBC_dim_comision_tarifa` para división BO (la misma que ya gana como
+  "vigente" en `dim_tarifa_v1`) trae persona en el 100% de sus 860 filas, 29
+  personas distintas — incluye a Florentino en oficina `0011` con su nombre
+  completo. De las 93 oficinas de BO sin persona en `DBC_dim_almacen_oficina`,
+  81 sí la tienen ahí. Abarrote no tiene este atajo: no tiene ninguna fila en
+  `DBC_dim_comision_tarifa` (usa su propio modelo, `DBC_dim_comision_abarrotes`,
+  sin columna de persona).
+- **Sí existe un maestro de proveedores con nombre en BigQuery**: `D20_DIMENSION.dm_vendors`
+  (`razon_social`, `nombre_comercial`, RFC). No resuelve el mapeo comisionista↔proveedor
+  por sí solo — cruzar por nombre contra las tablas de esta nota casi no funciona
+  (nombres abreviados/apodos) — pero corrige la idea de que esa tabla no existe,
+  repetida en el borrador técnico y en `hallazgos.md`.
+
 ## La conclusión de la lectura inicial (24 de agosto)
 
 **Sus tablas están bien.** Cada división tiene su modelo, las tarifas cruzan

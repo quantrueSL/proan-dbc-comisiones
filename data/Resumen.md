@@ -73,11 +73,16 @@ Con acceso completo a BigQuery (`quantrue1@proan.com`, antes bloqueado por permi
 | 1 | Export de **GS03** (SETs de producto por división) | Bloqueante único para calcular comisión real — sin esto no se puede agrupar `material_number` por marca/línea |
 | 2 | Export de la tabla oficial de tarifas **`ZSDFI_001`** | Hoy solo hay tarifas derivadas empíricamente de reportes, no la fuente oficial |
 | 3 | Cómo repartir la oficina **`0122`** entre "Agustin" y "Genaro" | Único caso real de ambigüedad CEDIS que queda (ver arriba) |
-| 4 | **Rango de número de proveedor** de comisionistas + frecuencia de liquidación | `sap_bsik_open_items` ya tiene la estructura lista (proveedor, compensación, importe) pero no hay maestro de proveedores con nombre en BigQuery — no se puede aislar comisionistas del resto de proveedores sin este dato |
+| 4 | **Rango de número de proveedor** de comisionistas + frecuencia de liquidación | `sap_bsik_open_items` ya tiene la estructura lista (proveedor, compensación, importe). Corrección del 1/sep/2026: sí hay maestro de proveedores con nombre — `D20_DIMENSION.dm_vendors` — no se había buscado con ese nombre; el problema real es que cruzarlo por nombre contra las tablas de comisionistas del cliente casi no funciona (nombres abreviados, y `dm_vendors` mezcla comisionistas con todo el resto de proveedores del grupo). Sigue pendiente el rango de proveedor como tal. Detalle: `Datos/Comisiones_DBC_Borrador_Tecnico.md` sección 16.3 |
 | 5 | Qué código(s) **`BWART`** usa el cliente en su MB51 para "traspasos" | Sin esto no se puede validar `sap_mseg` contra el ejemplo real que ya tenemos |
 | 6 | Confirmar si **L, DG, CE, CP, CM** aplican a DBC | Los reportes recibidos solo cubren H/BO/A/IA |
 | 7 | Cruce faltante **`DBC1`/`DG01`** contra `dm_cedis` | Posible "Derivados de Ganado" de DBC sin mapear |
 | 8 | Repetir **"¿nos falta algo?"** | Nadie la ha contestado todavía |
+
+_Nota del 1 de septiembre de 2026: los puntos 1 y 2 (GS03, `ZSDFI_001`) se
+resolvieron el 24-25 de agosto — ver `data/notas/tablas_del_cliente.md` y
+`Datos/Comisiones_DBC_Borrador_Tecnico.md` sección 16. Esta tabla quedó vieja
+en esos dos puntos; se deja el resto tal cual porque sigue vigente._
 
 De propina, al releer los 6 excels del cliente: sus reportes por división invierten "Leon1"/"Leon2" respecto al reporte de referencia (inconsistencia del propio cliente, no nuestra) — vale la pena señalarlo también.
 

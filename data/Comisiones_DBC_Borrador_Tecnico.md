@@ -173,6 +173,18 @@ Un comisionista agrupa varias oficinas de venta (ej. `0019-0092`, `0005-0071`, `
 
 Revisado (12 ago 2026): `D30_INTEGRATION.sap_bsik_open_items` (candidata vía `FBL1N`) sí tiene la estructura esperada (proveedor, compensación, cuenta contable, importe, término de pago). No existe en BigQuery ningún maestro de proveedores con nombre (tipo `LFA1`) — no se puede mapear número de proveedor a nombre de comisionista por cuenta propia. El universo de proveedores por división es manejable (7 en Abarrote, 155 en Huevo, 112 en Botana, 70 en Alimento — no miles) pero mezclado con proveedores normales de insumos. Sigue dependiendo de la respuesta del cliente a la pregunta 4 (sección 10/15.2) — ver pendiente #12, sección 9.
 
+> **Corrección del 1 de septiembre de 2026 (Silvana):** sí existe un maestro tipo
+> `LFA1` — `D20_DIMENSION.dm_vendors` (`razon_social`, `nombre_comercial`, RFC,
+> dirección). No se había buscado con ese nombre antes. Usado con éxito para
+> identificar a un comisionista real (Florentino González García, proveedor
+> `0000001019`) a partir de su liquidación en BSIK. El bloqueante real no es la
+> ausencia de la tabla: es que cruzarla por nombre contra las tablas de
+> comisionistas del cliente (`DBC_dim_almacen_oficina`, `DBC_dim_comision_tarifa`)
+> casi no funciona por nombres abreviados/apodos — solo 1 de 26 personas cruza
+> exacto, y por nombre de pila se llega a cientos de candidatos porque
+> `dm_vendors` es el maestro de todo el grupo Proan, no solo comisionistas.
+> Detalle en `Datos/Comisiones_DBC_Borrador_Tecnico.md`, sección 16.3.
+
 ## 8. Conversión de unidades a caja (CJ) — RESUELTO
 
 La comisión se paga por caja, pero `invoiced_quantity` en facturación viene en unidades mixtas (`CS`, `PZA`, `PAQ`, `SAC`, `KG`, entre otras). El monto facturado en `CS` es solo 50.6% del total DBC 2026 (V12 de `v1_verificaciones.sql`) — el resto (`PAQ` 31.2%, `KG` 9.3%, `PZA` 5.5%, `SAC` 3.0%) sí necesitaba conversión, no era un tema marginal.
@@ -199,7 +211,7 @@ Ya incorporado en `Datos/sql/v1_flujo_producto_dbc.sql` (sección 14) como colum
 | 9 | Facturas repartidas entre 2 almacenes — **medido, bajo impacto** | Confirmado con datos reales: hay `billing_document` con mismo centro y oficina pero 2 `storage_location` distintos. Medido (12 ago 2026): solo 18 de 193,516 `billing_document` DBC (2026) tienen líneas en más de un almacén — 0.11% del monto total ($2.17M de $1,965M). `v1_flujo_producto_dbc` hoy reparte esto con una regla provisional (se queda con un almacén al heredar el sitio para "cobrado") — sigue pendiente que el negocio confirme cómo repartir, pero el impacto en las cifras agregadas es marginal mientras tanto. |
 | 10 | Precisión de monto en `v1_flujo_producto_dbc.sql` | `amount_mxn` es `NUMERIC` en `sap_2lis_13_vditm_billing_document_item` (confirmado vía `INFORMATION_SCHEMA`, 12 ago 2026), pero el SQL v1 lo castea a `FLOAT64` en la rama "facturado" — pérdida de precisión evitable en un monto que alimenta comisión. No corregido (el SQL validado no se toca sin necesidad) — señalado para cuando se revise el SQL. |
 | 11 | Proxy de SET por `PRODH` (jerarquía SAP) — **descartado** | Revisado (12 ago 2026) como alternativa al proxy por texto ya descartado (sección 5). `PRODH` existe (solo en snapshots diarios `D00_SANDBOX.proan_2LIS_13_VDITM_*`, no en la tabla principal), pero no separa las marcas: el código `0000400001` mezcla materiales "SAN JUAN" y "PORTALES" en división Huevo. Parece agrupar por formato/presentación, no por marca comercial. Confirma que no hay atajo dentro de BigQuery — GS03 sigue siendo el único bloqueante real. |
-| 12 | Módulo de conciliación — estructura viable, falta maestro de proveedores | `sap_bsik_open_items` (`D30_INTEGRATION`) tiene la estructura esperada de `FBL1N` (proveedor, compensación, cuenta contable, importe, término de pago). No existe en BigQuery ningún maestro de proveedores con nombre (tipo `LFA1`) — no se puede mapear número de proveedor a nombre de comisionista por cuenta propia. Universo de proveedores por división manejable (7-155, no miles) pero mezclado con proveedores normales. Sigue dependiendo de la respuesta del cliente a la pregunta 4 (sección 10/15.2). |
+| 12 | Módulo de conciliación — estructura viable, falta maestro de proveedores — **corregido 1 sep 2026, ver sección 7** | `sap_bsik_open_items` (`D30_INTEGRATION`) tiene la estructura esperada de `FBL1N`. El maestro de proveedores con nombre sí existe (`D20_DIMENSION.dm_vendors`) — no era un tema de que faltara la tabla, sino de que el nombre del comisionista en las tablas del cliente casi nunca cruza exacto contra ella. Universo de proveedores por división manejable (7-155, no miles) pero mezclado con proveedores normales. Detalle en la sección 7 de este documento y en `Datos/Comisiones_DBC_Borrador_Tecnico.md` sección 16.3. |
 
 ## 10. Preguntas pendientes para el cliente
 
