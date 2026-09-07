@@ -9,14 +9,17 @@ ese SQL pasa a ser el DAG diario y aquí no cambia nada.
 
 TRES COSAS QUE ESTE MÓDULO TIENE QUE HACER BIEN, y que no son evidentes:
 
-1. `cantidad` viene en unidades mezcladas (CS, PZA, PAQ, SAC, KG...), así que
-   NO se suma entre unidades. Se devuelve desglosada por unidad y nunca como un
-   único total.
-2. `cantidad_cajas` ya existe en las tres fases, pero NO es "cajas": es la
-   cantidad en la unidad base del material (PAQ, CS, PZA, SAC...), que es la
-   única comparable entre unidades. El nombre se mantuvo porque es el que ya
-   consumía el dashboard. Sigue pudiendo ser NULL —"aquí no aplica"— y por eso
-   no se convierte en cero al agregar.
+1. `cantidad` (la cruda, `invoiced_quantity`/`sales_unit`) viene en unidades
+   mezcladas (CS, PZA, PAQ, SAC, KG...) incluso dentro de una misma división,
+   así que NO se usa para ninguna agregación de este módulo.
+2. `cantidad_cajas` (`stockkeeping_units`) SÍ es comparable dentro de una
+   división -- es la cantidad en la unidad de manejo real del material.
+   Confirmado 2026-09-07 con la distribución por división (monto DBC 2026):
+   H 99.97% CS -> caja; IA ~100% SAC -> saco; BO 99.4% PAQ -> paquete; A y L
+   100% PZA -> pieza. `cantidad_por_unidad` usa esto (no la unidad cruda) y
+   agrupa por división para no sumar cajas de huevo con sacos de alimento.
+   Sigue pudiendo ser NULL --"aquí no aplica"-- y por eso no se convierte en
+   cero al agregar.
 3. Cada fase tiene su propia fecha de corte y no tienen por qué coincidir:
    "vendido" sale de `sap_VBAP`, cuya carga se ha quedado atrás más de una vez
    (ver data/notas/hallazgos.md). Aquí no se escribe ninguna fecha concreta
@@ -37,6 +40,11 @@ from datetime import date
 from comisionesbi.db import run_query
 
 _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_flujo_producto_diario`"
+
+# Unidad de manejo real por división (confirmado 2026-09-07, ver docstring del
+# módulo). Solo cubre las 5 divisiones que opera DBC a propósito -- una
+# división fuera de operación no debe aparecer en "cantidad por unidad".
+_UNIDAD_MANEJO = {"H": "caja", "IA": "saco", "BO": "paquete", "A": "pieza", "L": "pieza"}
 
 # Los filtros opcionales usan `(@x IS NULL OR columna = @x)`: un solo SQL sirve
 # para todas las combinaciones, sin construir la cadena a trozos.
@@ -139,8 +147,9 @@ def build_flujo(
     por_division: dict = defaultdict(_nuevo)
     por_tipo_venta: dict = defaultdict(_nuevo)
     nombre_division: dict = {}
-    # `cantidad` NO se suma entre unidades (punto 1 del docstring): la clave
-    # lleva la unidad dentro, y quien la pinte tiene que respetar ese desglose.
+    # Cantidad por unidad de manejo (punto 2 del docstring): la clave lleva
+    # división Y unidad, para que la tabla pueda distinguir cajas de huevo de
+    # sacos de alimento aunque el gráfico las sume por unidad.
     por_unidad: dict = defaultdict(float)
 
     # Los cuatro almacenes centrales (BO28, BO01, H723, H793) salen de la
@@ -176,8 +185,9 @@ def build_flujo(
         _acumular(por_tipo_venta, (fila["tipo_venta"], fase), fila)
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
-        if fila["unidad"] and fila["cantidad_total"]:
-            por_unidad[(fase, fila["unidad"])] += fila["cantidad_total"]
+        unidad_manejo = _UNIDAD_MANEJO.get(fila["division_code"])
+        if unidad_manejo and fila["cantidad_cajas_total"]:
+            por_unidad[(fase, fila["division_code"], unidad_manejo)] += fila["cantidad_cajas_total"]
 
     divisiones = _ordenadas(por_division, "division_code")
     for entrada in divisiones:
@@ -208,7 +218,13 @@ def build_flujo(
         "por_division": divisiones,
         "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
         "cantidad_por_unidad": [
-            {"fase": fase, "unidad": unidad, "cantidad_total": total}
-            for (fase, unidad), total in sorted(por_unidad.items())
+            {
+                "fase": fase,
+                "division_code": division_code,
+                "division": nombre_division.get(division_code),
+                "unidad": unidad,
+                "cantidad_total": total,
+            }
+            for (fase, division_code, unidad), total in sorted(por_unidad.items())
         ],
     }

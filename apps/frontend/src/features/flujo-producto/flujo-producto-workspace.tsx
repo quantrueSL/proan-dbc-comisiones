@@ -23,9 +23,10 @@
 //   1. Ocultar el grupo sin CEDIS asignado. Es dos tercios del importe
 //      (data/notas/hallazgos.md): escondido, los totales no cuadrarían y nadie
 //      sabría por qué. Se pinta en naranja y no es pulsable, porque no es un CEDIS.
-//   2. Sumar cantidades entre unidades distintas (CS, PZA, PAQ, SAC, KG).
+//   2. Sumar cantidades entre unidades de manejo distintas (caja, saco,
+//      paquete, pieza) -- sí se suma entre divisiones que comparten unidad.
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FiltersSidebar } from "@/components/filters-sidebar";
@@ -167,17 +168,20 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
     }));
   }, [mapaTipoVenta, fase, metrica]);
 
-  // Cantidades de la fase activa, separadas por unidad. No es filtrable: es
-  // informativa, y sobre todo es el recordatorio visual de que CS, PZA, KG y
-  // compañía no se pueden sumar entre sí.
-  const unidades: BarraDato[] = useMemo(
-    () =>
-      cantidad_por_unidad
-        .filter((fila) => fila.fase === fase)
-        .map((fila) => ({ valor: null, etiqueta: fila.unidad, cantidad: fila.cantidad_total }))
-        .sort((a, b) => b.cantidad - a.cantidad),
-    [cantidad_por_unidad, fase]
-  );
+  // Cantidades de la fase activa, en la unidad de manejo real de cada
+  // división (caja/saco/paquete/pieza). No es filtrable: es informativa. Sí
+  // se suma entre divisiones que comparten unidad (Abarrotes y Leche, ambas
+  // "pieza") -- la tabla detrás de "ver todos" las distingue por división.
+  const unidades: BarraDato[] = useMemo(() => {
+    const acumulado = new Map<string, number>();
+    for (const fila of cantidad_por_unidad) {
+      if (fila.fase !== fase) continue;
+      acumulado.set(fila.unidad, (acumulado.get(fila.unidad) ?? 0) + fila.cantidad_total);
+    }
+    return Array.from(acumulado.entries())
+      .map(([unidad, cantidad]) => ({ valor: null, etiqueta: unidad, cantidad }))
+      .sort((a, b) => b.cantidad - a.cantidad);
+  }, [cantidad_por_unidad, fase]);
 
   // Serie mensual: pulsando un mes el periodo se ajusta a ese mes.
   const meses = useMemo(() => {
@@ -430,10 +434,10 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
           </div>
         </div>
 
-        {/* Todo en una rejilla, la gráfica incluida: ocupa dos columnas de tres
-            —ancho de gráfica, no de página— y así el donut le acompaña en la
-            misma fila y las listas de abajo entran sin bajar la pantalla. */}
-        <div className="flujo-tablero">
+        {/* La gráfica y "Por tipo de venta" van juntas, donde estaban antes de
+            hoy -- el filtro de fase ya no está metido en este bloque, así que
+            no hace falta moverlas para separarlo. */}
+        <div className="flujo-fila-grafica">
           <section className="dashboard-card flujo-tarjeta-grafica" data-zona="grafica">
             <div className="dashboard-card-head">
               <div>
@@ -442,42 +446,6 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
               </div>
             </div>
             <FlujoChart filas={initialFlujo.por_fecha} metrica={metrica} />
-          </section>
-
-          <section className="dashboard-card" data-zona="cedis">
-            <div className="dashboard-card-head">
-              <div>
-                <h2>Por CEDIS</h2>
-                <span>{ETIQUETA_FASE[fase]} · pulsa para filtrar</span>
-              </div>
-            </div>
-            <RankedBars
-              alVerTodo={() => setTabla("cedis")}
-              color={COLOR_FASE[fase]}
-              datos={barrasCedis}
-              limite={TOPE_LISTA}
-              metrica={metrica}
-              onSelect={(valor) => navegar({ cedis: valor })}
-              seleccion={filtros.cedis}
-            />
-          </section>
-
-          <section className="dashboard-card" data-zona="division">
-            <div className="dashboard-card-head">
-              <div>
-                <h2>Por división</h2>
-                <span>{ETIQUETA_FASE[fase]} · pulsa para filtrar</span>
-              </div>
-            </div>
-            <RankedBars
-              alVerTodo={() => setTabla("division")}
-              color={COLOR_FASE[fase]}
-              datos={barrasDivision}
-              limite={TOPE_LISTA}
-              metrica={metrica}
-              onSelect={(valor) => navegar({ division: valor })}
-              seleccion={filtros.division}
-            />
           </section>
 
           <section className="dashboard-card" data-zona="tipo">
@@ -495,42 +463,115 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
               seleccion={filtros.tipoVenta}
             />
           </section>
+        </div>
 
-          <section className="dashboard-card" data-zona="mes">
-            <div className="dashboard-card-head">
-              <div>
-                <h2>Por mes</h2>
-                <span>{ETIQUETA_FASE[fase]} · pulsa un mes para acotar</span>
+        {/* Tres columnas independientes, cada una apilada sin huecos entre
+            sus propias tarjetas -- no una rejilla de filas compartidas: filtro
+            y división van juntos porque los dos son cortos; CEDIS va solo
+            porque es la más alta; mes y unidad van juntos por lo mismo que
+            filtro+división. Cada columna mide lo que pide su contenido, sin
+            depender de las demás. */}
+        <div className="flujo-tablero">
+          <div className="flujo-columna">
+            <div className="flujo-fase-toggle" data-zona="filtro">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Fase</h2>
+                  <span>controla CEDIS, división, mes y unidad</span>
+                </div>
+              </div>
+              <div className="dashboard-metric-toggle" role="group" aria-label="Fase para CEDIS, división, mes y unidad">
+                {FASES.map((f) => (
+                  <button
+                    aria-pressed={f === fase}
+                    className={f === fase ? "is-active" : undefined}
+                    key={f}
+                    onClick={() => setFase(f)}
+                    type="button"
+                  >
+                    {ETIQUETA_FASE[f]}
+                  </button>
+                ))}
               </div>
             </div>
-            <RankedBars
-              color={COLOR_FASE[fase]}
-              datos={meses}
-              metrica={metrica}
-              onSelect={(valor) => valor && irAlMes(valor)}
-              seleccion={desde.slice(0, 7) === hasta.slice(0, 7) ? desde.slice(0, 7) : null}
-              vacio="Sin movimientos en el periodo"
-            />
-          </section>
 
-          <section className="dashboard-card" data-zona="unidad">
-            <div className="dashboard-card-head">
-              <div>
-                <h2>Cantidad por unidad</h2>
-                <span>{ETIQUETA_FASE[fase]} · no sumables entre sí</span>
+            <section className="dashboard-card" data-zona="division">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Por división</h2>
+                  <span>{ETIQUETA_FASE[fase]} · pulsa para filtrar</span>
+                </div>
               </div>
-            </div>
-            <RankedBars
-              alVerTodo={() => setTabla("unidades")}
-              color={COLOR_FASE[fase]}
-              datos={unidades}
-              limite={5}
-              metrica="lineas"
-              onSelect={() => undefined}
-              seleccion={null}
-              vacio="Esta fase no trae cantidades"
-            />
-          </section>
+              <RankedBars
+                alVerTodo={() => setTabla("division")}
+                color={COLOR_FASE[fase]}
+                datos={barrasDivision}
+                limite={TOPE_LISTA}
+                metrica={metrica}
+                onSelect={(valor) => navegar({ division: valor })}
+                seleccion={filtros.division}
+              />
+            </section>
+          </div>
+
+          <div className="flujo-columna">
+            <section className="dashboard-card" data-zona="cedis">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Por CEDIS</h2>
+                  <span>{ETIQUETA_FASE[fase]} · pulsa para filtrar</span>
+                </div>
+              </div>
+              <RankedBars
+                alVerTodo={() => setTabla("cedis")}
+                color={COLOR_FASE[fase]}
+                datos={barrasCedis}
+                limite={TOPE_LISTA}
+                metrica={metrica}
+                onSelect={(valor) => navegar({ cedis: valor })}
+                seleccion={filtros.cedis}
+              />
+            </section>
+          </div>
+
+          <div className="flujo-columna">
+            <section className="dashboard-card" data-zona="mes">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Por mes</h2>
+                  <span>{ETIQUETA_FASE[fase]} · pulsa un mes para acotar</span>
+                </div>
+              </div>
+              <RankedBars
+                color={COLOR_FASE[fase]}
+                datos={meses}
+                metrica={metrica}
+                onSelect={(valor) => valor && irAlMes(valor)}
+                seleccion={desde.slice(0, 7) === hasta.slice(0, 7) ? desde.slice(0, 7) : null}
+                vacio="Sin movimientos en el periodo"
+              />
+            </section>
+
+            <section className="dashboard-card" data-zona="unidad">
+              <div className="dashboard-card-head">
+                <div>
+                  <h2>Cantidad por unidad</h2>
+                  <span>{ETIQUETA_FASE[fase]} · unidad de manejo por división</span>
+                </div>
+              </div>
+              <RankedBars
+                alVerTodo={() => setTabla("unidades")}
+                color={COLOR_FASE[fase]}
+                datos={unidades}
+                estatico
+                limite={5}
+                metrica="lineas"
+                onSelect={() => undefined}
+                seleccion={null}
+                vacio="Esta fase no trae cantidades"
+              />
+            </section>
+          </div>
         </div>
 
         {tabla === "cedis" ? (
@@ -598,25 +639,41 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
         {tabla === "unidades" ? (
           <Modal
             onClose={() => setTabla(null)}
-            subtitulo="No se pueden sumar entre sí"
+            subtitulo="Unidad de manejo real por división -- una sección por fase"
             titulo="Cantidad por unidad"
           >
             <table>
               <thead>
                 <tr>
-                  <th>Fase</th>
+                  <th>División</th>
                   <th>Unidad</th>
                   <th className="flujo-num">Cantidad</th>
                 </tr>
               </thead>
               <tbody>
-                {cantidad_por_unidad.map((fila) => (
-                  <tr key={`${fila.fase}-${fila.unidad}`}>
-                    <td>{ETIQUETA_FASE[fila.fase] ?? fila.fase}</td>
-                    <td>{fila.unidad}</td>
-                    <td className="flujo-num">{numero.format(Math.round(fila.cantidad_total))}</td>
-                  </tr>
-                ))}
+                {FASES.map((f) => {
+                  const filasFase = cantidad_por_unidad
+                    .filter((fila) => fila.fase === f)
+                    .sort((a, b) => b.cantidad_total - a.cantidad_total);
+                  if (!filasFase.length) return null;
+                  return (
+                    <Fragment key={f}>
+                      <tr className="flujo-modal-fase">
+                        <td colSpan={3}>
+                          <i style={{ background: COLOR_FASE[f] }} aria-hidden="true" />
+                          {ETIQUETA_FASE[f] ?? f}
+                        </td>
+                      </tr>
+                      {filasFase.map((fila) => (
+                        <tr key={`${fila.fase}-${fila.division_code}-${fila.unidad}`}>
+                          <td>{fila.division ?? "Sin división"}</td>
+                          <td>{fila.unidad}</td>
+                          <td className="flujo-num">{numero.format(Math.round(fila.cantidad_total))}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </Modal>

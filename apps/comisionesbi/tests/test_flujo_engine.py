@@ -23,6 +23,8 @@ def _fila(
     cedis,
     monto,
     *,
+    division_code="H",
+    division="Huevo",
     unidad="CS",
     cantidad=10.0,
     cajas=None,
@@ -33,8 +35,8 @@ def _fila(
     return {
         "fase": fase,
         "fecha": fecha,
-        "division_code": "H",
-        "division": "Huevo",
+        "division_code": division_code,
+        "division": division,
         "cedis": cedis,
         "tipo_venta": "VTA EN RUTA",
         "almacen_central": central,
@@ -118,25 +120,37 @@ def test_las_cajas_solo_suman_donde_existen(cliente):
     assert resumen["cobrado"]["cantidad_cajas_total"] is None
 
 
-def test_la_cantidad_no_se_suma_entre_unidades(cliente):
-    # CS, PZA y KG no son comparables. Si esto se "arregla" sumándolas, el KPI
-    # queda plausible y mal, que es la peor combinación.
+def test_cantidad_por_unidad_usa_cajas_y_la_unidad_de_manejo_real(cliente):
+    # No la cantidad cruda (`cantidad_total`, CS/PZA/PAQ/SAC/KG mezclados) ni
+    # el nombre "cajas" a secas: la unidad de manejo real por división
+    # (confirmada 2026-09-07), agrupada por división para que Abarrotes y
+    # Leche (ambas "pieza") no se confundan entre sí en el detalle.
     cliente(
         [
-            _fila("facturado", date(2026, 7, 1), "Leon 1", 10.0, unidad="CS", cantidad=5.0),
-            _fila("facturado", date(2026, 7, 2), "Leon 1", 10.0, unidad="PZA", cantidad=300.0),
-            _fila("facturado", date(2026, 7, 3), "Leon 1", 10.0, unidad="CS", cantidad=2.0),
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 10.0, division_code="H", cajas=5.0, cantidad=999.0),
+            _fila("facturado", date(2026, 7, 2), "Leon 1", 10.0, division_code="H", cajas=2.0, cantidad=999.0),
+            _fila("facturado", date(2026, 7, 3), "Leon 1", 10.0, division_code="A", division="Abarrotes", cajas=300.0),
+            _fila("facturado", date(2026, 7, 4), "Leon 1", 10.0, division_code="L", division="Leche", cajas=40.0),
         ]
     )
 
     resultado = _flujo()
 
     assert resultado["cantidad_por_unidad"] == [
-        {"fase": "facturado", "unidad": "CS", "cantidad_total": 7.0},
-        {"fase": "facturado", "unidad": "PZA", "cantidad_total": 300.0},
+        {"fase": "facturado", "division_code": "A", "division": "Abarrotes", "unidad": "pieza", "cantidad_total": 300.0},
+        {"fase": "facturado", "division_code": "H", "division": "Huevo", "unidad": "caja", "cantidad_total": 7.0},
+        {"fase": "facturado", "division_code": "L", "division": "Leche", "unidad": "pieza", "cantidad_total": 40.0},
     ]
     # Y no existe ningún total agregado de cantidad que las mezcle.
     assert "cantidad_total" not in resultado["resumen"][0]
+
+
+def test_cantidad_por_unidad_ignora_filas_sin_cajas(cliente):
+    # Si `cantidad_cajas` viene en None ("aquí no aplica"), la fila no debe
+    # aparecer como si fueran cero unidades reales.
+    cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 10.0, cajas=None)])
+
+    assert _flujo()["cantidad_por_unidad"] == []
 
 
 def test_devuelve_la_fecha_de_corte_de_cada_fase(cliente):

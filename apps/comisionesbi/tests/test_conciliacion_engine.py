@@ -19,8 +19,8 @@ def _fila(
     tipo="VTA EN RUTA",
     matnr="110000020731",
     descripcion="CHOP ADULTO 25Kg",
-    unidad_venta="SAC",
-    base_unidad="kg",
+    unidad_venta="saco",
+    unidad_tarifa="kg",
     tarifa=2.5,
     lineas=1,
     cantidad_venta=28.0,
@@ -41,7 +41,7 @@ def _fila(
         "matnr": matnr,
         "descripcion": descripcion,
         "unidad_venta": unidad_venta,
-        "base_unidad": base_unidad,
+        "unidad_tarifa": unidad_tarifa,
         "tarifa": tarifa,
         "num_lineas": lineas,
         "cantidad_venta_total": cantidad_venta,
@@ -213,12 +213,12 @@ def test_el_detalle_conserva_cedis_oficina_y_tipo_de_venta(cliente):
 def test_el_detalle_trae_la_aritmetica_completa_del_producto(cliente):
     # cantidad_venta (nativa) + unidad, y cantidad_base + tarifa -> comisión:
     # las mismas columnas que ella escribe a mano.
-    cliente([_fila(cantidad_venta=28.0, unidad_venta="SAC", cantidad_base=700.0, tarifa=2.5, comision=1750.0)])
+    cliente([_fila(cantidad_venta=28.0, unidad_venta="saco", cantidad_base=700.0, tarifa=2.5, comision=1750.0)])
 
     fila = _informe()["detalle"][0]
 
     assert fila["cantidad_venta_total"] == 28.0
-    assert fila["unidad_venta"] == "SAC"
+    assert fila["unidad_venta"] == "saco"
     assert fila["cantidad_base_total"] == 700.0
     assert fila["tarifa"] == 2.5
     assert fila["comision_total"] == 1750.0

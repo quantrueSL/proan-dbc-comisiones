@@ -7,12 +7,12 @@
 -- QUÉ SÍ incluye v1 (las 3 capas ya resueltas y validadas — sección 4):
 --   - Vendido    (sap_VBAK + sap_VBAP)
 --   - Facturado  (sap_2lis_13_vditm_billing_document_item)
---   - Cobrado    (sap_pago, UN RENGLÓN POR FACTURA, heredando CEDIS/oficina de la
---                 factura vía billing_document porque sap_pago no trae esos
---                 campos — sección 4.1. El grano por factura no es un detalle:
---                 sap_pago copia el importe en cada partida y repite la factura
---                 en cada compensación, así que sumar sus renglones inflaba el
---                 cobrado un 53% — ver el comentario de `pago_factura_v1`)
+--   - Cobrado    (sap_bsad_cleared_items desde el 2026-09-07, antes sap_pago;
+--                 UN RENGLÓN POR FACTURA, heredando CEDIS/oficina/división/canal
+--                 de la factura vía billing_document porque la fuente de cobro
+--                 no trae esos campos — sección 4.1. Ver el comentario de
+--                 `pago_factura_v1` para el porqué del `GROUP BY` y el historial
+--                 de `sap_pago`)
 --
 -- QUÉ NO incluye v1 (a propósito, para no mezclar cifras sin validar con las
 -- que sí lo están):
@@ -37,9 +37,9 @@
 --
 -- Filtro DBC: `company_code = 'DBC'` es el filtro maestro (sección 2),
 -- confirmado como campo real en `sap_2lis_13_vditm_billing_document_item`
--- (facturado, por la consulta de referencia del senior) Y en `sap_pago`
--- (INFORMATION_SCHEMA, V1b de v1_verificaciones.sql) -- ambas ramas filtran
--- directo por su propio `company_code`. En sap_VBAK/VBAP NO existe ese campo
+-- (facturado, por la consulta de referencia del senior) Y en
+-- `sap_bsad_cleared_items` (`BUKRS_company_code`, verificado 2026-09-07) --
+-- ambas ramas filtran directo por su propio `company_code`. En sap_VBAK/VBAP NO existe ese campo
 -- (lo más parecido es `BUKRS_VF` en VBAK, semántica sin confirmar, no se
 -- usó), así que "vendido" sigue dependiendo de la lista de plantas de la
 -- sección 2 -- lista ya corregida contra datos reales (V3): faltaban H7DU y
@@ -364,6 +364,11 @@ WITH plantas_dbc AS (
 -- (mismo centro, misma oficina) -- la regla de desempate (primer almacén en
 -- orden alfabético) sigue siendo PROVISIONAL, pendiente de que el negocio
 -- diga cómo repartir esos casos.
+-- 2026-09-07: se agregan sales_division/distribution_channel (mismo criterio
+-- de desempate) para que "cobrado" ya no dependa de business_area_code /
+-- distribution_channel propios de sap_pago -- sap_bsad_cleared_items (la
+-- nueva fuente) no trae un campo de canal, y su GSBER llega vacío casi
+-- siempre en las cuentas que usamos.
 factura_sitio_v1 AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT
@@ -371,6 +376,8 @@ factura_sitio_v1 AS (
       receiving_plant,
       storage_location,
       sales_office,
+      sales_division,
+      distribution_channel,
       ROW_NUMBER() OVER (PARTITION BY billing_document ORDER BY receiving_plant, storage_location, sales_office) AS rn
     FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
   )
@@ -399,46 +406,36 @@ factura_totales_v1 AS (
   GROUP BY billing_document
 ),
 
--- UN RENGLÓN POR FACTURA COBRADA. Esto arregla un triple conteo que estaba
--- inflando "cobrado" un 53%, y sin esto el prorrateo de cajas heredaba el mismo
--- error. `sap_pago` no reparte el importe: lo COPIA.
+-- 2026-09-07: fuente cambiada de `sap_pago` a `sap_bsad_cleared_items`
+-- (cobertura del facturado: 17% → 87%, validado a nivel de monto -- ver
+-- v1_comision_dbc_completo_cobro.sql para el detalle de esa validación).
+-- `debit_lg` es el lado de BSAD que trae la factura contra la que se aplicó
+-- el cobro (el otro lado, credit_lg, es la entrada del pago en sí). `SUM` en
+-- vez de `ANY_VALUE` porque aquí sí puede haber más de una línea por factura
+-- (pagos parciales en fechas distintas) -- a diferencia de `sap_pago`, que
+-- nunca los tuvo (ver el párrafo del triple conteo, más abajo -- sigue
+-- describiendo `sap_pago`, ya no la fuente real, pero la razón del
+-- `GROUP BY billing_document` y del prorrateo por `con_impuestos` no cambió).
 --
---   1. Dentro de una compensación hay un renglón por partida de la factura, y
---      los tres traen el mismo `paid_amount_mxn` (medido: los 39.967 grupos
---      tienen un único importe distinto, cero excepciones). Sumarlos multiplica.
---   2. Y la misma factura reaparece en varias compensaciones con el importe
---      completo otra vez -- 479 facturas, $230,5 M. Ejemplo real: la factura
---      2071220041 sale tres veces por $1.604.462,29 (dos renglones de la
---      compensación del 26/03 y otros dos de la del 31/03, una con el documento
---      de pago DP y otra con el de factura RV). Se cobró una vez.
---
---   Suma de renglones: $1.884,7 M. Una vez por compensación: $1.459,8 M.
---   Una vez por factura: $1.229,3 M. La última es la única defendible.
---
--- NO HAY COBROS PARCIALES en estos datos, y por eso `ANY_VALUE` es seguro: cada
--- renglón trae el total de la factura, así que todos los renglones de una misma
--- factura llevan el mismo número. Si algún día aparecen cobros parciales de
--- verdad, esto hay que rehacerlo por compensación y el prorrateo empezará a dar
--- fracciones (que es justo para lo que está escrito).
---
--- `MIN(clearing_date)`: la fecha del primer cobro. Solo 43 facturas tienen más
--- de una fecha, así que la elección casi no mueve nada; se toma la primera
--- porque es cuando entró el dinero.
---
--- División y canal se toman con `ANY_VALUE` porque son estables dentro de la
--- factura: cero facturas con más de una división o más de un canal.
+-- Historia (con sap_pago, ya no la fuente): un triple conteo inflaba
+-- "cobrado" un 53% -- (1) cada partida de una compensación traía el mismo
+-- `paid_amount_mxn`, y (2) la misma factura reaparecía en varias
+-- compensaciones con el importe completo otra vez (479 facturas, $230,5 M).
+-- Con `sap_pago`, sumar por factura resultaba en $1.229,3 M contra $1.884,7 M
+-- de sumar cada renglón -- la única cifra defendible era la de una vez por
+-- factura, y con `sap_pago` no había cobros parciales reales (los 39.967
+-- pagos cuadraban exactos con su factura).
 pago_factura_v1 AS (
   SELECT
-    billing_document,
-    MIN(CAST(clearing_date AS DATE)) AS fecha,
-    ANY_VALUE(CAST(paid_amount_mxn AS FLOAT64)) AS pagado,
-    ANY_VALUE(business_area_code) AS business_area_code,
-    ANY_VALUE(distribution_channel) AS distribution_channel
-  FROM `proan-quantrue.D50_AGGREGATE_CHATBI.sap_pago`
-  WHERE company_code = 'DBC'                -- filtro maestro directo sobre sap_pago
-    AND document_category = 'M'             -- filtro semántico real (V7): excluye compensaciones/ajustes sin factura
-    AND CAST(clearing_date AS DATE) >= '2026-01-01'
-  GROUP BY billing_document
+    VBELN_billing_document AS billing_document,
+    MIN(AUGDT_clearing_dt) AS fecha,
+    SUM(DMBTR_amount_in_local_currency) AS pagado
+  FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
+  WHERE BUKRS_company_code = 'DBC'
+    AND debit_lg
+    AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
+    AND AUGDT_clearing_dt >= '2026-01-01'
+  GROUP BY VBELN_billing_document
 )
 
 -- Vendido ---------------------------------------------------------------
@@ -559,23 +556,13 @@ WHERE f.receiving_plant IN (SELECT planta FROM plantas_dbc)
 UNION ALL
 
 -- Cobrado / compensado ------------------------------------------------------
--- sap_pago no trae CEDIS/oficina/planta propios (sección 4.1) -- se heredan
--- de la factura vía billing_document. Tampoco llega a nivel material.
--- Confirmado (INFORMATION_SCHEMA, V1b): sap_pago SÍ tiene su propio
--- `company_code`, así que el filtro DBC va directo aquí (antes dependía
--- solo del `receiving_plant` heredado de la factura, lo que además
--- descartaba de golpe cualquier pago cuya factura no hiciera match en
--- `factura_sitio_v1` -- ya no: ahora esos pagos entran igual, solo con
--- planta/almacén/oficina/CEDIS en NULL).
--- `document_category = 'M'` (V7 de v1_verificaciones.sql): filtro semántico
--- real para quedarnos solo con movimientos de factura/cobro genuinos.
--- `billing_document IS NULL` era el síntoma, no la causa -- las 26,311 filas
--- sin factura (de 78,146) tienen 100% `document_category` NULL (98% son
--- document_type 'DZ', compensaciones/ajustes internos) y aportan $0. Del lado
--- "con factura", 99.86% (51,763 de 51,835) sí tiene `category = 'M'`; las 72
--- filas restantes con category NULL también aportan $0 -- se excluyen sin
--- perder monto real. Resultado: mismas cifras que el filtro anterior, pero
--- basado en el campo correcto.
+-- sap_bsad_cleared_items no trae CEDIS/oficina/planta/división/canal propios
+-- confiables -- se heredan de la factura vía billing_document (factura_sitio_v1,
+-- extendida el 2026-09-07). Tampoco llega a nivel material. Sí tiene su
+-- propio `BUKRS_company_code` (equivalente a `company_code`), así que el
+-- filtro DBC va directo en `pago_factura_v1` (si la factura de un pago no
+-- hace match en `factura_sitio_v1`, ese pago entra igual, solo con
+-- planta/almacén/oficina/división/CEDIS en NULL).
 --
 -- MISMA VARA QUE LAS OTRAS DOS FASES: el pago que registra SAP lleva impuestos
 -- y el `monto` de facturado es neto, así que aquí se devuelve el NETO
@@ -596,9 +583,9 @@ SELECT
   g.fecha,
   CAST(g.billing_document AS STRING) AS documento,
   CAST(NULL AS STRING) AS linea,
-  g.business_area_code AS division_code,
+  f.sales_division AS division_code,        -- heredado de la factura (sap_bsad_cleared_items no trae división/canal propios confiables)
   ba.business_area_name AS division,
-  g.distribution_channel AS canal_code,
+  f.distribution_channel AS canal_code,
   COALESCE(dc.cedis, dal.cedis, dma.cedis, dco.cedis) AS cedis,
   COALESCE(dc.tipo_venta, dco.tipo_venta) AS tipo_venta,
   CASE WHEN dc.cedis IS NOT NULL THEN 'almacen+oficina'
@@ -617,7 +604,7 @@ SELECT
   f.receiving_plant AS planta,
   f.storage_location AS almacen,
   CAST(NULL AS STRING) AS material_number,
-  CAST(NULL AS FLOAT64) AS cantidad,        -- sap_pago no llega a nivel material (sección 4.1)
+  CAST(NULL AS FLOAT64) AS cantidad,        -- la fuente de cobro no llega a nivel material (sección 4.1)
   CAST(NULL AS STRING) AS unidad,           -- por lo mismo: no hay unidad de venta que heredar
   t.cajas * SAFE_DIVIDE(g.pagado, t.con_impuestos) AS cantidad_cajas,
   COALESCE(t.neto * SAFE_DIVIDE(g.pagado, t.con_impuestos), g.pagado) AS monto,
@@ -630,7 +617,7 @@ SELECT
 FROM pago_factura_v1 g
 LEFT JOIN factura_totales_v1 t ON t.billing_document = g.billing_document
 LEFT JOIN factura_sitio_v1 f ON f.billing_document = g.billing_document
-LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = g.business_area_code
+LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = f.sales_division
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
        ON dc.cedis IS NULL AND dal.almacen = f.storage_location

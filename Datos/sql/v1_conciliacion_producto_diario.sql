@@ -16,7 +16,7 @@ CLUSTER BY division_code, comisionista
 AS
 SELECT
   fecha, division_code, division, cedis, oficina, comisionista, tipo_venta,
-  matnr, descripcion, unidad_venta, base_unidad,
+  matnr, descripcion, unidad_venta, unidad_tarifa,
   ANY_VALUE(tarifa)             AS tarifa,
   COUNT(*)                      AS num_lineas,
   SUM(cantidad_venta)           AS cantidad_venta_total,
@@ -26,4 +26,4 @@ SELECT
   COUNTIF(comision_estado != 'calculada') AS lineas_sin_comision
 FROM `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`
 GROUP BY fecha, division_code, division, cedis, oficina, comisionista, tipo_venta,
-         matnr, descripcion, unidad_venta, base_unidad;
+         matnr, descripcion, unidad_venta, unidad_tarifa;

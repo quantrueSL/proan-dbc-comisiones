@@ -17,7 +17,7 @@ DBC opera como distribuidor: recibe producto y lo distribuye a través de sus CE
 
 Los datos viven en BigQuery, proyecto `proan-quantrue` (región `us-west4`) — compartido por todo el grupo (Proan, DBC, Superdoña, Malta, entre otros), no solo por DBC.
 
-**Filtro maestro:** `company_code = 'DBC'` en la tabla de facturación aísla correctamente los datos de DBC (confirmado también en `sap_pago` — no en `sap_VBAK`/`sap_VBAP`, que no tienen este campo). Las plantas (`receiving_plant` / `WERKS`) bajo este código — lista corregida contra `SELECT DISTINCT receiving_plant WHERE company_code = 'DBC'` (la versión original de esta lista no traía `H7DU` ni `H7TX`, lo que dejaba fuera datos reales de "vendido", que depende de esta lista al no tener `company_code` propio):
+**Filtro maestro:** `company_code = 'DBC'` en la tabla de facturación aísla correctamente los datos de DBC (confirmado también en `sap_bsad_cleared_items.BUKRS_company_code` — no en `sap_VBAK`/`sap_VBAP`, que no tienen este campo). Las plantas (`receiving_plant` / `WERKS`) bajo este código — lista corregida contra `SELECT DISTINCT receiving_plant WHERE company_code = 'DBC'` (la versión original de esta lista no traía `H7DU` ni `H7TX`, lo que dejaba fuera datos reales de "vendido", que depende de esta lista al no tener `company_code` propio):
 
 ```
 DBCF, DBC1, DBC3, H7LA, H7L1, H7L2, H7SL, H7SI, H7AG, H7SM,
@@ -38,7 +38,7 @@ Un reporte de ejemplo recibido del cliente trae `Sociedad = PAN` para división 
 | Canal de distribución | `distribution_channel` | `D20_DIMENSION.dm_distribution_channel` | Resuelto — 100% cobertura |
 | CEDIS + tipo de venta (ruta/mayoreo/medio mayoreo) | `storage_location` + `sales_office` | `D20_DIMENSION.dm_cedis` | Resuelto — ~92.5% cobertura |
 | Tipo de factura | `billing_type` | `D00_SANDBOX.proan_TVFKT_Cobranza_20260728` | Parcial — ~14-32%. No crítico |
-| Momento de cobro | `billing_document` | `D50_AGGREGATE_CHATBI.sap_pago` | **Ver sección 16.1** — el 75% es cobertura en facturas, no en importe; en dinero real ronda 24-53% según el corte |
+| Momento de cobro | `billing_document` | `D30_INTEGRATION.sap_bsad_cleared_items` (2026-09-07, antes `sap_pago`) | Resuelto — ~87% de cobertura en importe, validado a la peso contra el facturado |
 | Nombre de oficina de venta | `sales_office` | `D00_SANDBOX.proan_TVKBT_20260728` (VKBUR+BEZEI) | Resuelto — más completo que lo que tiene el propio cliente |
 
 Divisiones confirmadas (`Mapeo Divisiones` del cliente): `H` = Huevo (PAN, DBC), `BO` = Botana (DBC), `A` = Abarrote (DBC), `IA` = Alimento (DBC). Coincide con lo ya mapeado vía `dm_business_area`.
@@ -54,7 +54,7 @@ Los reportes reales que envió el cliente (fuente de verdad) confirman que el fl
 | Traspasos (entrada a CEDIS) | TX `MB51` → candidata `sap_mseg` | Nuevo — por validar |
 | Vendido | `sap_VBAK` / `sap_VBAP` (pedido) + `sap_VBFA` (flujo de documentos) | Resuelto y validado |
 | Facturado | `sap_2lis_13_vditm_billing_document_item` | Resuelto |
-| Cobrado / compensado | `sap_pago` (join por `billing_document`) | Resuelto |
+| Cobrado / compensado | `sap_bsad_cleared_items` (join por `billing_document`, desde 2026-09-07; antes `sap_pago`) | Resuelto |
 
 ### 4.0 Traspasos (nuevo hallazgo)
 
@@ -64,10 +64,10 @@ El reporte del cliente arranca con columnas `TRA_*` (traspasos = entradas de mer
 
 | Aspecto | Vendido | Facturado | Cobrado |
 |---|---|---|---|
-| Tabla clave | `sap_VBAP` + `sap_VBAK` | `sap_2lis_13_vditm_billing_document_item` | `sap_pago` |
-| Llave | `VBELN` + `POSNR` | `billing_document` | `billing_document` |
-| Fecha | `ERDAT` / `AUDAT` | `billing_date` | `clearing_date` |
-| Monto | `NETWR` (ver 4.3 — no confiable) | `amount_mxn` | `paid_amount_mxn` |
+| Tabla clave | `sap_VBAP` + `sap_VBAK` | `sap_2lis_13_vditm_billing_document_item` | `sap_bsad_cleared_items` |
+| Llave | `VBELN` + `POSNR` | `billing_document` | `billing_document` (`VBELN_billing_document`) |
+| Fecha | `ERDAT` / `AUDAT` | `billing_date` | `AUGDT_clearing_dt` |
+| Monto | `NETWR` (ver 4.3 — no confiable) | `amount_mxn` | `DMBTR_amount_in_local_currency` |
 | Cantidad | `KWMENG` | `invoiced_quantity` | — |
 | División | `SPART` | `sales_division` | `business_area_code` |
 | Oficina | `VKBUR` | `sales_office` | — |
@@ -150,7 +150,7 @@ El reporte del cliente distingue tres cálculos, y las cifras reales (Celaya, se
 | Ventas debidamente compensadas (= totales − créditos) | 481,447.50 | $19,626,433.81 |
 | Lo compensado en la fecha de ejecución | 572,947.97 | $23,356,493.31 |
 
-"Ventas debidamente compensadas" es la base que usan **hoy** para pagar comisión (ventas de la semana ya cobradas). "Lo compensado en la fecha de ejecución" es la base que **quieren** usar: todo el dinero efectivamente cobrado ese día, venga de la venta que venga — esto es exactamente `sap_pago.clearing_date`, coherente con lo que ya veníamos armando. **No es un cambio de regla de negocio** (la comisión sigue pagándose solo sobre venta compensada, como dice el objetivo detallado); es un cambio de cómo se mide "compensado": hoy se aproxima desde ventas, y se quiere medir directo desde el pago. La diferencia entre ambas medidas puede ser grande (~19% en este ejemplo) y conviene poder explicarla cuando el cálculo nuevo no cuadre con lo que se paga hoy.
+"Ventas debidamente compensadas" es la base que usan **hoy** para pagar comisión (ventas de la semana ya cobradas). "Lo compensado en la fecha de ejecución" es la base que **quieren** usar: todo el dinero efectivamente cobrado ese día, venga de la venta que venga — esto es exactamente `sap_bsad_cleared_items.AUGDT_clearing_dt` (antes `sap_pago.clearing_date`), coherente con lo que ya veníamos armando. **No es un cambio de regla de negocio** (la comisión sigue pagándose solo sobre venta compensada, como dice el objetivo detallado); es un cambio de cómo se mide "compensado": hoy se aproxima desde ventas, y se quiere medir directo desde el pago. La diferencia entre ambas medidas puede ser grande (~19% en este ejemplo) y conviene poder explicarla cuando el cálculo nuevo no cuadre con lo que se paga hoy.
 
 ## 7. Módulo de conciliación y comisionistas
 
@@ -167,7 +167,7 @@ Se probaron dos candidatos ya presentes en `sap_2lis_13_vditm_billing_document_i
 - `denominator_conversion_sku` — **descartado**. En la muestra de `PAQ`/`PZA` es literalmente `1` en todas las filas sin importar material ni cantidad; en `KG` no guarda relación consistente con `invoiced_quantity` (razones 100/50/25/20/4/3.57 sin patrón). No es un factor de conversión confiable.
 - `stockkeeping_units` — **confirmado como la solución**. `invoiced_quantity / stockkeeping_units` da un factor constante por material a través de miles de filas (ej. ~18.00 kg/caja para un material, factor exacto 1.0 para la mayoría de materiales en `PAQ`/`SAC`/`PZA`), validado sobre los 50 casos de peor varianza de todo el dataset (V14) — y sin NULLs ni ceros en ninguna unidad (V15). Únicas excepciones: la unidad `COM` completa (213 filas, 0.20% del monto) y un puñado de materiales `CUT`/`KG` de muestra chica muestran el factor inconsistente — impacto marginal (<0.5% del monto total), se dejan como están.
 
-Ya incorporado en `Datos/sql/v1_flujo_producto_dbc.sql` (sección 14) como columna `cantidad_cajas`, disponible solo para "facturado" (no hay campo equivalente confirmado en `sap_VBAP` para "vendido", y `sap_pago` no llega a nivel material para "cobrado").
+Ya incorporado en `Datos/sql/v1_flujo_producto_dbc.sql` (sección 14) como columna `cantidad_cajas`, disponible solo para "facturado" (no hay campo equivalente confirmado en `sap_VBAP` para "vendido", y `sap_bsad_cleared_items` no llega a nivel material para "cobrado").
 
 ## 9. Pendientes y riesgos abiertos (internos)
 
@@ -214,7 +214,7 @@ _Ver sección 15 para el estado consolidado de estas preguntas (qué ya contest�
 | Módulo del objetivo | Qué tenemos | Brecha principal |
 |---|---|---|
 | Dashboard por CEDIS (flujo de producto) | 3 de 4 capas resueltas y validadas (vendido, facturado, cobrado); traspasos identificado, falta validar. División, canal, CEDIS y tipo de venta resueltos (92.5-100%). | Traspasos sin validar contra `MB51`; datasets `D40/D60/D62` sin explorar. |
-| Comisión y compensación | Estructura de tarifa entendida y validada con datos reales del cliente ($/caja por SET × CEDIS × oficina); tabla de reglas configurable diseñada; medida de "compensado" alineada al objetivo (`sap_pago.clearing_date`). | Sin el mapeo material→SET no se puede calcular ninguna comisión real todavía — es el bloqueante único de este módulo. Falta también la tarifa oficial (`ZSDFI_001`) y la agrupación comisionista↔oficinas. |
+| Comisión y compensación | Estructura de tarifa entendida y validada con datos reales del cliente ($/caja por SET × CEDIS × oficina); tabla de reglas configurable diseñada; medida de "compensado" alineada al objetivo (`sap_bsad_cleared_items.AUGDT_clearing_dt`). | Sin el mapeo material→SET no se puede calcular ninguna comisión real todavía — es el bloqueante único de este módulo. Falta también la tarifa oficial (`ZSDFI_001`) y la agrupación comisionista↔oficinas. |
 | Conciliación documental (SAT) | Fuente candidata identificada (`FBL1N` → `sap_bsik_open_items`). | Prácticamente sin explorar — falta validar la tabla, y falta el rango de proveedor que identifica comisionistas. |
 
 ### 13.2 Granularidad de categorización
@@ -275,7 +275,7 @@ Reemplaza la lista de la sección 10, con el detalle ya afinado:
 
 ### 15.3 Cobertura real de `v1_flujo_producto_dbc` (corrida final v1)
 
-Cifras vigentes, ya con los dos fixes de la rama "cobrado" aplicados: `company_code = 'DBC'` directo sobre `sap_pago` (en vez de heredarlo del match con la factura), y `document_category = 'M'` (V7/V8 de `v1_verificaciones.sql`) para excluir compensaciones/ajustes internos sin factura asociada (26,311 filas, $0, ver sección 9 y `Datos/sql/v1_flujo_producto_dbc.sql`).
+Cifras vigentes, ya con los dos fixes de la rama "cobrado" aplicados: `company_code = 'DBC'` directo sobre la fuente de cobro (en vez de heredarlo del match con la factura; hoy `sap_bsad_cleared_items.BUKRS_company_code`, antes `sap_pago`), y `document_category = 'M'` (V7/V8 de `v1_verificaciones.sql`) para excluir compensaciones/ajustes internos sin factura asociada (26,311 filas, $0, ver sección 9 y `Datos/sql/v1_flujo_producto_dbc.sql`).
 
 | Fase | Filas | Monto total | Rango de fechas | Filas sin CEDIS resuelto |
 |---|---|---|---|---|

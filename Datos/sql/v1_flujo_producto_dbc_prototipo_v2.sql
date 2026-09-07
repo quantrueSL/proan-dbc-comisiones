@@ -72,20 +72,25 @@ factura_totales_v1 AS (
   GROUP BY billing_document
 ),
 
--- Un renglón por factura cobrada (mismo criterio que antes: ANY_VALUE es
--- seguro porque no hay cobros parciales -- sección 4 del borrador). Ya no
--- necesita `business_area_code`/`distribution_channel` propios: facturado
--- ya trae división y canal por línea, no hace falta heredarlos del pago.
+-- Un renglón por factura cobrada. Fuente cambiada el 2026-09-04: antes
+-- sap_pago (~17% del facturado), ahora sap_bsad_cleared_items (~87%,
+-- validado a nivel de monto -- diferencia de $1+ en solo 61 de 153,244
+-- facturas cruzadas). `debit_lg` es el lado que trae la factura contra la
+-- que se aplicó el cobro; el otro lado (credit_lg) es la entrada del pago
+-- en sí, sin ligarse a una factura. SUM en vez de ANY_VALUE porque aquí sí
+-- puede haber más de una línea por factura (pagos parciales en fechas
+-- distintas), a diferencia de sap_pago.
 pago_factura_v1 AS (
   SELECT
-    billing_document,
-    MIN(CAST(clearing_date AS DATE)) AS fecha_cobro,
-    ANY_VALUE(CAST(paid_amount_mxn AS FLOAT64)) AS pagado
-  FROM `proan-quantrue.D50_AGGREGATE_CHATBI.sap_pago`
-  WHERE company_code = 'DBC'
-    AND document_category = 'M'
-    AND CAST(clearing_date AS DATE) >= '2026-01-01'
-  GROUP BY billing_document
+    VBELN_billing_document AS billing_document,
+    MIN(AUGDT_clearing_dt) AS fecha_cobro,
+    SUM(DMBTR_amount_in_local_currency) AS pagado
+  FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
+  WHERE BUKRS_company_code = 'DBC'
+    AND debit_lg
+    AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
+    AND AUGDT_clearing_dt >= '2026-01-01'
+  GROUP BY VBELN_billing_document
 )
 
 -- Facturado + cobrado ----------------------------------------------------

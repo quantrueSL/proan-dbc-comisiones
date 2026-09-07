@@ -26,9 +26,12 @@ PENDIENTE, a propósito, no resuelto aquí:
     sin confirmar con el cliente -- ver la cabecera de
     `v1_conciliacion_producto_semanal.sql`. Por eso existe el detalle diario:
     para poder verificar o ajustar a mano si un caso concreto no encaja.
-  - `base_unidad` = 'caja' en BO/L/A es un supuesto de Silvana (2026-09-02),
-    no una confirmación del cliente como en H/IA. Si se corrige, esta pantalla
-    hereda el arreglo sin tocar este archivo.
+  - `unidad_venta`/`unidad_tarifa` confirmadas 2026-09-07 con la distribución
+    real de `sales_unit` por división (monto DBC 2026): H 99.97% CS -> caja;
+    IA ~100% SAC -> saco; BO 99.4% PAQ -> paquete; A y L 100% PZA -> pieza.
+    `unidad_tarifa` (antes `base_unidad`) es kg en H/IA (peso real) e igual a
+    `unidad_venta` en BO/A/L (no hay conversión real ahí, es la misma
+    cantidad). Ya no es un supuesto pendiente.
   - `comisionista` sigue en NULL donde ninguna fuente trae su nombre — esas
     líneas se agrupan bajo `None`, no desaparecen.
 """
@@ -47,7 +50,7 @@ _TABLA_FACTURA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea
 _DETALLE_SQL = f"""
 SELECT
   semana, periodo_fin, division_code, division, cedis, oficina, comisionista, tipo_venta,
-  matnr, descripcion, unidad_venta, base_unidad, tarifa,
+  matnr, descripcion, unidad_venta, unidad_tarifa, tarifa,
   num_lineas, cantidad_venta_total, monto_total, cantidad_base_total,
   comision_total, lineas_sin_comision
 FROM {_TABLA}
@@ -64,7 +67,7 @@ WHERE semana BETWEEN @start AND @end
 _DETALLE_DIARIO_SQL = f"""
 SELECT
   fecha, division_code, division, cedis, oficina, comisionista, tipo_venta,
-  matnr, descripcion, unidad_venta, base_unidad, tarifa,
+  matnr, descripcion, unidad_venta, unidad_tarifa, tarifa,
   num_lineas, cantidad_venta_total, monto_total, cantidad_base_total,
   comision_total, lineas_sin_comision
 FROM {_TABLA_DIARIA}
@@ -82,7 +85,7 @@ _DETALLE_FACTURA_SQL = f"""
 SELECT
   billing_document, item_number, fecha, division_code, division, cedis,
   oficina, comisionista, tipo_venta, matnr, descripcion, unidad_venta,
-  cantidad_venta, base_unidad, cantidad_base, tarifa, monto, comision,
+  cantidad_venta, unidad_tarifa, cantidad_base, tarifa, monto, comision,
   comision_estado, se_cobro, monto_cobrado, cantidad_cobrada,
   comision_cobrada, fecha_cobro
 FROM {_TABLA_FACTURA}

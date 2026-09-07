@@ -36,11 +36,13 @@ y el motor los devuelve juntos: no hay forma de pedir uno sin el otro.
 TRES COSAS QUE NO SON EVIDENTES:
 
 1. LA COMISIÓN SE CALCULA SOBRE LO FACTURADO, aunque se pague sobre lo cobrado.
-   No es una decisión de diseño sino de datos: `sap_pago` da una fila por
-   factura, sin material, así que sobre lo cobrado no hay SET y no hay tarifa
-   posible. `comision_cobrada`/`monto_cobrado` sí vienen prorrateados por línea
-   (no por documento completo, ver `v1_comision_dbc_completo_cobro.sql`), pero
-   `sap_pago` sigue sin ver todo el cobro real — por eso NO se llaman
+   No es una decisión de diseño sino de datos: la fuente de cobro (2026-09-07:
+   `sap_bsad_cleared_items`, antes `sap_pago`) da una fila por factura, sin
+   material, así que sobre lo cobrado no hay SET y no hay tarifa posible.
+   `comision_cobrada`/`monto_cobrado` sí vienen prorrateados por línea (no por
+   documento completo, ver `v1_comision_dbc_completo_cobro.sql`), pero aunque
+   `sap_bsad_cleared_items` cubre ~87% del facturado (antes ~17% con
+   `sap_pago`) sigue sin ver el 100% del cobro real — por eso NO se llaman
    "pagable": son el suelo conocido.
 
 2. `cantidad_base` MEZCLA KILOS Y CAJAS si se suma entre divisiones. Hoy solo

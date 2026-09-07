@@ -51,10 +51,18 @@ export type FlujoPorFechaRow = FlujoTotales & { fecha: string; fase: string };
 export type FlujoPorCedisRow = FlujoTotales & { cedis: string | null; fase: string };
 
 /**
- * Cantidades desglosadas por unidad. NO se pueden sumar entre unidades: vienen
- * en CS, PZA, PAQ, SAC, KG... Por eso llegan separadas y no como un total.
+ * Cantidades por unidad de manejo (caja/saco/paquete/pieza según división).
+ * NO se pueden sumar entre unidades distintas -- el gráfico sí suma entre
+ * divisiones que comparten unidad (ej. Abarrotes y Leche, ambas "pieza"), la
+ * tabla usa `division`/`division_code` para distinguirlas.
  */
-export type FlujoCantidadUnidadRow = { fase: string; unidad: string; cantidad_total: number };
+export type FlujoCantidadUnidadRow = {
+  fase: string;
+  division_code: string | null;
+  division: string | null;
+  unidad: string;
+  cantidad_total: number;
+};
 
 /**
  * Hasta qué fecha hay datos de cada fase, y no tienen por qué coincidir: la
@@ -127,8 +135,8 @@ export type ComisionTotales = {
   num_lineas: number;
   monto: number;
   comision: number;
-  /** Lo que además tiene un pago registrado. NO es lo pagable: `sap_pago` solo
-   *  ve el 27% del facturado. Es el suelo conocido. */
+  /** Lo que además tiene un pago registrado. NO es lo pagable: la fuente de
+   *  cobro (`sap_bsad_cleared_items`) no ve el 100% del facturado. Es el suelo conocido. */
   comision_con_cobro: number;
   /** Del importe del grupo, cuánto llegó a tener tarifa. Sin esto, poca venta y
    *  media venta bloqueada se ven igual. */
@@ -274,11 +282,12 @@ export type ConciliacionDetalleRow = {
   tipo_venta: string | null;
   matnr: string;
   descripcion: string | null;
-  /** Unidad tal como se facturó (SAC, PZA...), no la que multiplica la tarifa. */
+  /** Unidad de manejo del material (caja/saco/paquete/pieza según división),
+   *  no la unidad SAP cruda de la línea. */
   unidad_venta: string | null;
-  /** `kg` o `caja` — la que sí multiplica la tarifa. `caja` en BO/L/A es un
-   *  supuesto pendiente de confirmar (ver ComisionTotales en este archivo). */
-  base_unidad: string | null;
+  /** La que multiplica la tarifa: `kg` en H/IA, igual a `unidad_venta` en
+   *  BO/A/L (no hay conversión real ahí). Confirmado 2026-09-07. */
+  unidad_tarifa: string | null;
   tarifa: number | null;
   num_lineas: number;
   cantidad_venta_total: number | null;
@@ -325,7 +334,7 @@ export type ConciliacionFacturaRow = {
   descripcion: string | null;
   unidad_venta: string | null;
   cantidad_venta: number | null;
-  base_unidad: string | null;
+  unidad_tarifa: string | null;
   cantidad_base: number | null;
   tarifa: number | null;
   monto: number;

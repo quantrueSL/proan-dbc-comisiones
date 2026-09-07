@@ -213,8 +213,8 @@ def test_la_cantidad_no_se_suma_entre_kilos_y_cajas(cliente):
 
 
 def test_lo_que_tiene_cobro_registrado_va_aparte_y_no_se_llama_pagable(cliente):
-    # `sap_pago` solo ve el 27% del facturado, así que esto es el suelo
-    # conocido, no lo que hay que pagar.
+    # La fuente de cobro (sap_bsad_cleared_items) no ve el 100% del facturado,
+    # así que esto es el suelo conocido, no lo que hay que pagar.
     cliente([_fila(comision=40.0, cobrada=12.0)])
 
     totales = _informe()["totales"]

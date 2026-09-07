@@ -103,7 +103,7 @@ describe("las cuatro capas del recorrido", () => {
       expect(capa.fuente.length, `la capa ${capa.clave} no dice su fuente`).toBeGreaterThan(3);
     }
     expect(CAPAS.find((c) => c.clave === "traspasos")?.fuente).toMatch(/MB51/);
-    expect(CAPAS.find((c) => c.clave === "cobrado")?.fuente).toMatch(/sap_pago/);
+    expect(CAPAS.find((c) => c.clave === "cobrado")?.fuente).toMatch(/sap_bsad_cleared_items/);
   });
 
   it("la capa sin validar no enseña cifras, y las demás sí", () => {

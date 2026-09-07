@@ -132,7 +132,7 @@ const COLUMNAS_PRODUCTO: ColumnaExcel[] = [
   { encabezado: "Cantidad vendida", ancho: 16, alinear: "right", formato: NUMERO2, sumable: true },
   { encabezado: "Unidad vendida", ancho: 12 },
   { encabezado: "Cantidad base", ancho: 15, alinear: "right", formato: NUMERO2, sumable: true },
-  { encabezado: "Unidad base", ancho: 11 },
+  { encabezado: "Unidad tarifa", ancho: 12 },
   { encabezado: "Tarifa", ancho: 11, alinear: "right", formato: MONEDA },
   { encabezado: "Comisión", ancho: 13, alinear: "right", formato: MONEDA, sumable: true },
   { encabezado: "Importe facturado", ancho: 17, alinear: "right", formato: MONEDA, sumable: true }
@@ -256,7 +256,7 @@ async function construirExcel(datos: {
     cantidad_venta_total: number | null;
     unidad_venta: string | null;
     cantidad_base_total: number | null;
-    base_unidad: string | null;
+    unidad_tarifa: string | null;
     tarifa: number | null;
     comision_total: number;
     monto_total: number;
@@ -269,7 +269,7 @@ async function construirExcel(datos: {
     f.cantidad_venta_total,
     f.unidad_venta ?? "",
     f.cantidad_base_total,
-    f.base_unidad ?? "",
+    f.unidad_tarifa ?? "",
     f.tarifa,
     f.comision_total,
     f.monto_total
@@ -319,7 +319,7 @@ async function construirExcel(datos: {
       f.cantidad_venta,
       f.unidad_venta ?? "",
       f.cantidad_base,
-      f.base_unidad ?? "",
+      f.unidad_tarifa ?? "",
       f.tarifa,
       f.comision,
       f.monto,
@@ -518,11 +518,12 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
               ninguna llega — ver la sección 16.3 del borrador técnico). El paso de comparar el total
               contra lo pagado se sigue haciendo a mano.
             </p>
-            <h3>Un supuesto pendiente de confirmar</h3>
+            <h3>Unidades</h3>
             <p>
-              En Botana, Leche y Abarrotes, la cantidad base (la que multiplica la tarifa) se asume en
-              <b> cajas</b>. Es un supuesto de trabajo, no una confirmación del cliente como en Huevo e
-              Ingrediente Animal (kg).
+              &quot;Unidad vendida&quot; es la unidad de manejo del material: caja en Huevo, saco en
+              Alimento, paquete en Botana, pieza en Abarrotes y Leche. &quot;Unidad tarifa&quot; es la
+              que multiplica la tarifa: <b>kg</b> en Huevo e Ingrediente Animal (peso real), igual a la
+              unidad vendida en Botana, Abarrotes y Leche. Confirmado con datos el 2026-09-07.
             </p>
           </>
         }
@@ -740,7 +741,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                           </td>
                           <td className="n">
                             {d.cantidad_base_total !== null ? cantidad.format(d.cantidad_base_total) : "—"}{" "}
-                            <small>{d.base_unidad}</small>
+                            <small>{d.unidad_tarifa}</small>
                           </td>
                           <td className="n">{d.tarifa !== null ? cantidad.format(d.tarifa) : "—"}</td>
                           <td className="n">{pesos(d.comision_total)}</td>

@@ -353,10 +353,10 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
             </p>
             <h3>Por qué sobre lo facturado, si se paga sobre lo cobrado</h3>
             <p>
-              Porque lo cobrado no trae material: <code>sap_pago</code> da una fila por factura, sin
-              línea, así que no hay SET ni tarifa posible. Y esa fuente solo ve el 27% de lo
-              facturado, con un ratio plano en los ocho meses de 2026 — si fuera retraso de cobro,
-              enero estaría muy por encima de agosto.
+              Porque lo cobrado no trae material: <code>sap_bsad_cleared_items</code> da una fila por
+              factura, sin línea, así que no hay SET ni tarifa posible. Esa fuente ve ~87% de lo
+              facturado; el resto es cartera aún no cobrada (concentrada en los últimos dos meses),
+              no un problema de la fuente.
             </p>
             <p>
               Por eso la columna «con cobro registrado» es un <b>suelo conocido</b>, no lo que hay

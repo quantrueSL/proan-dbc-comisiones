@@ -2,6 +2,11 @@
 -- Comisiones DBC + cobro. Base: v1_comision_dbc_completo.sql, sin tocarlo.
 -- Agrega se_cobro/monto_cobrado/cantidad_cobrada/comision_cobrada, mismo
 -- prorrateo que v1_flujo_producto_dbc_prototipo_v2.sql (pagado / con_impuestos).
+-- `comision_mxn` sigue siendo tarifa × facturado (comisión devengada, sin
+-- tocar) -- `comision_cobrada` es tarifa × lo efectivamente cobrado.
+--
+-- 2026-09-07: fuente del cobro cambiada de sap_pago (~17% del facturado) a
+-- sap_bsad_cleared_items (~87%, validado a nivel de monto).
 -- =============================================================================
 CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` AS
 
@@ -288,15 +293,21 @@ factura_totales AS (
   GROUP BY billing_document
 ),
 
+-- debit_lg: lado de BSAD que trae la factura contra la que se aplicó el
+-- cobro (el otro lado, credit_lg, es la entrada del pago en sí). SUM en vez
+-- de ANY_VALUE porque puede haber más de una línea por factura (pagos
+-- parciales en fechas distintas).
 pago_factura AS (
   SELECT
-    billing_document,
-    MIN(CAST(clearing_date AS DATE)) AS fecha_cobro,
-    ANY_VALUE(CAST(paid_amount_mxn AS FLOAT64)) AS pagado
-  FROM `proan-quantrue.D50_AGGREGATE_CHATBI.sap_pago`
-  WHERE company_code = 'DBC' AND document_category = 'M'
-    AND CAST(clearing_date AS DATE) >= '2026-01-01'
-  GROUP BY billing_document
+    VBELN_billing_document AS billing_document,
+    MIN(AUGDT_clearing_dt) AS fecha_cobro,
+    SUM(DMBTR_amount_in_local_currency) AS pagado
+  FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
+  WHERE BUKRS_company_code = 'DBC'
+    AND debit_lg
+    AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
+    AND AUGDT_clearing_dt >= '2026-01-01'
+  GROUP BY VBELN_billing_document
 )
 
 SELECT
@@ -315,7 +326,6 @@ SELECT
   t.cantidad,
   t.importe_mxn,
   t.tarifa,
-  ROUND(t.cantidad * t.tarifa, 2) AS comision_mxn,
   CASE
     WHEN t.tarifa     IS NOT NULL THEN 'OK'
     WHEN t.SETNAME    IS NULL     THEN 'SIN_SET'
@@ -323,10 +333,15 @@ SELECT
     ELSE 'SIN_TARIFA'
   END AS status,
 
+  ROUND(t.cantidad * t.tarifa, 2) AS comision_mxn,
+
   p.billing_document IS NOT NULL AS se_cobro,
-  ROUND(t.importe_mxn * SAFE_DIVIDE(p.pagado, ft.con_impuestos), 2)                     AS monto_cobrado,
-  ROUND(t.cantidad    * SAFE_DIVIDE(p.pagado, ft.con_impuestos), 2)                     AS cantidad_cobrada,
-  ROUND(t.cantidad * t.tarifa * SAFE_DIVIDE(p.pagado, ft.con_impuestos), 2)             AS comision_cobrada,
+  ROUND(t.importe_mxn * SAFE_DIVIDE(p.pagado, ft.con_impuestos), 2) AS monto_cobrado,
+  ROUND(t.cantidad    * SAFE_DIVIDE(p.pagado, ft.con_impuestos), 2) AS cantidad_cobrada,
+  -- Comisión "con cobro registrado": tarifa × lo efectivamente cobrado. 0 si
+  -- nada se ha cobrado todavía (no NULL: NULL es "sin tarifa", 0 es "con
+  -- tarifa, sin cobro").
+  ROUND(t.cantidad * t.tarifa * COALESCE(SAFE_DIVIDE(p.pagado, ft.con_impuestos), 0), 2) AS comision_cobrada,
   p.fecha_cobro
 FROM con_tarifa t
 LEFT JOIN factura_totales ft ON ft.billing_document = t.billing_document

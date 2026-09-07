@@ -81,11 +81,11 @@ export const CAPAS: Capa[] = [
     titulo: "Cobrado",
     breve: "entra el dinero",
     que: "El dinero efectivamente cobrado y compensado. Es el eslabón que importa: la comisión se paga sobre esto y solo sobre esto.",
-    fuente: "sap_pago (unido por billing_document)",
+    fuente: "sap_bsad_cleared_items (unido por billing_document)",
     llave: "billing_document",
     fecha: "clearing_date",
     monto: "el neto de la factura cobrada",
-    nota: "Va por documento de factura, no por línea: una fila por factura cobrada, de ahí que sean tan pocas. SAP repite el importe en cada partida y en cada compensación, así que sumar sus renglones a pelo inflaba el cobrado un 53%. Una factura emitida no genera comisión hasta que se compensa, y las ventas a crédito tardan.",
+    nota: "Va por documento de factura, no por línea: una fila por factura cobrada, de ahí que sean tan pocas. Una factura emitida no genera comisión hasta que se compensa, y las ventas a crédito tardan.",
     resuelta: true,
     cifras: { lineas: 39332, monto: 1194860136.82 }
   }

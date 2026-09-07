@@ -86,7 +86,8 @@ export function RankedBars({
   color = "#5f62d0",
   vacio = "Sin datos en el periodo",
   limite,
-  alVerTodo
+  alVerTodo,
+  estatico = false
 }: {
   datos: BarraDato[];
   metrica: Metrica;
@@ -96,6 +97,12 @@ export function RankedBars({
   vacio?: string;
   limite?: number;
   alVerTodo?: () => void;
+  /** Igual que en `Donut`: apaga el clic en TODAS las barras. A diferencia de
+   *  `valor: null` (que marca un grupo real "sin asignar"), esto es para
+   *  listas donde nada es filtrable pero cada fila SÍ es un grupo con nombre
+   *  -- así no caen en el naranja fijo de "sin asignar" y sí llevan el color
+   *  de la fase, como el resto de las tarjetas. */
+  estatico?: boolean;
 }) {
   if (!datos.length) {
     return <p className="dashboard-empty">{vacio}</p>;
@@ -112,8 +119,8 @@ export function RankedBars({
     <div className="flujo-lista">
       <ul className="dashboard-bar-list">
         {visibles.map((dato) => {
-          const activa = seleccion !== null && seleccion === dato.valor;
-          const filtrable = dato.valor !== null;
+          const filtrable = !estatico && dato.valor !== null;
+          const activa = filtrable && seleccion !== null && seleccion === dato.valor;
           return (
             <li className="dashboard-bar-row" key={dato.etiqueta}>
               <button
@@ -124,11 +131,13 @@ export function RankedBars({
                 disabled={!filtrable}
                 onClick={() => onSelect(activa ? null : dato.valor)}
                 title={
-                  filtrable
-                    ? activa
-                      ? `Quitar el filtro de ${dato.etiqueta}`
-                      : `Filtrar por ${dato.etiqueta}`
-                    : "Sin asignar: no pertenece a ningún grupo, no se puede filtrar"
+                  estatico
+                    ? undefined
+                    : filtrable
+                      ? activa
+                        ? `Quitar el filtro de ${dato.etiqueta}`
+                        : `Filtrar por ${dato.etiqueta}`
+                      : "Sin asignar: no pertenece a ningún grupo, no se puede filtrar"
                 }
                 type="button"
               >
@@ -138,7 +147,7 @@ export function RankedBars({
                     className="dashboard-bar-fill"
                     style={{
                       width: `${Math.max(1.5, (dato.cantidad / maximo) * 100)}%`,
-                      background: filtrable ? color : "#c9761f"
+                      background: estatico || filtrable ? color : "#c9761f"
                     }}
                   />
                 </span>

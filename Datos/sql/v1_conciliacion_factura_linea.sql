@@ -83,13 +83,15 @@ comisionista AS (
   FROM comisionista_verificado v
   LEFT JOIN comisionista_excepciones e ON e.oficina = v.oficina
 ),
--- Unidad y cantidad tal como se facturó (ej. "9 SAC"). `invoiced_quantity` es
--- NUMERIC en la fuente -> castear a FLOAT64.
+-- Unidad y cantidad de manejo por material -- `stockkeeping_units` (no
+-- `invoiced_quantity`/`sales_unit` crudos, que vienen mezclados CS/PAQ/PZA/
+-- SAC/KG dentro de una misma división). Confirmado 2026-09-07 con la
+-- distribución real por división (monto DBC 2026): H 99.97% CS -> caja;
+-- IA ~100% SAC -> saco; BO 99.4% PAQ -> paquete; A y L 100% PZA -> pieza.
 venta_nativa AS (
   SELECT
     billing_document, item_number,
-    sales_unit AS unidad_venta,
-    CAST(invoiced_quantity AS FLOAT64) AS cantidad_venta
+    CAST(stockkeeping_units AS FLOAT64) AS cantidad_venta
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
 ),
 -- Descripción de producto en español. Verificado 2026-09-02: 0 duplicados por
@@ -111,9 +113,21 @@ SELECT
   t.tipo_venta,
   t.matnr,
   d.descripcion,
-  v.unidad_venta,
+  CASE t.division
+    WHEN 'H'  THEN 'caja'
+    WHEN 'IA' THEN 'saco'
+    WHEN 'BO' THEN 'paquete'
+    WHEN 'A'  THEN 'pieza'
+    WHEN 'L'  THEN 'pieza'
+  END                                                        AS unidad_venta,
   v.cantidad_venta,
-  CASE t.division WHEN 'H' THEN 'kg' WHEN 'IA' THEN 'kg' ELSE 'caja' END AS base_unidad,
+  CASE t.division
+    WHEN 'H'  THEN 'kg'
+    WHEN 'IA' THEN 'kg'
+    WHEN 'A'  THEN 'pieza'
+    WHEN 'L'  THEN 'pieza'
+    WHEN 'BO' THEN 'paquete'
+  END                                                        AS unidad_tarifa,
   t.cantidad                                                AS cantidad_base,
   t.tarifa,
   CAST(t.importe_mxn AS FLOAT64)                            AS monto,

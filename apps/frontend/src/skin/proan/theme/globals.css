@@ -6870,7 +6870,7 @@ body.proan-report-assistant-open .proan-content-scroll {
 /* ── Comisiones ─────────────────────────────────────────────────────────
    La nota bajo el indicador existe para una cifra concreta: "con cobro
    registrado" se lee como "lo que hay que pagar" si no se dice lo contrario,
-   y no lo es (sap_pago solo ve el 27% del facturado). El matiz tiene que ir
+   y no lo es (la fuente de cobro no ve el 100% del facturado). El matiz tiene que ir
    pegado al numero, no en un pie de pagina que nadie baja a leer. */
 .hydro-kpi-nota { display: block; color: #64748b; font-size: 11px; font-style: normal; line-height: 1.35; }
 
@@ -10863,6 +10863,10 @@ body.proan-report-assistant-open .proan-content-scroll {
 .flujo-modal-cuerpo th, .flujo-modal-cuerpo td { border-top: 1px solid #e2e8f0; padding: 11px 14px; }
 .flujo-modal-cuerpo th.flujo-num, .flujo-modal-cuerpo td.flujo-num { text-align: right; font-variant-numeric: tabular-nums; }
 .flujo-modal-cuerpo .flujo-sin-asignar td { background: #fff9f5; font-style: italic; }
+/* Encabezado de sección por fase, dentro del cuerpo del modal -- `td`, no
+   `th`, para que no herede el `position: sticky` de la cabecera real. */
+.flujo-modal-fase td { background: #f8fafc; font-weight: 700; font-size: 11.5px; padding: 8px 14px; }
+.flujo-modal-fase td i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; vertical-align: middle; }
 /* Enlaces dentro de los avisos: azul oscuro para que se vean como enlace sin
    competir con el naranja de marca, que aquí ya significa «atención». */
 .flujo-modal-cuerpo a { color: #2f3a8c; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
@@ -11371,39 +11375,48 @@ body.proan-report-assistant-open .proan-content-scroll {
   border-color: #b9b3e0; color: #43458f; outline: none;
 }
 
-/* Tablero: la gráfica ocupa dos columnas de tres —ancho de gráfica, no de
-   página— con el donut al lado en la misma fila. Debajo, las dos listas largas
-   (CEDIS y división) y las dos piezas pequeñas apiladas a la derecha. Todo con
+/* Gráfica del importe diario + "Por tipo de venta", donde estaban antes de
+   hoy: juntas en su propia fila, aparte del tablero de abajo. */
+.flujo-fila-grafica {
+  display: grid; gap: 12px; align-items: start; margin-bottom: 12px;
+  grid-template-columns: minmax(0, 2.3fr) minmax(0, 1fr);
+}
+.flujo-fila-grafica > * { min-width: 0; }
+
+/* Minifiltro de fase: una celda más del tablero (arriba a la izquierda), sin
+   el fondo de tarjeta de sus vecinas -- para que no parezca que pertenece a
+   ninguna de ellas en particular, ya que controla a varias. */
+.flujo-fase-toggle { display: flex; flex-direction: column; }
+.flujo-fase-toggle .dashboard-metric-toggle { margin-top: 2px; }
+
+/* Tablero: 3 columnas INDEPENDIENTES, no una rejilla de filas compartidas --
+   cada columna apila sus propias tarjetas seguidas, sin esperar a que la
+   columna vecina termine su fila. Así filtro+división (las dos cortas) no
+   quedan separadas por el hueco que deja CEDIS (la más alta) en su columna.
    `minmax(0, …)`: ninguna columna puede crecer con su contenido. */
 .flujo-tablero {
   display: grid; gap: 12px; align-items: start;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.15fr) minmax(0, 1fr);
-  grid-template-areas:
-    "grafica grafica  tipo"
-    "cedis   division mes"
-    "cedis   division unidad";
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .flujo-tablero > * { min-width: 0; }
-.flujo-tablero > [data-zona="grafica"] { grid-area: grafica; }
-.flujo-tablero > [data-zona="cedis"] { grid-area: cedis; }
-.flujo-tablero > [data-zona="division"] { grid-area: division; }
-.flujo-tablero > [data-zona="tipo"] { grid-area: tipo; }
-.flujo-tablero > [data-zona="mes"] { grid-area: mes; }
-.flujo-tablero > [data-zona="unidad"] { grid-area: unidad; }
+.flujo-columna { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
-.flujo-tablero .dashboard-card { padding: 12px 14px 10px; }
-.flujo-tablero .dashboard-card-head { margin-bottom: 9px; }
-.flujo-tablero .dashboard-card-head h2 {
+/* Los estilos de tarjeta de aquí en adelante se comparten entre el tablero y
+   la fila de la gráfica (misma familia visual, dos contenedores distintos). */
+.flujo-tablero .dashboard-card, .flujo-fila-grafica .dashboard-card { padding: 12px 14px 10px; }
+.flujo-tablero .dashboard-card-head, .flujo-fila-grafica .dashboard-card-head { margin-bottom: 9px; }
+.flujo-tablero .dashboard-card-head h2, .flujo-fila-grafica .dashboard-card-head h2 {
   margin: 0; color: #25272c; font-family: var(--font-proan-primary);
   font-size: 12.5px; font-weight: 700; letter-spacing: -.01em;
 }
-.flujo-tablero .dashboard-card-head span { display: block; margin-top: 2px; color: #918a80; font-size: 10px; }
+.flujo-tablero .dashboard-card-head span, .flujo-fila-grafica .dashboard-card-head span { display: block; margin-top: 2px; color: #918a80; font-size: 10px; }
 
 /* La gráfica es la pieza principal: título un punto mayor y el resto igual que
-   sus vecinas, para que la fila se lea como una fila. */
-.flujo-tablero .flujo-tarjeta-grafica { padding: 12px 16px 8px; }
-.flujo-tablero .flujo-tarjeta-grafica .dashboard-card-head { margin-bottom: 4px; }
-.flujo-tablero .flujo-tarjeta-grafica .dashboard-card-head h2 { font-size: 13.5px; }
+   su vecina, para que la fila se lea como una fila. Va DESPUÉS de las reglas
+   generales de arriba para poder pisarlas. */
+.flujo-tarjeta-grafica { padding: 12px 16px 8px; }
+.flujo-tarjeta-grafica .dashboard-card-head { margin-bottom: 4px; }
+.flujo-tarjeta-grafica .dashboard-card-head h2 { font-size: 13.5px; }
 
 /* Barras: se declaran las áreas que sus hijos ya piden (ver el punto 2 de
    arriba) y el <li> deja de ser una rejilla de dos columnas que le comía 90 px
@@ -11429,31 +11442,26 @@ body.proan-report-assistant-open .proan-content-scroll {
 }
 .flujo-lista-pie:hover, .flujo-lista-pie:focus-visible { background: rgba(61, 61, 124, .08); outline: none; }
 
-/* Donut y leyenda, a la medida de la columna estrecha. */
-.flujo-tablero .dashboard-donut-svg { width: 112px; height: 112px; }
-.flujo-tablero .flujo-donut { padding: 2px 0 4px; }
-.flujo-tablero .flujo-donut .dashboard-status-legend { display: grid; gap: 1px; width: 100%; margin: 9px 0 0; }
-.flujo-tablero .flujo-donut .dashboard-status-legend button, .flujo-tablero .flujo-donut .dashboard-status-legend .flujo-donut-leyenda-fija { padding: 3px 5px; font-size: 11px; }
+/* Donut y leyenda, a la medida de la columna estrecha -- vive en
+   `.flujo-fila-grafica`, no en `.flujo-tablero`. */
+.flujo-fila-grafica .dashboard-donut-svg { width: 112px; height: 112px; }
+.flujo-fila-grafica .flujo-donut { padding: 2px 0 4px; }
+.flujo-fila-grafica .flujo-donut .dashboard-status-legend { display: grid; gap: 1px; width: 100%; margin: 9px 0 0; }
+.flujo-fila-grafica .flujo-donut .dashboard-status-legend button, .flujo-fila-grafica .flujo-donut .dashboard-status-legend .flujo-donut-leyenda-fija { padding: 3px 5px; font-size: 11px; }
 
 @media (max-width: 1279px) {
-  .flujo-tablero {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-      "grafica grafica"
-      "cedis   division"
-      "tipo    mes"
-      "tipo    unidad";
-  }
+  .flujo-fila-grafica { grid-template-columns: minmax(0, 1fr); }
+  /* Las 3 columnas (cada una ya apilada por su cuenta) se acomodan solas en 2:
+     filtro+división y CEDIS arriba, mes+unidad abajo -- orden natural del
+     grid, sin nombrar áreas. */
+  .flujo-tablero { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 
 @media (max-width: 899px) {
   .flujo-cabecera { grid-template-columns: minmax(0, 1fr); }
   .flujo-cabecera .hydro-module-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .flujo-controles-derecha { margin-left: 0; }
-  .flujo-tablero {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "grafica" "cedis" "division" "tipo" "mes" "unidad";
-  }
+  .flujo-tablero { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 599px) {
