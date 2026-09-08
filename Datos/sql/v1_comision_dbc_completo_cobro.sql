@@ -7,6 +7,23 @@
 --
 -- 2026-09-07: fuente del cobro cambiada de sap_pago (~17% del facturado) a
 -- sap_bsad_cleared_items (~87%, validado a nivel de monto).
+--
+-- 2026-09-08: SE INTEGRA LA SOCIEDAD PAN EN HUEVO. Antes solo entraba DBC, y
+-- eso dejaba fuera la mayor parte de la comisión de huevo (PAN paga $66,2 M
+-- contra $37,1 M de DBC en 2026 hasta el 8 de julio). El criterio del filtro
+-- salió de la tabla de tarifa oficial de SAP -- ver el comentario de
+-- `alcance_pan`, que es donde está documentada la decisión y su medición.
+-- Efecto: la comisión devengada total pasa de $45,3 M a $107,6 M, y la
+-- columna `bukrs` distingue una sociedad de la otra en toda la cadena.
+--
+-- 2026-09-08: BUG CORREGIDO en la tarifa de huevo -- MED MAYOREO y MAYOREO
+-- son tarifas DISTINTAS en SAP (columnas separadas _MMAY / _MAY, "1/2
+-- mayoreo" y "mayoreo" en el Excel del cliente), pero el CASE de más abajo
+-- metía las dos en la misma rama apuntando siempre a _MAYOREO. MED MAYOREO
+-- salía "sin tarifa" cada vez que _MAY estaba vacía, aunque _MMAY tuviera una
+-- tarifa real -- confirmado en las 16 llaves bloqueadas de HSANJUAN/HPORTALES:
+-- 100% con _MAY vacía y _MMAY con valor. $61,1 M que antes caían en "sin
+-- tarifa para esa llave" ahora sí calculan.
 -- =============================================================================
 CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` AS
 
@@ -32,7 +49,10 @@ cedis AS (
     END AS canal
   FROM (SELECT DISTINCT storage_location, sales_office
         FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
-        WHERE company_code = 'DBC') f
+        -- PAN incluida (2026-09-08): sus almacenes necesitan resolver
+        -- tipo_venta igual que los de DBC. Verificado que `dm_cedis` los cubre
+        -- al 100%, así que no abre ningún hueco nuevo.
+        WHERE company_code IN ('DBC','PAN')) f
   LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc
          ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
   LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
@@ -43,7 +63,7 @@ cedis AS (
 
 tarifas_h AS (
   SELECT
-    WERKS, LGORT, VKBUR,
+    BUKRS, WERKS, LGORT, VKBUR,
     SAFE_CAST(TRIM(HSANJUAN_PISO)      AS FLOAT64) AS HSANJUAN_MENUDEO,
     SAFE_CAST(TRIM(HSANJUAN_RUTA)      AS FLOAT64) AS HSANJUAN_RUTA,
     SAFE_CAST(TRIM(HSANJUAN_MMAY)      AS FLOAT64) AS HSANJUAN_MMAY,
@@ -146,6 +166,30 @@ tarifas_a AS (
   FROM `proan-quantrue.D00_SANDBOX.proan_ZTSD_OV_COM_A_20260829`
 ),
 
+-- ─────────────────────────────────────────────────────────────────────────
+-- ALCANCE DE LA SOCIEDAD PAN (agregado 2026-09-08)
+--
+-- Huevo se factura por DOS sociedades: DBC ($647 M en 2026) y PAN ($10.925 M).
+-- Traer PAN entera sería incorrecto: la mayor parte de esa facturación no
+-- genera comisión para los comisionistas de DBC.
+--
+-- EL FILTRO SE DECIDIÓ A PARTIR DE LA TABLA DE TARIFA OFICIAL DE SAP: entra
+-- solo la facturación de PAN cuya llave centro+almacén+oficina existe en
+-- `proan_ZTSD_OV_COM_H_20260829` con `BUKRS = 'PAN'`. Ese cruce ES la
+-- definición de "genera comisión" -- si no hay tarifa, no hay comisión.
+-- Medido: reduce $10.925 M -> $2.103 M de facturación en alcance.
+--
+-- LA PLANTA `PANF` NO BASTA como criterio, aunque lo parezca: el lado PAN de
+-- la tarifa es 100% PANF (1 centro, 25 almacenes, 76 oficinas) y PAN3 no
+-- aparece nunca ni en la tarifa ni en el mapeo de comisionistas -- pero
+-- DENTRO de PANF solo $2.103 M de $7.422 M tiene tarifa. Filtrar por planta
+-- sola metería 3,5 veces más facturación de la que corresponde.
+alcance_pan AS (
+  SELECT DISTINCT WERKS, LGORT, VKBUR
+  FROM `proan-quantrue.D00_SANDBOX.proan_ZTSD_OV_COM_H_20260829`
+  WHERE BUKRS = 'PAN'
+),
+
 facturas AS (
   SELECT
     f.billing_document,
@@ -164,7 +208,17 @@ facturas AS (
     f.amount_mxn                                  AS importe_mxn,
     f.currency
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
-  WHERE f.company_code   = 'DBC'
+  WHERE (
+      f.company_code = 'DBC'
+      -- PAN entra SOLO en huevo y SOLO donde su propia tarifa existe. Ver el
+      -- comentario de `alcance_pan` para el porqué del criterio.
+      OR (f.company_code = 'PAN'
+          AND f.sales_division = 'H'
+          AND EXISTS (SELECT 1 FROM alcance_pan k
+                      WHERE k.WERKS = f.receiving_plant
+                        AND k.LGORT = f.storage_location
+                        AND k.VKBUR = f.sales_office))
+    )
     AND f.sales_division IN ('H','BO','IA','A','L')
     AND f.document_category = 'M'
     AND f.billing_date BETWEEN '2026-01-01' AND CURRENT_DATE()
@@ -206,7 +260,8 @@ base AS (
   LEFT JOIN cedis c
     ON f.lgort = c.almacen AND f.vkbur = c.oficina
   LEFT JOIN tarifas_h th
-    ON f.gsber = 'H' AND f.werks = th.WERKS AND f.lgort = th.LGORT AND f.vkbur = th.VKBUR
+    ON f.gsber = 'H' AND f.bukrs = th.BUKRS
+   AND f.werks = th.WERKS AND f.lgort = th.LGORT AND f.vkbur = th.VKBUR
   LEFT JOIN tarifas_bo tbo
     ON f.gsber = 'BO' AND f.werks = tbo.WERKS AND f.lgort = tbo.LGORT AND f.vkbur = tbo.VKBUR
   LEFT JOIN tarifas_ia tia
@@ -222,22 +277,32 @@ con_tarifa AS (
   SELECT
     *,
     CASE
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN RUTA'               THEN HSANJUAN_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN PISO'               THEN HSANJUAN_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta IN ('MED MAYOREO','MAYOREO')  THEN HSANJUAN_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'ABASTOS'                   THEN HSANJUAN_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN RUTA'               THEN HPORTALES_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN PISO'               THEN HPORTALES_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta IN ('MED MAYOREO','MAYOREO')  THEN HPORTALES_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'ABASTOS'                   THEN HPORTALES_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN RUTA'               THEN HINDUSTRIA_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN PISO'               THEN HINDUSTRIA_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta IN ('MED MAYOREO','MAYOREO')  THEN HINDUSTRIA_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'ABASTOS'                   THEN HINDUSTRIA_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN RUTA'               THEN HRANCHERO_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN PISO'               THEN HRANCHERO_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta IN ('MED MAYOREO','MAYOREO')  THEN HRANCHERO_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'ABASTOS'                   THEN HRANCHERO_ABASTOS
+      -- 2026-09-08: MED MAYOREO y MAYOREO son tarifas DISTINTAS en SAP (columnas
+      -- separadas _MMAY / _MAY, "1/2 mayoreo" y "mayoreo" en el Excel del
+      -- cliente) -- antes las dos apuntaban a _MAYOREO (_MAY) y MED MAYOREO
+      -- salía "sin tarifa" cada vez que _MAY estaba vacía aunque _MMAY tuviera
+      -- una tarifa real (confirmado en las 16 llaves bloqueadas de HSANJUAN/
+      -- HPORTALES: 100% con _MAY vacía y _MMAY con valor). $61,1 M en alcance.
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN RUTA'  THEN HSANJUAN_RUTA
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN PISO'  THEN HSANJUAN_MENUDEO
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'MAYOREO'      THEN HSANJUAN_MAYOREO
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'MED MAYOREO' THEN HSANJUAN_MMAY
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'ABASTOS'     THEN HSANJUAN_ABASTOS
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN RUTA'  THEN HPORTALES_RUTA
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN PISO'  THEN HPORTALES_MENUDEO
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'MAYOREO'      THEN HPORTALES_MAYOREO
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'MED MAYOREO' THEN HPORTALES_MMAY
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'ABASTOS'     THEN HPORTALES_ABASTOS
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN RUTA'  THEN HINDUSTRIA_RUTA
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN PISO'  THEN HINDUSTRIA_MENUDEO
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'MAYOREO'      THEN HINDUSTRIA_MAYOREO
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'MED MAYOREO' THEN HINDUSTRIA_MMAY
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'ABASTOS'     THEN HINDUSTRIA_ABASTOS
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN RUTA'  THEN HRANCHERO_RUTA
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN PISO'  THEN HRANCHERO_MENUDEO
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'MAYOREO'      THEN HRANCHERO_MAYOREO
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'MED MAYOREO' THEN HRANCHERO_MMAY
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'ABASTOS'     THEN HRANCHERO_ABASTOS
 
       WHEN gsber = 'BO' AND SETNAME = 'CHOCOLATE'  AND canal = 'MENUDEO' THEN CHOCOLATE_MENUDEO
       WHEN gsber = 'BO' AND SETNAME = 'CHOCOLATE'  AND canal = 'MAYOREO' THEN CHOCOLATE_MAYOREO
@@ -289,7 +354,7 @@ factura_totales AS (
     billing_document,
     SUM(CAST(amount_total_mxn AS FLOAT64)) AS con_impuestos
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
-  WHERE company_code = 'DBC' AND document_category = 'M'
+  WHERE company_code IN ('DBC','PAN') AND document_category = 'M'
   GROUP BY billing_document
 ),
 
@@ -303,7 +368,7 @@ pago_factura AS (
     MIN(AUGDT_clearing_dt) AS fecha_cobro,
     SUM(DMBTR_amount_in_local_currency) AS pagado
   FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
-  WHERE BUKRS_company_code = 'DBC'
+  WHERE BUKRS_company_code IN ('DBC','PAN')
     AND debit_lg
     AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
     AND AUGDT_clearing_dt >= '2026-01-01'

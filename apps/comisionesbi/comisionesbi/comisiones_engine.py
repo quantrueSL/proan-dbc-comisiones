@@ -57,10 +57,17 @@ TRES COSAS QUE NO SON EVIDENTES:
 
 from __future__ import annotations
 
+import logging
+import os
+import threading
+import time
 from collections import defaultdict
 from datetime import date
+from typing import NamedTuple
 
-from comisionesbi.db import run_query
+from comisionesbi.db import BigQueryError, run_query
+
+log = logging.getLogger(__name__)
 
 _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 
@@ -68,7 +75,7 @@ _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 # SQL sirva a todas las combinaciones de filtro sin construir la cadena a trozos.
 _DETALLE_SQL = f"""
 SELECT
-  fecha, division_code, division, cedis, oficina, comisionista,
+  fecha, sociedad, division_code, division, cedis, oficina, comisionista,
   tipo_venta, `set`, base_unidad, comision_estado,
   num_lineas, monto_total, cantidad_base_total,
   comision_total, comision_min_total, comision_max_total,
@@ -78,6 +85,7 @@ WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
   AND (@cedis IS NULL OR cedis = @cedis)
   AND (@comisionista IS NULL OR comisionista = @comisionista)
+  AND (@sociedad IS NULL OR sociedad = @sociedad)
 """
 
 # Sin filtro de fechas a propósito: "hasta cuándo hay datos" es una propiedad
@@ -158,6 +166,7 @@ def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
 # comisionista: comisionista → división → hoja), así que un solo array las sirve
 # a las dos y el navegador no tiene que pedir nada al abrir un nodo.
 DIMENSIONES_DESGLOSE = (
+    "sociedad",
     "comisionista",
     "division_code",
     "division",
@@ -196,20 +205,52 @@ def _desglose(filas: list[dict], dimensiones: tuple[str, ...]) -> list[dict]:
     ]
 
 
-def build_report(
+# ─── Desglose de lo bloqueado ──────────────────────────────────────────────
+# Mismas 4 dimensiones que la llave de tarifa (sociedad + división + oficina +
+# SET + tipo de venta), pero filtrado a las líneas que NO calcularon y
+# agrupado también por motivo -- para que la pantalla pueda abrir un motivo
+# de "bloqueado" (ej. "sin tarifa para esa llave") y enseñar exactamente qué
+# llaves lo componen, en vez de solo el total.
+def _bloqueado_desglose(filas: list[dict]) -> list[dict]:
+    acumulado: dict = defaultdict(lambda: {"num_lineas": 0, "monto": 0.0})
+    nombre_division: dict = {}
+    for fila in filas:
+        motivo = fila["comision_estado"]
+        if motivo == CALCULADA:
+            continue
+        clave = (
+            motivo, fila["sociedad"], fila["division_code"],
+            fila["oficina"], fila["set"], fila["tipo_venta"],
+        )
+        a = acumulado[clave]
+        a["num_lineas"] += fila["num_lineas"] or 0
+        a["monto"] += fila["monto_total"] or 0.0
+        if fila["division_code"] and fila["division"]:
+            nombre_division[fila["division_code"]] = fila["division"]
+
+    dimensiones = ("motivo", "sociedad", "division_code", "oficina", "set", "tipo_venta")
+    return [
+        {
+            **dict(zip(dimensiones, clave)),
+            "division": nombre_division.get(clave[2]),
+            **datos,
+        }
+        for clave, datos in sorted(acumulado.items(), key=lambda item: -item[1]["monto"])
+    ]
+
+
+def _build_report(
     *,
     division: str | None,
     cedis: str | None,
-    comisionista: str | None = None,
+    comisionista: str | None,
+    sociedad: str | None,
     start_date: date,
     end_date: date,
 ) -> dict:
-    """Punto de entrada de POST /v1/comisionesbi/report.
-
-    Una sola consulta y las agregaciones en memoria, igual que en el flujo: la
-    tabla gold entera son ~12 MB, así que traer el trozo filtrado y agrupar aquí
-    sale más barato que lanzar una consulta por agrupación.
-    """
+    """Una sola consulta y las agregaciones en memoria, igual que en el flujo:
+    la tabla gold entera son ~12 MB, así que traer el trozo filtrado y agrupar
+    aquí sale más barato que lanzar una consulta por agrupación."""
     filas = run_query(
         _DETALLE_SQL,
         "el informe de comisión",
@@ -219,6 +260,7 @@ def build_report(
             "division": ("STRING", division),
             "cedis": ("STRING", cedis),
             "comisionista": ("STRING", comisionista),
+            "sociedad": ("STRING", sociedad),
         },
     )
 
@@ -231,6 +273,10 @@ def build_report(
     # mayoreo, medio mayoreo…), y el tipo ya venía en el grano de la tabla gold
     # sin que nadie lo agregara.
     por_tipo_venta: dict = defaultdict(_nuevo)
+    # Huevo se factura por dos sociedades (DBC y PAN) y la comisión de PAN es
+    # la mayor parte del total. Sin este desglose, el número de huevo en
+    # pantalla mezcla dos negocios distintos sin decirlo.
+    por_sociedad: dict = defaultdict(_nuevo)
     # `cantidad_base` no se suma entre unidades (punto 2 del docstring): la
     # clave lleva la unidad dentro.
     por_unidad: dict = defaultdict(float)
@@ -250,6 +296,7 @@ def build_report(
         _acumular(por_fecha, _iso(fila["fecha"]), fila)
         _acumular(por_set, fila["set"], fila)
         _acumular(por_tipo_venta, fila["tipo_venta"], fila)
+        _acumular(por_sociedad, fila["sociedad"], fila)
         _acumular({None: total}, None, fila)
         lineas_sin_importe += fila["lineas_sin_importe"] or 0
 
@@ -288,6 +335,7 @@ def build_report(
         "por_cedis": _ordenadas(por_cedis, "cedis"),
         "por_set": _ordenadas(por_set, "set"),
         "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
+        "por_sociedad": _ordenadas(por_sociedad, "sociedad"),
         # La cascada de la pantalla se construye con esto, sin más viajes.
         "desglose": _desglose(filas, DIMENSIONES_DESGLOSE),
         # Por fecha va en orden cronológico, no por comisión: es una serie.
@@ -304,4 +352,97 @@ def build_report(
             {"motivo": motivo, **datos}
             for motivo, datos in sorted(bloqueado.items(), key=lambda i: -i[1]["monto"])
         ],
+        # Detalle por llave detrás de cada motivo de "bloqueado" -- la pantalla
+        # lo filtra por motivo al abrir esa fila, sin pedir nada más.
+        "bloqueado_desglose": _bloqueado_desglose(filas),
     }
+
+
+# ─── Caché en memoria del informe ─────────────────────────────────────────
+# Mismo patrón que `catalog_engine.catalog()` (ver ese módulo para el porqué
+# de cada detalle: lock durante la consulta, un fallo no se cachea, se sirve
+# copia caducada si BigQuery falla). La diferencia es la llave: el catálogo no
+# tiene filtros, así que una sola entrada le basta; aquí cada combinación de
+# división/CEDIS/comisionista/rango de fechas es su propio informe, así que
+# el caché es un diccionario por combinación, no un único valor. TTL en horas
+# a propósito: la tabla gold se actualiza a diario, así que servir un informe
+# de un par de horas no es servir un número viejo de verdad.
+
+_REPORT_CACHE_TTL_POR_DEFECTO = 4 * 3600
+
+_report_cache_lock = threading.Lock()
+
+
+class _ReportCacheEntry(NamedTuple):
+    expires_at: float
+    report: dict
+
+
+_report_cache: dict[tuple, _ReportCacheEntry] = {}
+
+
+def _now() -> float:
+    """Reloj monotónico — inmune a saltos de hora, y fijable desde los tests."""
+    return time.monotonic()
+
+
+def _report_cache_ttl_seconds() -> int:
+    """TTL de la caché. `0` (o negativo) la desactiva; valor ilegible → defecto."""
+    try:
+        ttl = int(os.getenv("REPORT_CACHE_TTL_SECONDS", ""))
+    except ValueError:
+        return _REPORT_CACHE_TTL_POR_DEFECTO
+    return max(ttl, 0)
+
+
+def invalidate_report_cache() -> None:
+    """Fuerza la relectura en la siguiente llamada. Para operativa y pruebas."""
+    global _report_cache
+    with _report_cache_lock:
+        _report_cache = {}
+
+
+def build_report(
+    *,
+    division: str | None,
+    cedis: str | None,
+    comisionista: str | None = None,
+    sociedad: str | None = None,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    """Punto de entrada de POST /v1/comisionesbi/report. Cacheado con TTL por
+    combinación de filtros -- ver el comentario de arriba."""
+    clave = (division, cedis, comisionista, sociedad,
+             start_date.isoformat(), end_date.isoformat())
+
+    ttl = _report_cache_ttl_seconds()
+    if ttl == 0:
+        # Desactivada de verdad: no se guarda nada, así que tampoco hay copia
+        # caducada que servir si BigQuery falla.
+        return _build_report(
+            division=division, cedis=cedis, comisionista=comisionista,
+            sociedad=sociedad, start_date=start_date, end_date=end_date,
+        )
+
+    with _report_cache_lock:
+        entrada = _report_cache.get(clave)
+        if entrada is not None and entrada.expires_at > _now():
+            return entrada.report
+
+        try:
+            informe = _build_report(
+                division=division, cedis=cedis, comisionista=comisionista,
+                sociedad=sociedad, start_date=start_date, end_date=end_date,
+            )
+        except BigQueryError:
+            if entrada is None:
+                raise
+            log.warning(
+                "Informe de comisión no recargable desde BigQuery: se sirve la copia caducada",
+                exc_info=True,
+            )
+            return entrada.report
+
+        _report_cache[clave] = _ReportCacheEntry(expires_at=_now() + ttl, report=informe)
+        return informe

@@ -123,6 +123,9 @@ export const EMPTY_FLUJO: FlujoResponse = {
 // que hace legible a la otra.
 
 export type ReportFilters = {
+  /** `DBC` o `PAN`. Huevo se factura por las dos y la comisión de PAN es la
+   *  mayor parte del total, así que hay que poder mirarlas por separado. */
+  sociedad?: string | null;
   division: string | null;
   cedis: string | null;
   comisionista: string | null;
@@ -144,6 +147,7 @@ export type ComisionTotales = {
 };
 
 export type ComisionPorComisionista = ComisionTotales & { comisionista: string | null };
+export type ComisionPorSociedad = ComisionTotales & { sociedad: string | null };
 export type ComisionPorDivision = ComisionTotales & {
   division_code: string | null;
   division: string | null;
@@ -165,6 +169,7 @@ export type ComisionPorFecha = ComisionTotales & { fecha: string };
  * pide nada al servidor.
  */
 export type ComisionDesgloseRow = ComisionTotales & {
+  sociedad: string | null;
   comisionista: string | null;
   division_code: string | null;
   division: string | null;
@@ -191,10 +196,29 @@ export type ComisionBloqueo = {
   comision_max: number;
 };
 
+/**
+ * El detalle detrás de un motivo de `ComisionBloqueo`: la misma llave de
+ * tarifa que `ComisionDesgloseRow` (sociedad + división + oficina + SET +
+ * tipo de venta), pero solo de las líneas que NO calcularon. La pantalla la
+ * filtra por `motivo` al abrir esa fila de "lo que todavía no entra".
+ */
+export type ComisionBloqueoDesgloseRow = {
+  motivo: string;
+  sociedad: string | null;
+  division_code: string | null;
+  division: string | null;
+  oficina: string | null;
+  set: string | null;
+  tipo_venta: string | null;
+  num_lineas: number;
+  monto: number;
+};
+
 export type ReportResponse = {
   cobertura: { desde?: string; hasta?: string };
   totales: ComisionTotales & { pct_calculable: number; lineas_sin_importe: number };
   por_comisionista: ComisionPorComisionista[];
+  por_sociedad: ComisionPorSociedad[];
   por_division: ComisionPorDivision[];
   por_cedis: ComisionPorCedis[];
   por_set: ComisionPorSet[];
@@ -205,6 +229,7 @@ export type ReportResponse = {
    *  resto por caja. Viaja siempre desglosada. */
   cantidad_por_unidad: { base_unidad: string; cantidad: number }[];
   bloqueado: ComisionBloqueo[];
+  bloqueado_desglose: ComisionBloqueoDesgloseRow[];
 };
 
 export const EMPTY_REPORT: ReportResponse = {
@@ -219,6 +244,7 @@ export const EMPTY_REPORT: ReportResponse = {
     lineas_sin_importe: 0
   },
   por_comisionista: [],
+  por_sociedad: [],
   por_division: [],
   por_cedis: [],
   por_set: [],
@@ -226,7 +252,8 @@ export const EMPTY_REPORT: ReportResponse = {
   por_fecha: [],
   desglose: [],
   cantidad_por_unidad: [],
-  bloqueado: []
+  bloqueado: [],
+  bloqueado_desglose: []
 };
 
 // ─── Conciliación por comisionista (M3) — reemplaza al M3 documental ───────

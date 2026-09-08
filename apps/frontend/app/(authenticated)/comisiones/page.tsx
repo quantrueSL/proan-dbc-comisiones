@@ -10,31 +10,39 @@ const DESDE = "2026-01-01";
 export default async function ComisionesPage() {
   requireSession();
 
+  const hoy = new Date().toISOString().slice(0, 10);
+
   let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let report: ReportResponse | null = null;
   let error: string | null = null;
 
-  try {
-    catalog = await getComisionesCatalog();
-  } catch (cause) {
-    error = cause instanceof Error ? cause.message : "No se pudo cargar el catálogo de división/CEDIS.";
-  }
-
-  const hoy = new Date().toISOString().slice(0, 10);
-
-  try {
-    report = await getComisionesReport({
+  // Las dos en paralelo: son independientes y el sidecar arranca en frío
+  // (mismo patrón que flujo-producto/page.tsx). Antes iban en serie y el
+  // arranque en frío se pagaba dos veces seguidas en vez de una.
+  const [catalogo, informe] = await Promise.allSettled([
+    getComisionesCatalog(),
+    getComisionesReport({
       division: null,
       cedis: null,
       comisionista: null,
       start_date: DESDE,
       end_date: hoy
-    });
-  } catch (cause) {
+    })
+  ]);
+
+  if (catalogo.status === "fulfilled") {
+    catalog = catalogo.value;
+  } else {
+    error = catalogo.reason instanceof Error ? catalogo.reason.message : "No se pudo cargar el catálogo de división/CEDIS.";
+  }
+
+  if (informe.status === "fulfilled") {
+    report = informe.value;
+  } else {
     // Ya no hay rama de "bloqueado": el módulo calcula. Si falla, es un fallo
     // de verdad y se dice, en vez de caer a una vista previa de ejemplo que
     // disimulaba el problema.
-    error = error ?? (cause instanceof Error ? cause.message : "No se pudo generar el informe de comisión.");
+    error = error ?? (informe.reason instanceof Error ? informe.reason.message : "No se pudo generar el informe de comisión.");
   }
 
   return (

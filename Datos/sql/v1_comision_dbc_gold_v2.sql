@@ -7,6 +7,12 @@
 -- pero su fuente de cobro cambió de sap_pago (~17%) a sap_bsad_cleared_items
 -- (~87%). No requiere cambios en comisiones_engine.py.
 --
+-- 2026-09-08: entra la sociedad PAN en huevo (ver `alcance_pan` en
+-- v1_comision_dbc_completo_cobro.sql para el criterio del filtro y su
+-- validación). Columna nueva `sociedad`: DBC o PAN, para poder separarlas en
+-- pantalla -- el total de comisión devengada pasa de $45,3 M a $107,6 M, así
+-- que enseñarlas mezcladas sin distinguirlas sería confuso.
+--
 -- base_unidad confirmado 2026-09-07 con distribución real de `sales_unit`
 -- (monto DBC 2026): H/IA en kg (net_weight); A 100% PZA -> pieza; L 100% PZA
 -- -> pieza (no litro, pese al nombre comercial); BO 99.4% PAQ -> paquete.
@@ -32,65 +38,52 @@ WITH cedis_resuelto AS (
          ON dc.cedis IS NULL AND dal.cedis IS NULL AND dco.oficina = t.oficina_ventas
 ),
 
--- Comisionista por oficina + división, CRUZANDO POR ID (cambiado 2026-09-07).
--- `DBC_dim_comision_tarifa.persona_cod` es el LIFNR sin zero-padding ('1019' =
--- Florentino, cuyo LIFNR es '0000001019'), así que la asignación viene de un
--- código, no de comparar nombres escritos a mano.
+-- Comisionista por oficina. Fuente: `DBC_dim_comisionista` (cambiado 2026-09-08),
+-- que trae la LLAVE REAL -- sociedad + división + centro + almacén + oficina --
+-- en vez de deducirlo de `DBC_dim_comision_tarifa` por oficina sola, que era el
+-- origen de la confusión: una tabla de tarifas usada para saber de quién es una
+-- oficina, con una llave incompleta.
 --
--- POR QUÉ SE CAMBIÓ: antes esto resolvía comparando grafías de nombres entre
--- las hojas del cliente (cascada de tokens + EDIT_DISTANCE + una excepción
--- manual para "FLORENTINO GLEZ"), y perdía casi la mitad de las asignaciones.
--- Medido contra los 29 comisionistas con pago de comisión en BSAK: por nombre
--- resolvía 22 personas y 56 pares oficina-persona, por ID resuelve 29 y 104.
--- Los casos que arreglaba de más eran justo los que no cuadraban contra el
--- pago real (Agustín 4 oficinas en vez de 2, Genaro 3 en vez de 1, Elias Barba
--- 3 en vez de 1). Ver Datos/sql/v1_conciliacion_pago_comisionista_vs_cobro.sql.
-comisionista_id AS (
-  SELECT
-    oficina,
-    division,
-    persona_cod,
-    -- La grafía más larga, SOLO para mostrar: el cruce es por código.
-    ARRAY_AGG(persona ORDER BY LENGTH(persona) DESC, persona LIMIT 1)[OFFSET(0)] AS persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa`
-  WHERE NULLIF(TRIM(persona_cod), '') IS NOT NULL
-    AND NULLIF(TRIM(oficina), '')     IS NOT NULL
-  GROUP BY oficina, division, persona_cod
+-- LA SOCIEDAD ES PARTE DE LA LLAVE (2026-09-08, al integrar PAN): la misma
+-- oficina puede tener comisionista distinto según la sociedad -- Celaya 0012
+-- es de Agustín en DBC y de Genaro en PAN. Por eso el cruce va contra
+-- `t.bukrs` de la factura y no contra un valor fijo.
+--
+-- Con esta llave desaparece la ambigüedad sola: 406 filas, 0 combinaciones con
+-- más de un comisionista. Por eso no hace falta ninguna excepción manual.
+comisionista_src AS (
+  SELECT sociedad, division, oficina, persona_cod, persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+  WHERE NULLIF(TRIM(oficina), '') IS NOT NULL
 ),
--- LA ASIGNACIÓN VA POR OFICINA, y solo baja a oficina+división donde hace
--- falta. Una persona cubre TODAS las divisiones de su oficina (los pagos de
--- BSAK lo confirman: el mismo LIFNR cobra huevo, vuala, croqueta y leche), y
--- la tabla de tarifas no enumera todas las divisiones de cada oficina -- si se
--- exigiera la llave oficina+división en todos los casos, las divisiones no
--- enumeradas se quedarían sin comisionista (medido: la comisión sin asignar
--- subía de $2,54M a $4,25M).
+-- La asignación va POR SOCIEDAD + OFICINA -- una persona cubre todas las
+-- divisiones de su oficina (los pagos de BSAK lo confirman: el mismo LIFNR
+-- cobra huevo, vuala, croqueta y leche) -- y es lo que da más cobertura: por
+-- oficina cruzan 222 de las 255 combinaciones que trae la facturación, contra
+-- 198 por oficina+división y 136 exigiendo la llave completa.
 comisionista_oficina AS (
-  -- Caso normal: la oficina tiene un solo código en todas sus divisiones.
-  SELECT oficina, ANY_VALUE(persona) AS persona
-  FROM comisionista_id
-  GROUP BY oficina
+  SELECT sociedad, oficina, ANY_VALUE(persona) AS persona
+  FROM comisionista_src
+  GROUP BY sociedad, oficina
   HAVING COUNT(DISTINCT persona_cod) = 1
 ),
--- Solo para las oficinas que DOS comisionistas comparten se baja a la
--- división. Quedan 2 combinaciones sin resolver de 333: las oficinas 0012 y
--- 0083 en HUEVO, que aparecen con Genaro (4040) y Agustín (14718) a la vez.
--- Esas se dejan SIN ASIGNAR en vez de repartirlas -- asignarlas a los dos
--- contaría esa comisión dos veces (medido: infla a Genaro un 70% contra su
--- pago real de BSAK). Falta que el negocio diga de quién son.
--- (Las otras 3 oficinas compartidas -- 0123, 0171, 0180 -- son OROL con dos
--- códigos de proveedor para la misma empresa, así que sí resuelven por
--- división.)
+-- Solo baja a división donde la oficina sola no alcanza: son 3 casos, las
+-- oficinas 0123/0171/0180 de OROL, que tiene dos códigos de proveedor para la
+-- misma empresa (15490 en botana, 55947 en croqueta). Con la división, esas 6
+-- combinaciones resuelven todas.
 comisionista_oficina_division AS (
-  SELECT oficina, division, ANY_VALUE(persona) AS persona
-  FROM comisionista_id
-  WHERE oficina NOT IN (SELECT oficina FROM comisionista_oficina)
-  GROUP BY oficina, division
-  HAVING COUNT(DISTINCT persona_cod) = 1
+  SELECT c.sociedad, c.oficina, c.division, ANY_VALUE(c.persona) AS persona
+  FROM comisionista_src c
+  WHERE NOT EXISTS (SELECT 1 FROM comisionista_oficina o
+                    WHERE o.sociedad = c.sociedad AND o.oficina = c.oficina)
+  GROUP BY c.sociedad, c.oficina, c.division
+  HAVING COUNT(DISTINCT c.persona_cod) = 1
 ),
 
 base AS (
   SELECT
     t.billing_date                                          AS fecha,
+    t.bukrs                                                  AS sociedad,
     t.division                                               AS division_code,
     ba.business_area_name                                    AS division,
     cr.cedis,
@@ -122,11 +115,14 @@ base AS (
          ON cr.billing_document = t.billing_document AND cr.item_number = t.item_number
   LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba
          ON ba.business_area_code = t.division
-  LEFT JOIN comisionista c
-         ON c.oficina = t.oficina_ventas AND c.division = t.division
+  LEFT JOIN comisionista_oficina co
+         ON co.sociedad = t.bukrs AND co.oficina = t.oficina_ventas
+  LEFT JOIN comisionista_oficina_division cod
+         ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
+        AND cod.division = t.division
 )
 SELECT
-  fecha, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
+  fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
   base_unidad, comision_estado,
   CAST(NULL AS STRING) AS tipo_venta_origen,
   COUNT(*)                    AS num_lineas,
@@ -139,5 +135,5 @@ SELECT
   SUM(monto_cobrado)           AS monto_cobrado,
   COUNTIF(sin_importe)         AS lineas_sin_importe
 FROM base
-GROUP BY fecha, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
+GROUP BY fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
          base_unidad, comision_estado;

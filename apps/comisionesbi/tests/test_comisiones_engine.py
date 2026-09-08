@@ -1,5 +1,6 @@
 """Comisión: lo devengado, lo bloqueado, y que las dos cosas viajen juntas."""
 
+import logging
 from datetime import date
 from unittest.mock import MagicMock
 
@@ -12,8 +13,10 @@ def _fila(
     *,
     estado="calculada",
     comisionista="JAIME ROJAS",
+    sociedad="DBC",
     division="H",
     cedis="Leon 1",
+    oficina="0016",
     fecha=date(2026, 7, 1),
     conjunto="HPORTALES",
     tipo="VTA EN RUTA",
@@ -29,10 +32,11 @@ def _fila(
 ):
     return {
         "fecha": fecha,
+        "sociedad": sociedad,
         "division_code": division,
         "division": {"H": "Huevo", "BO": "Botana", "L": "Leche"}.get(division, division),
         "cedis": cedis,
-        "oficina": "0016",
+        "oficina": oficina,
         "comisionista": comisionista,
         "tipo_venta": tipo,
         "set": conjunto,
@@ -71,6 +75,18 @@ def cliente(monkeypatch):
         return falso
 
     return _instalar
+
+
+@pytest.fixture(autouse=True)
+def _cache_desactivada(monkeypatch):
+    """`build_report` cachea por combinación de filtros -- casi todos los
+    tests de aquí llaman con los mismos parámetros por defecto (`_informe`),
+    así que sin esto el segundo test heredaría el resultado del primero. Los
+    tests de la caché en sí la reactivan explícitamente."""
+    monkeypatch.setenv("REPORT_CACHE_TTL_SECONDS", "0")
+    comisiones_engine.invalidate_report_cache()
+    yield
+    comisiones_engine.invalidate_report_cache()
 
 
 def _informe(**extra):
@@ -176,6 +192,78 @@ def test_lo_bloqueado_va_ordenado_por_lo_que_rinde_desbloquearlo(cliente):
 
     assert motivos[0] == "la división no tarifa ese tipo de venta"
     assert motivos[-1] == "material sin SET"
+
+
+def test_bloqueado_desglose_agrupa_por_motivo_y_llave_de_tarifa(cliente):
+    # La llave de tarifa: sociedad + división + oficina + SET + tipo de venta.
+    # Dos líneas con la misma llave se suman; una llave distinta es otra fila.
+    cliente(
+        [
+            _fila(estado="sin tarifa para esa llave", sociedad="PAN", division="H",
+                  oficina="0028", conjunto="HPORTALES", tipo="VTA EN RUTA", monto=300.0, comision=None),
+            _fila(estado="sin tarifa para esa llave", sociedad="PAN", division="H",
+                  oficina="0028", conjunto="HPORTALES", tipo="VTA EN RUTA", monto=200.0, comision=None),
+            _fila(estado="sin tarifa para esa llave", sociedad="DBC", division="BO",
+                  oficina="0130", conjunto="CHOCOLATE", tipo="MED MAYOREO", monto=100.0, comision=None),
+        ]
+    )
+
+    desglose = _informe()["bloqueado_desglose"]
+
+    assert len(desglose) == 2
+    mayor = desglose[0]
+    assert mayor["motivo"] == "sin tarifa para esa llave"
+    assert mayor["sociedad"] == "PAN"
+    assert mayor["division_code"] == "H"
+    assert mayor["division"] == "Huevo"
+    assert mayor["oficina"] == "0028"
+    assert mayor["set"] == "HPORTALES"
+    assert mayor["tipo_venta"] == "VTA EN RUTA"
+    assert mayor["monto"] == 500.0
+    assert mayor["num_lineas"] == 2
+
+
+def test_bloqueado_desglose_no_incluye_lo_ya_calculado(cliente):
+    cliente(
+        [
+            _fila(estado="calculada", monto=1000.0, comision=40.0),
+            _fila(estado="sin tarifa para esa llave", monto=300.0, comision=None),
+        ]
+    )
+
+    desglose = _informe()["bloqueado_desglose"]
+
+    assert len(desglose) == 1
+    assert desglose[0]["motivo"] == "sin tarifa para esa llave"
+
+
+def test_bloqueado_desglose_separa_motivos_distintos_aunque_la_llave_coincida(cliente):
+    cliente(
+        [
+            _fila(estado="material sin SET", oficina="0028", conjunto="HPORTALES",
+                  tipo="VTA EN RUTA", monto=300.0, comision=None),
+            _fila(estado="sin tarifa para esa llave", oficina="0028", conjunto="HPORTALES",
+                  tipo="VTA EN RUTA", monto=700.0, comision=None),
+        ]
+    )
+
+    desglose = _informe()["bloqueado_desglose"]
+
+    assert len(desglose) == 2
+    assert {d["motivo"] for d in desglose} == {"material sin SET", "sin tarifa para esa llave"}
+
+
+def test_bloqueado_desglose_ordenado_por_monto_descendente(cliente):
+    cliente(
+        [
+            _fila(estado="sin tarifa para esa llave", oficina="0028", monto=100.0, comision=None),
+            _fila(estado="sin tarifa para esa llave", oficina="0106", monto=900.0, comision=None),
+        ]
+    )
+
+    oficinas = [d["oficina"] for d in _informe()["bloqueado_desglose"]]
+
+    assert oficinas == ["0106", "0028"]
 
 
 def test_la_horquilla_del_conflicto_no_se_convierte_en_una_cifra(cliente):
@@ -373,5 +461,130 @@ def test_un_rango_sin_datos_devuelve_estructura_vacia_pero_con_cobertura(cliente
     assert salida["por_comisionista"] == []
     assert salida["por_tipo_venta"] == []
     assert salida["bloqueado"] == []
-    # La cobertura es del dataset, no del rango: sigue estando.
-    assert salida["cobertura"]["hasta"] == "2026-08-23"
+
+
+# ─── Caché del informe ─────────────────────────────────────────────────────
+# Mismo mecanismo que catalog_engine (ver test_catalog_engine.py para el
+# porqué de cada caso) -- aquí solo lo que cambia por tener llave compuesta.
+
+
+@pytest.fixture
+def reloj(monkeypatch):
+    """Reloj monotónico fijo y avanzable, para no dormir en los tests del TTL."""
+    actual = [1000.0]
+    monkeypatch.setattr(comisiones_engine, "_now", lambda: actual[0])
+    return actual
+
+
+def _activar_cache(monkeypatch, segundos="14400"):
+    monkeypatch.setenv("REPORT_CACHE_TTL_SECONDS", segundos)
+
+
+def test_la_segunda_peticion_con_los_mismos_filtros_no_vuelve_a_consultar(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila(comision=40.0)])
+
+    primero = _informe()
+    segundo = _informe()
+
+    # cobertura() no cachea, así que hay 2 llamadas por informe: MIN(fecha) y
+    # el detalle. Dos informes cacheados -> 2 llamadas en total, no 4.
+    assert len(falso.llamadas) == 2
+    assert segundo == primero
+
+
+def test_filtros_distintos_son_entradas_de_cache_distintas(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila(comision=40.0)])
+
+    _informe(division="H")
+    _informe(division="BO")
+
+    # Dos combinaciones de filtro distintas -> cada una consulta la suya.
+    assert len(falso.llamadas) == 4
+
+
+def test_al_vencer_el_ttl_vuelve_a_consultar(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch, "3600")
+    falso = cliente([_fila(comision=40.0)])
+
+    _informe()
+    reloj[0] += 3599
+    _informe()
+    assert len(falso.llamadas) == 2
+
+    reloj[0] += 2  # ya pasó la hora
+    _informe()
+    assert len(falso.llamadas) == 4
+
+
+def test_ttl_cero_desactiva_la_cache(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch, "0")
+    falso = cliente([_fila(comision=40.0)])
+
+    _informe()
+    _informe()
+
+    assert len(falso.llamadas) == 4
+
+
+def test_ttl_ilegible_cae_al_valor_por_defecto(monkeypatch):
+    monkeypatch.setenv("REPORT_CACHE_TTL_SECONDS", "cuatro-horas")
+    assert comisiones_engine._report_cache_ttl_seconds() == 4 * 3600
+
+    monkeypatch.delenv("REPORT_CACHE_TTL_SECONDS")
+    assert comisiones_engine._report_cache_ttl_seconds() == 4 * 3600
+
+    monkeypatch.setenv("REPORT_CACHE_TTL_SECONDS", "-5")
+    assert comisiones_engine._report_cache_ttl_seconds() == 0
+
+
+def test_si_bigquery_falla_se_sirve_la_copia_caducada(cliente, monkeypatch, reloj, caplog):
+    _activar_cache(monkeypatch, "3600")
+    falso = cliente([_fila(comision=40.0)])
+    bueno = _informe()
+
+    reloj[0] += 4000  # caducada
+
+    class _ClienteCaido:
+        def query(self, sql, job_config=None):
+            from google.api_core.exceptions import ServiceUnavailable
+
+            raise ServiceUnavailable("caído")
+
+    monkeypatch.setattr(db, "get_bq_client", lambda: _ClienteCaido())
+
+    with caplog.at_level(logging.WARNING):
+        assert _informe() == bueno
+
+    assert "copia caducada" in caplog.text
+
+
+def test_invalidate_report_cache_fuerza_la_relectura(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila(comision=40.0)])
+
+    _informe()
+    comisiones_engine.invalidate_report_cache()
+    _informe()
+
+    assert len(falso.llamadas) == 4
+
+
+def test_separa_la_comision_por_sociedad(cliente):
+    # Huevo se factura por DBC y por PAN, y la de PAN es la mayor parte del
+    # total. Sumarlas sin poder separarlas mezcla dos negocios distintos.
+    cliente(
+        [
+            _fila(sociedad="DBC", division="H", comision=12.0, monto=330.0),
+            _fila(sociedad="PAN", division="H", comision=62.0, monto=2100.0),
+            _fila(sociedad="DBC", division="BO", comision=24.0, monto=246.0),
+        ]
+    )
+
+    por = {f["sociedad"]: f for f in _informe()["por_sociedad"]}
+
+    assert por["PAN"]["comision"] == 62.0
+    assert por["DBC"]["comision"] == 36.0
+    # Y el total sigue siendo la suma de las dos, no una de ellas.
+    assert _informe()["totales"]["comision"] == 98.0

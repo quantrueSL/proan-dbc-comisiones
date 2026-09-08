@@ -96,6 +96,11 @@ spec:
             # aparecer en los filtros. `0` la desactiva (solo para desarrollo).
             - name: CATALOG_CACHE_TTL_SECONDS
               value: "3600"
+            # TTL de la caché del informe de comisión. La tabla gold se
+            # actualiza a diario, así que 4 h de ventana no sirve un número
+            # viejo. `0` la desactiva (solo para desarrollo).
+            - name: REPORT_CACHE_TTL_SECONDS
+              value: "14400"
             - name: LOG_LEVEL
               value: INFO
           startupProbe:

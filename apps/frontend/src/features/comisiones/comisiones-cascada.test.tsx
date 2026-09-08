@@ -9,6 +9,7 @@ import {
 import type { ComisionDesgloseRow } from "@/types/comisiones";
 
 const hoja = (extra: Partial<ComisionDesgloseRow>): ComisionDesgloseRow => ({
+  sociedad: "DBC",
   comisionista: "ELIAS BARBA",
   division_code: "H",
   division: "Huevo",

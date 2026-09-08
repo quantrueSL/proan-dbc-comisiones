@@ -95,6 +95,7 @@ const INFORME: ReportResponse = {
   // Hojas del desglose: el grano de la tarifa. De aquí salen las dos cascadas.
   desglose: [
     {
+      sociedad: "DBC",
       comisionista: "ELIAS BARBA",
       division_code: "H",
       division: "Huevo",
@@ -111,6 +112,7 @@ const INFORME: ReportResponse = {
       monto_calculable: 6_000_000
     },
     {
+      sociedad: "DBC",
       comisionista: "ELIAS BARBA",
       division_code: "BO",
       division: "Botana",
@@ -127,6 +129,7 @@ const INFORME: ReportResponse = {
       monto_calculable: 2_000_000
     },
     {
+      sociedad: "DBC",
       comisionista: "JAIME ROJAS",
       division_code: "H",
       division: "Huevo",
@@ -226,6 +229,45 @@ describe("lo que no entra en el cálculo", () => {
 
   it("dice sobre cuánto del facturado se pudo calcular", () => {
     expect(texto()).toMatch(/58[.,]3%/);
+  });
+});
+
+describe("el detalle de una fila bloqueada", () => {
+  // El clic abre un modal (estado de cliente): con renderToStaticMarkup no se
+  // puede simular, así que aquí solo se fija el marcado estático -- que la
+  // fila correcta quede lista para recibir el clic y ninguna otra.
+  const CON_DETALLE: ReportResponse = {
+    ...INFORME,
+    bloqueado: [
+      ...INFORME.bloqueado,
+      { motivo: "sin tarifa para esa llave", num_lineas: 1_282, monto: 61_083_000, comision_min: 0, comision_max: 0 }
+    ],
+    bloqueado_desglose: [
+      {
+        motivo: "sin tarifa para esa llave",
+        sociedad: "PAN",
+        division_code: "H",
+        division: "Huevo",
+        oficina: "0028",
+        set: "HPORTALES",
+        tipo_venta: "VTA EN RUTA",
+        num_lineas: 210,
+        monto: 47_607_643
+      }
+    ]
+  };
+
+  it("solo la fila de \"sin tarifa para esa llave\" queda marcada como clicable", () => {
+    const html = pantalla(CON_DETALLE);
+    expect(html).toMatch(/<tr class="comisiones-bloqueado-clicable"[^>]*>\s*<td>\s*sin tarifa para esa llave/);
+    // Las otras dos filas del bloqueado NO llevan la clase.
+    expect(html).not.toMatch(/<tr class="comisiones-bloqueado-clicable"[^>]*>\s*<td>\s*(tarifa en conflicto entre hojas|material sin SET)/);
+  });
+
+  it("no se abre solo, aunque haya desglose disponible", () => {
+    // El modal depende de estado de cliente (`motivoDetalle`), que arranca en
+    // `null`: la carga inicial nunca debe traer el modal ya abierto.
+    expect(pantalla(CON_DETALLE)).not.toMatch(/Sociedad<\/th>/);
   });
 });
 

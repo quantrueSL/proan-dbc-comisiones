@@ -8,27 +8,30 @@
 -- error absoluto que agrupar por fecha de venta, sobre 7 semanas maduras de
 -- Florentino/IA).
 --
--- EL CRUCE ES POR ID, NO POR NOMBRE: `DBC_dim_comision_tarifa.persona_cod` es
--- el LIFNR sin zero-padding ('1019' = Florentino, LIFNR '0000001019'), así que
+-- EL CRUCE ES POR ID, NO POR NOMBRE: `DBC_dim_comisionista.persona_cod` es el
+-- LIFNR sin zero-padding ('1019' = Florentino, LIFNR '0000001019'), así que
 -- une directo contra BSAK y no hace falta `dm_vendors` ni comparar nombres.
--- Medido el 2026-09-07 contra el puente por nombre que usa gold v2:
+-- Medido el 2026-09-07 contra el puente por nombre que usaba gold v2:
 --   por ID     -> 29 de 29 comisionistas, 104 pares oficina-persona
 --   por nombre -> 22 de 29 comisionistas,  56 pares
--- El puente por nombre pierde casi la mitad de las oficinas, y justo en los
+-- El puente por nombre perdía casi la mitad de las oficinas, y justo en los
 -- casos problemáticos (Agustín 4 vs 2, Genaro 3 vs 1, Elias Barba 3 vs 1).
--- PENDIENTE: `v1_comision_dbc_gold_v2.sql` sigue resolviendo comisionista por
--- nombre -- debería pasar a `persona_cod` por lo mismo.
+-- 2026-09-08: la fuente pasó de `DBC_dim_comision_tarifa` (tabla de tarifas,
+-- llave incompleta) a `DBC_dim_comisionista`, que trae sociedad+división+
+-- centro+almacén+oficina. `v1_comision_dbc_gold_v2.sql` y
+-- `v1_conciliacion_factura_linea.sql` usan la misma fuente y el mismo filtro.
 --
--- RESULTADO al 2026-09-07 (ene-jun 2026, 2,003 comparaciones, 28 comisionistas):
---   sesgo global -12.8% (real $34.4M, nuestro $30.0M), error absoluto 23.8%,
---   mediana |dif| 9.8%. El sesgo es CASI TODO DE HUEVO:
---     L +0.3%    BO -2.6%    IA -6.7%    H -30.0%
---   Sin H la conciliación cuadra bien. H tiene su explicación conocida: parte
---   de la comisión de huevo se paga por la sociedad PAN y nosotros solo
+-- RESULTADO al 2026-09-07 (ene-jun 2026, 1,924 comparaciones, 26 comisionistas):
+--   sesgo global -14.2% (real $33.5M, nuestro $28.8M), error absoluto 22.6%,
+--   mediana |dif| 8.2%. El sesgo es CASI TODO DE HUEVO:
+--     L -2.6%    BO -4.1%    IA -8.1%    H -31.9%
+--   Sin H la conciliación cuadra razonable. H tiene una explicación candidata:
+--   parte de la comisión de huevo se paga por la sociedad PAN y nosotros solo
 --   miramos DBC (sus líneas en BSAK dicen "COMISIONES DEL x AL y", sin
---   división, así que no se pueden repartir) -- sin verificar todavía.
---   Casos sueltos que no son de división: Genaro +69.8% y Agustín -35.7%
---   (mapeo de oficinas), Maria de la Luz con 2 comparaciones de $1,144 (ruido).
+--   división, así que no se pueden repartir) -- SIN VERIFICAR todavía.
+--   Agustín queda -39.7% porque sus oficinas 0012/0083 en huevo son las 2
+--   ambiguas y se dejan sin asignar; Genaro queda en +0.2% sobre lo poco que
+--   le queda propio (antes daba +69.8% por el doble conteo de esas mismas dos).
 --
 -- El rango está acotado a propósito: BSAD está incompleta desde julio (julio
 -- cobra 25%, agosto 48%), así que periodos posteriores no son comparables.
@@ -80,15 +83,35 @@ pago AS (
   FROM periodo
   GROUP BY LIFNR, division, desde, hasta
 ),
--- EL PUENTE, por ID: oficina <-> LIFNR. `persona` viaja solo para leerlo.
+-- EL PUENTE, por ID: oficina <-> LIFNR. Misma regla que v1_comision_dbc_gold_v2:
+-- la oficina completa si tiene un solo código, y solo donde dos códigos la
+-- comparten se baja a oficina+división (son 3 casos, las oficinas de OROL).
+-- 2026-09-08: la fuente pasó a `DBC_dim_comisionista` con `sociedad='DBC'`.
+-- Con eso el conflicto de Celaya (0012/0083, Agustín vs. Genaro) desaparece
+-- solo: era la fila de PAN colándose por cruzar sin sociedad.
+cod AS (
+  SELECT LPAD(TRIM(persona_cod), 10, '0') AS lifnr, oficina, division, persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+  WHERE sociedad = 'DBC'
+    AND NULLIF(TRIM(persona_cod), '') IS NOT NULL AND NULLIF(TRIM(oficina), '') IS NOT NULL
+),
+-- `cod.lifnr` va calificado en el HAVING a propósito: sin el prefijo, BigQuery
+-- resuelve `lifnr` al alias de arriba (ANY_VALUE) y falla por agregar un agregado.
+oficina_unica AS (
+  SELECT oficina, ANY_VALUE(cod.lifnr) AS lifnr, ANY_VALUE(persona) AS persona
+  FROM cod GROUP BY oficina HAVING COUNT(DISTINCT cod.lifnr) = 1
+),
+oficina_division AS (
+  SELECT oficina, division, ANY_VALUE(cod.lifnr) AS lifnr, ANY_VALUE(persona) AS persona
+  FROM cod
+  WHERE oficina NOT IN (SELECT oficina FROM oficina_unica)
+  GROUP BY oficina, division HAVING COUNT(DISTINCT cod.lifnr) = 1
+),
+-- division NULL = vale para todas las divisiones de esa oficina
 oficina_lifnr AS (
-  SELECT
-    LPAD(TRIM(persona_cod), 10, '0') AS lifnr,
-    oficina,
-    ANY_VALUE(persona) AS persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa`
-  WHERE persona_cod IS NOT NULL AND TRIM(persona_cod) != '' AND oficina IS NOT NULL
-  GROUP BY lifnr, oficina
+  SELECT lifnr, oficina, CAST(NULL AS STRING) AS division, persona FROM oficina_unica
+  UNION ALL
+  SELECT lifnr, oficina, division, persona FROM oficina_division
 )
 SELECT
   ANY_VALUE(o.persona) AS comisionista,
@@ -102,7 +125,9 @@ SELECT
   ROUND(100 * SAFE_DIVIDE(SUM(c.comision_cobrada) - ANY_VALUE(p.pagado), ANY_VALUE(p.pagado)), 1) AS diff_pct,
   COUNT(DISTINCT o.oficina)                               AS oficinas
 FROM pago p
-JOIN oficina_lifnr o ON o.lifnr = p.LIFNR
+JOIN oficina_lifnr o
+  ON o.lifnr = p.LIFNR
+ AND (o.division IS NULL OR o.division = p.division)
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` c
        ON c.oficina_ventas = o.oficina
       AND c.division       = p.division

@@ -49,6 +49,17 @@ function pesos(valor: number) {
   return `$${dinero.format(valor)}`;
 }
 
+// "caja"/"saco"/"paquete"/"pieza" son las unidades de manejo (ver
+// v1_conciliacion_factura_linea.sql) -- "kg" no cambia, es una abreviatura.
+// Solo para pantalla: el valor que viaja en los datos y en el Excel se queda
+// en singular, así un filtro por "caja" no se rompe por buscar "cajas".
+const PLURAL_UNIDAD: Record<string, string> = { caja: "cajas", saco: "sacos", paquete: "paquetes", pieza: "piezas" };
+function unidadEnPantalla(unidad: string | null | undefined, valor: number | null): string {
+  if (!unidad) return "";
+  if (valor === null || valor === 1) return unidad;
+  return PLURAL_UNIDAD[unidad] ?? unidad;
+}
+
 // Igual que en comisiones-workspace: por partes, para no perder un día al
 // interpretar la fecha como UTC.
 function enPalabras(iso: string | undefined | null) {
@@ -702,11 +713,11 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                     <colgroup>
                       <col style={{ width: "13%" }} />
                       <col style={{ width: "10%" }} />
-                      <col style={{ width: "8%" }} />
+                      <col style={{ width: "5%" }} />
                       <col style={{ width: "12%" }} />
-                      <col style={{ width: "21%" }} />
+                      <col style={{ width: "22%" }} />
                       <col style={{ width: "9%" }} />
-                      <col style={{ width: "9%" }} />
+                      <col style={{ width: "11%" }} />
                       <col style={{ width: "7%" }} />
                       <col style={{ width: "10%" }} />
                     </colgroup>
@@ -718,7 +729,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                         <th>Tipo de venta</th>
                         <th>Producto</th>
                         <th className="n">Vendido</th>
-                        <th className="n">Base</th>
+                        <th className="n">Unidad tarifa</th>
                         <th className="n">Tarifa</th>
                         <th className="n">Comisión</th>
                       </tr>
@@ -737,11 +748,11 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                           </td>
                           <td className="n">
                             {d.cantidad_venta_total !== null ? cantidad.format(d.cantidad_venta_total) : "—"}{" "}
-                            <small>{d.unidad_venta}</small>
+                            <small>{unidadEnPantalla(d.unidad_venta, d.cantidad_venta_total)}</small>
                           </td>
                           <td className="n">
                             {d.cantidad_base_total !== null ? cantidad.format(d.cantidad_base_total) : "—"}{" "}
-                            <small>{d.unidad_tarifa}</small>
+                            <small>{unidadEnPantalla(d.unidad_tarifa, d.cantidad_base_total)}</small>
                           </td>
                           <td className="n">{d.tarifa !== null ? cantidad.format(d.tarifa) : "—"}</td>
                           <td className="n">{pesos(d.comision_total)}</td>

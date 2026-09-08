@@ -6861,11 +6861,16 @@ body.proan-report-assistant-open .proan-content-scroll {
 /* `table-layout: fixed` + `<colgroup>` (en el componente) en vez de auto: con
    auto, un nombre de comisionista o una descripción de producto largos hacían
    que el navegador repartiera el ancho mal y una columna se pintaba encima de
-   la vecina -- visto en producción, no una hipótesis. `overflow: hidden` +
-   elipsis en vez de desbordar: si no cabe, se corta y se ve entero en el título
-   (tooltip) del navegador, nunca se monta sobre la celda de al lado. */
+   la vecina -- visto en producción, no una hipótesis. En las celdas de datos,
+   `overflow: hidden` + elipsis en vez de desbordar: si no cabe, se corta y se
+   ve entero en el título (tooltip) del navegador, nunca se monta sobre la
+   celda de al lado. Los encabezados son otra historia -- son un puñado de
+   palabras fijas, no datos variables por fila, así que envuelven a dos líneas
+   en vez de cortarse: "Unidad tarifa" cortado en "Unidad tar…" no se entiende,
+   y no hay tooltip en un `<th>` que lo explique. */
 .conciliacion-tabla-fija { table-layout: fixed; }
-.conciliacion-tabla-fija th, .conciliacion-tabla-fija td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conciliacion-tabla-fija td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conciliacion-tabla-fija th { white-space: normal; line-height: 1.25; }
 .conciliacion-tabla-fija td.conciliacion-col-ancha { white-space: normal; overflow-wrap: anywhere; }
 /* ── Comisiones ─────────────────────────────────────────────────────────
    La nota bajo el indicador existe para una cifra concreta: "con cobro
@@ -11252,6 +11257,14 @@ body.proan-report-assistant-open .proan-content-scroll {
 .comisiones-plegable-cifra { color: #92400e; font-size: 11.5px; font-weight: 700; }
 .comisiones-plegable .hydro-table-wrap { border-top: 1px solid #eeeae4; }
 .comisiones-plegable .hydro-table-wrap tbody tr { cursor: default; }
+/* La única fila con detalle disponible ("sin tarifa para esa llave" hoy):
+   pisa el `cursor: default` de arriba y se distingue al pasar el ratón. */
+.comisiones-plegable .hydro-table-wrap tbody tr.comisiones-bloqueado-clicable { cursor: pointer; }
+.comisiones-plegable .hydro-table-wrap tbody tr.comisiones-bloqueado-clicable:hover,
+.comisiones-plegable .hydro-table-wrap tbody tr.comisiones-bloqueado-clicable:focus-visible {
+  background: #fdf9f3; outline: none;
+}
+.comisiones-bloqueado-ver-detalle { color: #3d3d7c; font-weight: 700; font-size: 11px; }
 
 @media (prefers-reduced-motion: reduce) {
   .comisiones-plegable > summary::after { transition: none; }

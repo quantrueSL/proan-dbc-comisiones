@@ -29,7 +29,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
-import { AvisoBoton } from "@/components/aviso";
+import { AvisoBoton, Modal } from "@/components/aviso";
 import { FiltersSidebar } from "@/components/filters-sidebar";
 // Las piezas y la paleta salen de flujo de producto en vez de duplicarse: las
 // dos pantallas tienen que verse como la misma herramienta, y los colores de
@@ -56,6 +56,7 @@ import type {
  *  cambiar una pieza sin esperar a que React actualice el estado. */
 type Filtros = {
   division: string;
+  sociedad: string;
   cedis: string;
   comisionista: string;
   desde: string;
@@ -158,11 +159,15 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   const [division, setDivision] = useState("");
   const [cedis, setCedis] = useState("");
   const [comisionista, setComisionista] = useState("");
+  const [sociedad, setSociedad] = useState("");
   const [desde, setDesde] = useState(rangoInicial.desde);
   const [hasta, setHasta] = useState(rangoInicial.hasta);
   const [report, setReport] = useState(initialReport);
   const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
+  // Qué motivo de "lo que todavía no entra en el cálculo" está abierto en el
+  // modal de detalle. `null` = cerrado.
+  const [motivoDetalle, setMotivoDetalle] = useState<string | null>(null);
 
   /**
    * `cambios` existe porque ahora se filtra también pulsando una barra, y
@@ -172,7 +177,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
    * para que el panel lateral lo refleje.
    */
   async function load(cambios: Partial<Filtros> = {}) {
-    const f: Filtros = { division, cedis, comisionista, desde, hasta, ...cambios };
+    const f: Filtros = { division, cedis, comisionista, sociedad, desde, hasta, ...cambios };
     setLoading(true);
     setError(null);
     try {
@@ -180,6 +185,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
         division: f.division || null,
         cedis: f.cedis || null,
         comisionista: f.comisionista || null,
+        sociedad: f.sociedad || null,
         start_date: f.desde,
         end_date: f.hasta
       };
@@ -200,7 +206,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
     }
   }
 
-  const activeFilterCount = [division, cedis, comisionista].filter(Boolean).length;
+  const activeFilterCount = [division, cedis, comisionista, sociedad].filter(Boolean).length;
   // Pedir hasta hoy cuando los datos acaban el 23 de agosto no es un error, pero
   // deja creer que el último tramo no vendió nada. Se dice, en vez de que cada
   // uno lo descubra por su cuenta.
@@ -211,6 +217,15 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   const montoBloqueado = bloqueado.reduce((suma, b) => suma + b.monto, 0);
   // La horquilla solo existe donde las dos hojas del cliente se contradicen.
   const horquilla = bloqueado.reduce((suma, b) => suma + (b.comision_max - b.comision_min), 0);
+  const bloqueadoDesglose = report?.bloqueado_desglose ?? [];
+  const detalleDelMotivo = useMemo(
+    () => bloqueadoDesglose.filter((d) => d.motivo === motivoDetalle),
+    [bloqueadoDesglose, motivoDetalle]
+  );
+  // Por ahora solo esta fila abre detalle -- es la que se pidió. El dato de
+  // los otros dos motivos ya viaja en `bloqueado_desglose` si algún día hace
+  // falta conectarlos también, sin tocar el backend.
+  const MOTIVO_CON_DETALLE = "sin tarifa para esa llave";
 
   // Comisionistas a los que hay algo que pagarles. Ni el total de la tabla (que
   // incluye a quien devengó cero) ni el del catálogo del cliente (57 nombres,
@@ -378,6 +393,20 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
                 {divisionLabel(row)}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          Sociedad
+          <select onChange={(e) => setSociedad(e.target.value)} value={sociedad}>
+            <option value="">Todas</option>
+            {(report?.por_sociedad ?? [])
+              .map((f) => f.sociedad)
+              .filter((n): n is string => Boolean(n))
+              .map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
           </select>
         </label>
         <label>
@@ -699,25 +728,84 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
                   </tr>
                 </thead>
                 <tbody>
-                  {bloqueado.map((b) => (
-                    <tr key={b.motivo}>
-                      <td>{b.motivo}</td>
-                      <td className="n">{numero.format(b.num_lineas)}</td>
-                      <td className="n">{pesos(b.monto)}</td>
-                      <td className="n">
-                        {/* Donde hay conflicto de tarifas se sabe el rango; en el
-                            resto todavía no se sabe nada, y decirlo es más útil
-                            que un cero que parece una cifra. */}
-                        {b.comision_max > 0
-                          ? `${pesos(b.comision_min)} – ${pesos(b.comision_max)}`
-                          : "sin determinar"}
-                      </td>
-                    </tr>
-                  ))}
+                  {bloqueado.map((b) => {
+                    const clicable = b.motivo === MOTIVO_CON_DETALLE;
+                    return (
+                      <tr
+                        className={clicable ? "comisiones-bloqueado-clicable" : undefined}
+                        key={b.motivo}
+                        onClick={clicable ? () => setMotivoDetalle(b.motivo) : undefined}
+                        onKeyDown={
+                          clicable
+                            ? (e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setMotivoDetalle(b.motivo);
+                                }
+                              }
+                            : undefined
+                        }
+                        tabIndex={clicable ? 0 : undefined}
+                        title={clicable ? "Ver el detalle por división, oficina, SET y tipo de venta" : undefined}
+                      >
+                        <td>
+                          {b.motivo}
+                          {clicable ? <span className="comisiones-bloqueado-ver-detalle"> — ver detalle →</span> : null}
+                        </td>
+                        <td className="n">{numero.format(b.num_lineas)}</td>
+                        <td className="n">{pesos(b.monto)}</td>
+                        <td className="n">
+                          {/* Donde hay conflicto de tarifas se sabe el rango; en el
+                              resto todavía no se sabe nada, y decirlo es más útil
+                              que un cero que parece una cifra. */}
+                          {b.comision_max > 0
+                            ? `${pesos(b.comision_min)} – ${pesos(b.comision_max)}`
+                            : "sin determinar"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </details>
+        ) : null}
+
+        {motivoDetalle ? (
+          <Modal
+            onClose={() => setMotivoDetalle(null)}
+            subtitulo={`${numero.format(detalleDelMotivo.reduce((s, d) => s + d.num_lineas, 0))} líneas · ${pesos(
+              detalleDelMotivo.reduce((s, d) => s + d.monto, 0)
+            )} facturados`}
+            titulo={motivoDetalle}
+          >
+            <table>
+              <thead>
+                <tr>
+                  <th>Sociedad</th>
+                  <th>División</th>
+                  <th>Oficina</th>
+                  <th>SET</th>
+                  <th>Tipo de venta</th>
+                  <th className="n">Líneas</th>
+                  <th className="n">Facturado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detalleDelMotivo.map((d, indice) => (
+                  <tr key={indice}>
+                    <td>{d.sociedad ?? "—"}</td>
+                    <td>{d.division ?? d.division_code ?? "—"}</td>
+                    <td>{d.oficina ?? "—"}</td>
+                    <td>{d.set ?? "—"}</td>
+                    <td>{d.tipo_venta ?? "—"}</td>
+                    <td className="n">{numero.format(d.num_lineas)}</td>
+                    <td className="n">{pesos(d.monto)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Modal>
         ) : null}
       </div>
     </div>

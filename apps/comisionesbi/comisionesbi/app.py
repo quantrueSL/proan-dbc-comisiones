@@ -62,6 +62,9 @@ class ReportQuery(BaseModel):
     division: str | None = None
     cedis: str | None = None
     comisionista: str | None = None
+    # DBC o PAN. Huevo se factura por las dos y la comisión de PAN es la mayor
+    # parte del total, así que hay que poder mirarlas por separado.
+    sociedad: str | None = None
     start_date: date
     end_date: date
 
@@ -148,6 +151,7 @@ def post_report(body: ReportQuery) -> dict:
         division=body.division,
         cedis=body.cedis,
         comisionista=body.comisionista,
+        sociedad=body.sociedad,
         start_date=body.start_date,
         end_date=body.end_date,
     )

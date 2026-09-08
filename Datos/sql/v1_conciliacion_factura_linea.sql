@@ -35,53 +35,25 @@ WITH cedis_resuelto AS (
          ON dc.cedis IS NULL AND dal.cedis IS NULL AND dco.oficina = t.oficina_ventas
 ),
 -- Comisionista por oficina -- misma cadena que `DBC_gold_comision_diaria_v2`
--- (2026-09-02): el nombre más largo por oficina, verificado contra las demás
--- grafías antes de aceptarlo. Copiada tal cual, ver ese archivo para el detalle.
-comisionista_nombres AS (
-  SELECT DISTINCT oficina, NULLIF(TRIM(persona), '') AS persona
-  FROM (
-    SELECT oficina, persona FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_oficina`
-    UNION ALL
-    SELECT oficina, persona FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comision_tarifa`
-  )
-  WHERE NULLIF(TRIM(persona), '') IS NOT NULL
+-- (2026-09-08): sale de `DBC_dim_comisionista`, cruzando por la sociedad de la
+-- factura (`t.bukrs`) -- ver ese archivo para el porqué.
+-- Copiada tal cual de ese archivo, ver ahí el detalle y las mediciones.
+comisionista_src AS (
+  SELECT sociedad, division, oficina, persona_cod, persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+  WHERE NULLIF(TRIM(oficina), '') IS NOT NULL
 ),
-comisionista_tokens AS (
-  SELECT oficina, persona,
-    ARRAY(
-      SELECT DISTINCT UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(tok, NFKD), r'[^a-z0-9]', ''))
-      FROM UNNEST(SPLIT(persona, ' ')) AS tok
-      WHERE REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(tok, NFKD), r'[^a-z0-9]', '') != ''
-    ) AS tokens
-  FROM comisionista_nombres
+comisionista_oficina AS (
+  SELECT sociedad, oficina, ANY_VALUE(persona) AS persona
+  FROM comisionista_src
+  GROUP BY sociedad, oficina HAVING COUNT(DISTINCT persona_cod) = 1
 ),
-comisionista_candidato AS (
-  SELECT oficina, persona AS candidato, tokens AS tokens_candidato
-  FROM comisionista_tokens
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY oficina ORDER BY ARRAY_LENGTH(tokens) DESC, persona) = 1
-),
-comisionista_verificado AS (
-  SELECT
-    t.oficina,
-    ANY_VALUE(c.candidato) AS candidato,
-    LOGICAL_AND(
-      (SELECT LOGICAL_OR(tok = ctok OR EDIT_DISTANCE(tok, ctok) <= 1)
-       FROM UNNEST(c.tokens_candidato) ctok)
-    ) AS es_la_misma_persona
-  FROM comisionista_tokens t, UNNEST(t.tokens) AS tok
-  JOIN comisionista_candidato c ON c.oficina = t.oficina
-  GROUP BY t.oficina
-),
-comisionista_excepciones AS (
-  SELECT oficina, 'FLORENTINO GONZALEZ GARCIA' AS persona
-  FROM UNNEST(['0011', '0093', '0094', '0143']) AS oficina
-),
-comisionista AS (
-  SELECT
-    v.oficina,
-    COALESCE(e.persona, IF(v.es_la_misma_persona, v.candidato, NULL)) AS persona
-  FROM comisionista_verificado v
-  LEFT JOIN comisionista_excepciones e ON e.oficina = v.oficina
+comisionista_oficina_division AS (
+  SELECT c.sociedad, c.oficina, c.division, ANY_VALUE(c.persona) AS persona
+  FROM comisionista_src c
+  WHERE NOT EXISTS (SELECT 1 FROM comisionista_oficina o
+                    WHERE o.sociedad = c.sociedad AND o.oficina = c.oficina)
+  GROUP BY c.sociedad, c.oficina, c.division HAVING COUNT(DISTINCT c.persona_cod) = 1
 ),
 -- Unidad y cantidad de manejo por material -- `stockkeeping_units` (no
 -- `invoiced_quantity`/`sales_unit` crudos, que vienen mezclados CS/PAQ/PZA/
@@ -105,11 +77,12 @@ SELECT
   t.billing_document,
   t.item_number,
   t.billing_date                                            AS fecha,
+  t.bukrs                                                   AS sociedad,
   t.division                                                AS division_code,
   ba.business_area_name                                     AS division,
   cr.cedis,
   t.oficina_ventas                                          AS oficina,
-  c.persona                                                 AS comisionista,
+  COALESCE(co.persona, cod.persona)                         AS comisionista,
   t.tipo_venta,
   t.matnr,
   d.descripcion,
@@ -152,5 +125,8 @@ LEFT JOIN descripcion d
        ON d.matnr_clean = t.matnr
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba
        ON ba.business_area_code = t.division
-LEFT JOIN comisionista c
-       ON c.oficina = t.oficina_ventas;
+LEFT JOIN comisionista_oficina co
+       ON co.sociedad = t.bukrs AND co.oficina = t.oficina_ventas
+LEFT JOIN comisionista_oficina_division cod
+       ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
+      AND cod.division = t.division;

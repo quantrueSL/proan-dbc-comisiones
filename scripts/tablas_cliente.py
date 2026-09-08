@@ -368,7 +368,12 @@ def de_comision(filas, cab, rastro) -> tuple[list[dict], list[dict]]:
         if not division or len(division) > 3 or not centro:
             continue
         comun = {**rastro, "semana": limpia(c.get("B", "")), "division": division,
-                 "en_operacion": division in EN_OPERACION, "centro": centro,
+                 "en_operacion": division in EN_OPERACION,
+                 # La sociedad (DBC/PAN) es parte de la llave real, no un adorno:
+                 # una misma oficina puede tener comisionista distinto según la
+                 # sociedad (Celaya 0012: Agustín en DBC, Genaro en PAN).
+                 "sociedad": limpia(c.get(rol.get("sociedad", ""), "")),
+                 "centro": centro,
                  "almacen": limpia(c.get(rol.get("almacen", ""), "")),
                  "persona_cod": limpia(c.get(rol.get("persona", ""), "")), "persona": "",
                  "oficina": limpia(c.get(rol.get("oficina", ""), ""))}
@@ -391,6 +396,39 @@ def de_comision(filas, cab, rastro) -> tuple[list[dict], list[dict]]:
                                           "material_sap": material.zfill(18),
                                           "columna_cedis": etiqueta, "valor": valor})
     return tarifas, abarrotes
+
+
+# Llave real del comisionista. La oficina SOLA no basta: la misma oficina
+# cambia de dueño según la sociedad (Celaya 0012 es de Agustín en DBC y de
+# Genaro en PAN) y el centro va con ella (H7CE para DBC, PANF para PAN).
+CLAVE_COMISIONISTA = ("sociedad", "division", "centro", "almacen", "oficina")
+
+
+def de_comisionistas(tarifas) -> list[dict]:
+    """Un renglón por sociedad+división+centro+almacén+oficina -> comisionista.
+
+    Sale de las mismas hojas de comisión que las tarifas, pero se emite aparte
+    y con su propio nombre para que nadie tenga que leer una tabla de tarifas
+    para saber de quién es una oficina. Incluye PAN a propósito, aunque el
+    cálculo de hoy solo use DBC: el día que se agregue PAN el mapeo ya está.
+    """
+    vistos, salida = {}, []
+    for t in tarifas:
+        if not limpia(t.get("persona_cod", "")) or not limpia(t.get("oficina", "")):
+            continue
+        clave = tuple(t.get(k, "") for k in CLAVE_COMISIONISTA) + (t["persona_cod"],)
+        # Se queda la grafía más larga del nombre; el cruce es por código.
+        if clave not in vistos or len(t.get("persona", "")) > len(vistos[clave]["persona"]):
+            vistos[clave] = {k: t.get(k, "") for k in CLAVE_COMISIONISTA}
+            vistos[clave].update({
+                "en_operacion": t.get("en_operacion"),
+                "persona_cod": t["persona_cod"],
+                "persona": t.get("persona", ""),
+                "fichero": t.get("fichero", ""), "hoja": t.get("hoja", ""),
+            })
+    for v in vistos.values():
+        salida.append(v)
+    return salida
 
 
 def de_diccionario(filas, cab, rastro) -> list[dict]:
@@ -460,7 +498,8 @@ def recorre():
     # tapar una del cliente sin que el aviso de "material en más de un SET"
     # lo cante.
     sets += de_mapeo_set()
-    return sets, tarifas, abarrotes, diccionario, listas, desconocidas
+    comisionistas = de_comisionistas(tarifas)
+    return sets, tarifas, abarrotes, diccionario, listas, comisionistas, desconocidas
 
 
 def conflictos(tarifas):
@@ -523,13 +562,14 @@ def main() -> int:
                     help="además de escribir los CSV, reemplaza las tablas en BigQuery")
     args = ap.parse_args()
 
-    sets, tarifas, abarrotes, diccionario, listas, desconocidas = recorre()
+    sets, tarifas, abarrotes, diccionario, listas, comisionistas, desconocidas = recorre()
     tablas = {
         "DBC_dim_set_material": sets,
         "DBC_dim_comision_tarifa": tarifas,
         "DBC_dim_comision_abarrotes": abarrotes,
         "DBC_dim_almacen_oficina": diccionario,
         "DBC_dim_almacen_nombre": listas,
+        "DBC_dim_comisionista": comisionistas,
     }
     for nombre, filas in tablas.items():
         if not filas:
