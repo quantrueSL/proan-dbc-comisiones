@@ -32,7 +32,10 @@ import type {
 } from "@/types/comisiones";
 
 type Filtros = { division: string; comisionista: string; desde: string; hasta: string };
-type Seleccion = { comisionista: string | null; division_code: string | null };
+// `sociedad` es parte de la selección, no solo de la fila: la misma persona
+// puede tener datos en DBC y en PAN, y sin este campo el detalle (nivel 2) y
+// el Excel exportado mezclaban las dos sociedades bajo el mismo nombre.
+type Seleccion = { sociedad: string | null; comisionista: string | null; division_code: string | null };
 
 type Props = {
   initialError: string | null;
@@ -47,6 +50,16 @@ const fechaLarga = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "lo
 
 function pesos(valor: number) {
   return `$${dinero.format(valor)}`;
+}
+
+/** Con signo explícito -- en una columna de diferencia, "1,234" y "-1,234" se
+ *  confunden a simple vista si el signo no se repite delante del símbolo. */
+function pesosConSigno(valor: number) {
+  return `${valor >= 0 ? "+" : "-"}$${dinero.format(Math.abs(valor))}`;
+}
+
+function pct(valor: number) {
+  return `${valor >= 0 ? "+" : ""}${valor.toFixed(1)}%`;
 }
 
 // "caja"/"saco"/"paquete"/"pieza" son las unidades de manejo (ver
@@ -71,7 +84,7 @@ function enPalabras(iso: string | undefined | null) {
 
 const fechaCorta = new Intl.DateTimeFormat("es-MX", { day: "numeric", month: "short" });
 
-/** "2026-08-05" -> "5 ago", para la columna Semana de la tabla de detalle: el
+/** "2026-08-05" -> "5 ago", para la columna Periodo de la tabla de detalle: el
  *  formato largo ("5 de agosto de 2026") no cabe en una columna angosta y el
  *  año ya está en el periodo de la cabecera del panel. */
 function semanaCorta(iso: string) {
@@ -130,6 +143,22 @@ function columnaLetra(indice: number): string {
 
 const MONEDA = '"$"#,##0.00';
 const NUMERO2 = "#,##0.00";
+
+/** Un renglón por periodo -- ver `resumenPeriodos` más abajo, misma forma. */
+type ResumenPeriodoRow = {
+  periodo: string;
+  periodoFin: string;
+  calculado: number | null;
+  pagado: number | null;
+  diferencia: number | null;
+};
+
+const COLUMNAS_RESUMEN_PERIODO: ColumnaExcel[] = [
+  { encabezado: "Periodo", ancho: 24 },
+  { encabezado: "Calculado", ancho: 15, alinear: "right", formato: MONEDA, sumable: true },
+  { encabezado: "Pagado", ancho: 15, alinear: "right", formato: MONEDA, sumable: true },
+  { encabezado: "Diferencia", ancho: 15, alinear: "right", formato: MONEDA, sumable: true }
+];
 
 /** Las columnas de producto/tarifa/comisión que comparten las tres hojas —
  *  cada una las antecede o las sigue con lo que la distingue (periodo/fecha
@@ -248,6 +277,7 @@ async function construirExcel(datos: {
   desde: string;
   hasta: string;
   filas: ConciliacionDetalleRow[];
+  filasResumenPeriodo: ResumenPeriodoRow[];
   filasDiarias: ConciliacionDiarioRow[];
   filasFactura: ConciliacionFacturaRow[];
 }): Promise<Blob> {
@@ -293,6 +323,15 @@ async function construirExcel(datos: {
     columnas: [{ encabezado: "Periodo", ancho: 24 }, ...COLUMNAS_PRODUCTO],
     valores: (f: ConciliacionDetalleRow) => [`${f.semana} - ${f.periodo_fin}`, ...valoresProducto(f)],
     filas: datos.filas
+  });
+
+  agregarHoja(libro, {
+    nombreHoja: "Pagado vs. calculado",
+    tituloPrincipal: `Pagado vs. calculado por periodo — ${datos.comisionista} · ${datos.division}`,
+    subtitulo: `${subtitulo} · un renglón por periodo de pago, mismo comparativo que el panel de la pantalla`,
+    columnas: COLUMNAS_RESUMEN_PERIODO,
+    valores: (f: ResumenPeriodoRow) => [`${f.periodo} - ${f.periodoFin}`, f.calculado, f.pagado, f.diferencia],
+    filas: datos.filasResumenPeriodo
   });
 
   agregarHoja(libro, {
@@ -417,6 +456,12 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
 
   const activeFilterCount = [division, comisionista].filter(Boolean).length;
   const filasComisionista = response?.por_comisionista ?? [];
+  // Titular de la cabecera: suma de `diferencia` (ya viene null cuando falta
+  // pago o cálculo, así que no se cuenta como cero) y cuántas filas traen
+  // alguno de los dos badges -- lo que alguien entrando a la pantalla
+  // necesita saber antes de escanear la tabla fila por fila.
+  const totalDiferencia = filasComisionista.reduce((suma, f) => suma + (f.diferencia ?? 0), 0);
+  const totalAlertas = filasComisionista.filter((f) => f.pago_sin_calculo || f.calculo_sin_pago).length;
 
   const nombresComisionista = useMemo(
     () => Array.from(new Set(filasComisionista.map((f) => f.comisionista).filter((n): n is string => Boolean(n)))).sort(),
@@ -426,7 +471,12 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
   const detalleSeleccion = useMemo(() => {
     if (!seleccion || !response) return [];
     return response.detalle
-      .filter((d) => d.comisionista === seleccion.comisionista && d.division_code === seleccion.division_code)
+      .filter(
+        (d) =>
+          d.comisionista === seleccion.comisionista &&
+          d.division_code === seleccion.division_code &&
+          d.sociedad === seleccion.sociedad
+      )
       .slice()
       .sort((a, b) => {
         // Semana más antigua primero: es el orden en que ella revisa las
@@ -445,6 +495,49 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
   const comisionSeleccion = detalleSeleccion.reduce((suma, d) => suma + d.comision_total, 0);
   const montoSeleccion = detalleSeleccion.reduce((suma, d) => suma + d.monto_total, 0);
 
+  const pagoSeleccion = useMemo(() => {
+    if (!seleccion || !response) return [];
+    return response.pago_semanal.filter(
+      (p) =>
+        p.comisionista === seleccion.comisionista &&
+        p.division_code === seleccion.division_code &&
+        p.sociedad === seleccion.sociedad
+    );
+  }, [seleccion, response]);
+
+  /** Un renglón por periodo (Calculado sale de sumar `detalleSeleccion`,
+   *  Pagado de `pagoSeleccion`) -- el nivel 1 solo trae el total de TODO el
+   *  rango, esto es lo que permite ver Pagado al lado de Calculado en CADA
+   *  periodo, en el panel y en el Excel. Unión de las dos fuentes (no solo
+   *  los periodos con producto): un periodo pagado sin ninguna línea
+   *  calculada tiene que poder verse igual ("cálculo sin pago" a nivel de
+   *  periodo, no solo a nivel de comisionista+división). */
+  const resumenPeriodos = useMemo(() => {
+    const calculadoPorPeriodo = new Map<string, { periodoFin: string; calculado: number }>();
+    for (const d of detalleSeleccion) {
+      const actual = calculadoPorPeriodo.get(d.semana) ?? { periodoFin: d.periodo_fin, calculado: 0 };
+      actual.calculado += d.comision_total;
+      calculadoPorPeriodo.set(d.semana, actual);
+    }
+    const pagoPorPeriodo = new Map(pagoSeleccion.map((p) => [p.periodo, p]));
+    const periodos = new Set([...calculadoPorPeriodo.keys(), ...pagoPorPeriodo.keys()]);
+    return Array.from(periodos)
+      .sort()
+      .map((periodo) => {
+        const calc = calculadoPorPeriodo.get(periodo);
+        const pago = pagoPorPeriodo.get(periodo);
+        const calculado = calc?.calculado ?? null;
+        const pagado = pago?.pago_real ?? null;
+        return {
+          periodo,
+          periodoFin: calc?.periodoFin ?? pago?.periodo_fin ?? periodo,
+          calculado,
+          pagado,
+          diferencia: calculado !== null && pagado !== null ? calculado - pagado : null
+        };
+      });
+  }, [detalleSeleccion, pagoSeleccion]);
+
   async function exportarSeleccion() {
     if (!seleccion) return;
     const nombreArchivo = nombreComisionista(seleccion.comisionista).replace(/\s+/g, "_");
@@ -455,6 +548,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
       // es la misma combinación comisionista+división+periodo, sin agregar --
       // la segunda y tercera hoja del Excel (ver construirExcel).
       const filtro: ConciliacionFilters = {
+        sociedad: seleccion.sociedad,
         division: seleccion.division_code,
         comisionista: seleccion.comisionista,
         start_date: desde,
@@ -496,11 +590,15 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
       const blob = await construirExcel({
         comisionista: nombreComisionista(seleccion.comisionista),
         division: filasComisionista.find(
-          (f) => f.comisionista === seleccion.comisionista && f.division_code === seleccion.division_code
+          (f) =>
+            f.comisionista === seleccion.comisionista &&
+            f.division_code === seleccion.division_code &&
+            f.sociedad === seleccion.sociedad
         )?.division ?? seleccion.division_code ?? "",
         desde,
         hasta,
         filas: detalleSeleccion,
+        filasResumenPeriodo: resumenPeriodos,
         filasDiarias,
         filasFactura
       });
@@ -519,8 +617,8 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
         info={
           <>
             <p>
-              El detalle por producto que hoy se arma a mano cada semana, listo para comparar contra
-              lo que se le pagó a cada comisionista.
+              El detalle por producto que hoy se arma a mano cada periodo de pago, listo para comparar
+              contra lo que se le pagó a cada comisionista.
             </p>
             <h3>Lo que esta pantalla NO hace</h3>
             <p>
@@ -600,7 +698,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
             <p>Conciliación</p>
             <h1>Comisión por comisionista</h1>
             <span>
-              Semana sábado a viernes, detalle por producto - Se hace el ajuste a final de mes.
+              Periodo de pago sábado a viernes, detalle por producto - se corta antes si cruza de mes.
             </span>
             <div className="periodo-activo">
               <span>
@@ -608,7 +706,28 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
               </span>
             </div>
           </div>
+          {filasComisionista.length ? (
+            <div className="conciliacion-titular">
+              <span>Diferencia total</span>
+              <strong>{pesosConSigno(totalDiferencia)}</strong>
+              <small>
+                Calculado − Pagado, {totalDiferencia >= 0 ? "posible pago de menos" : "posible pago de más"}
+                {" · "}
+                {numero.format(filasComisionista.length)} comisionista(s)
+                {totalAlertas ? ` · ${numero.format(totalAlertas)} con alerta` : ""}
+              </small>
+            </div>
+          ) : null}
         </header>
+
+        <p className="conciliacion-aviso-pago">
+          <b>Calculado</b> respeta el filtro al día exacto, agrupado por periodo de pago (sábado a
+          viernes, cortado a fin de mes) solo para mostrarse. 
+          
+          <b>Pagado</b> no puede: es un pago real de
+          BSAK por periodo completo, así que puede no coincidir con Calculado en el borde de un periodo
+          que el filtro corte a la mitad — esa diferencia es esperada, no un error de cálculo.
+        </p>
 
         <section className="hydro-table-card">
           <div className="hydro-table-title">
@@ -625,42 +744,66 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                     desborda sobre División, que es la que menos espacio
                     necesita (HUEVO, BOTANA... siempre corto). */}
                 <colgroup>
-                  <col style={{ width: "36%" }} />
+                  <col style={{ width: "8%" }} />
+                  <col style={{ width: "26%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "7%" }} />
                   <col style={{ width: "12%" }} />
-                  <col style={{ width: "10%" }} />
-                  <col style={{ width: "16%" }} />
-                  <col style={{ width: "16%" }} />
-                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "13%" }} />
+                  <col style={{ width: "13%" }} />
                 </colgroup>
                 <thead>
                   <tr>
+                    <th>Sociedad</th>
                     <th>Comisionista</th>
                     <th>División</th>
-                    <th className="n">Líneas</th>
-                    <th className="n">Facturado</th>
-                    <th className="n">Comisión</th>
-                    <th className="n">Semanas</th>
+                    <th className="n">Periodos</th>
+                    <th className="n">Pagado</th>
+                    <th className="n">Calculado</th>
+                    <th className="n" title="Calculado − Pagado: positiva es posible pago de menos, negativa (en rojo) es posible pago de más.">
+                      Diferencia
+                    </th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filasComisionista.map((fila, indice) => (
                     <tr
                       key={indice}
-                      onClick={() => setSeleccion({ comisionista: fila.comisionista, division_code: fila.division_code })}
+                      onClick={() =>
+                        setSeleccion({ sociedad: fila.sociedad, comisionista: fila.comisionista, division_code: fila.division_code })
+                      }
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          setSeleccion({ comisionista: fila.comisionista, division_code: fila.division_code });
+                          setSeleccion({ sociedad: fila.sociedad, comisionista: fila.comisionista, division_code: fila.division_code });
                         }
                       }}
                       tabIndex={0}
                     >
+                      <td>{fila.sociedad ?? "—"}</td>
                       <td title={nombreComisionista(fila.comisionista)}>{nombreComisionista(fila.comisionista)}</td>
                       <td>{fila.division ?? fila.division_code ?? "—"}</td>
-                      <td className="n">{numero.format(fila.num_lineas)}</td>
-                      <td className="n">{pesos(fila.monto_total)}</td>
-                      <td className="n">{pesos(fila.comision_total)}</td>
                       <td className="n">{fila.num_semanas}</td>
+                      <td className="n">{fila.pago_real === null ? "—" : pesos(fila.pago_real)}</td>
+                      <td className="n">{fila.comision_calculada === null ? "—" : pesos(fila.comision_calculada)}</td>
+                      <td className={`n ${fila.diferencia !== null && fila.diferencia < 0 ? "conciliacion-dif-negativa" : ""}`}>
+                        {fila.diferencia === null
+                          ? "—"
+                          : `${pesosConSigno(fila.diferencia)}${fila.diff_pct !== null ? ` (${pct(fila.diff_pct)})` : ""}`}
+                      </td>
+                      <td>
+                        {fila.pago_sin_calculo ? (
+                          <span className="hydro-badge is-review" title="Se le pagó algo que no calculamos para ningún periodo de este rango.">
+                            pago sin cálculo
+                          </span>
+                        ) : fila.calculo_sin_pago ? (
+                          <span className="hydro-badge is-review" title="Calculamos comisión pero no encontramos un pago de BSAK que le corresponda.">
+                            cálculo sin pago
+                          </span>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -688,8 +831,12 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
             </div>
             <div className="hydro-detail-body">
               <p className="hydro-nota">
+                {seleccion.sociedad ?? "—"} ·{" "}
                 {filasComisionista.find(
-                  (f) => f.comisionista === seleccion.comisionista && f.division_code === seleccion.division_code
+                  (f) =>
+                    f.comisionista === seleccion.comisionista &&
+                    f.division_code === seleccion.division_code &&
+                    f.sociedad === seleccion.sociedad
                 )?.division ?? seleccion.division_code}{" "}
                 · del {enPalabras(desde) ?? desde} al {enPalabras(hasta) ?? hasta} · {pesos(montoSeleccion)} facturado
                 · {pesos(comisionSeleccion)} de comisión
@@ -704,6 +851,26 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                   {exportando ? "Generando…" : "Descargar Excel"}
                 </button>
               </div>
+              {resumenPeriodos.length ? (
+                <div className="conciliacion-resumen-periodos">
+                  {resumenPeriodos.map((r) => (
+                    <div className="conciliacion-periodo-card" key={r.periodo}>
+                      <span>
+                        {semanaCorta(r.periodo)}–{semanaCorta(r.periodoFin)}
+                      </span>
+                      <div>
+                        <b>Calculado</b> {r.calculado === null ? "—" : pesos(r.calculado)}
+                      </div>
+                      <div>
+                        <b>Pagado</b> {r.pagado === null ? "—" : pesos(r.pagado)}
+                      </div>
+                      <div className={r.diferencia !== null && r.diferencia < 0 ? "conciliacion-dif-negativa" : ""}>
+                        <b>Diferencia</b> {r.diferencia === null ? "—" : pesosConSigno(r.diferencia)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {detalleSeleccion.length ? (
                 <div className="hydro-table-wrap">
                   <table className="conciliacion-tabla-fija">
@@ -723,7 +890,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                     </colgroup>
                     <thead>
                       <tr>
-                        <th>Semana</th>
+                        <th>Periodo</th>
                         <th>CEDIS</th>
                         <th>Oficina</th>
                         <th>Tipo de venta</th>

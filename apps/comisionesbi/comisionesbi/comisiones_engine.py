@@ -6,15 +6,19 @@ agregado sobre `dbc_comisiones_calculadas_cobro`
 2026-09-01 la cadena anterior (`v1_comision_linea` → `DBC_gold_comision_diaria`,
 `data/consultas/`), validada contra ella antes del cambio (mismo total
 facturado al peso, una vez igualadas fechas). Cobertura de tarifa subió de
-~82% a ~92% del facturado en alcance. Dos pendientes conocidos, no resueltos
-por este cambio:
-  - `base_unidad`/`cantidad_base` solo vienen para H e IA (kg, vía
-    `net_weight`). Para BO/L/A siguen NULL: usar `cantidad_cajas` ahí depende
-    de que se cierre la auditoría de esa columna (sospechosa, en curso).
-  - `comisionista` sigue en NULL en el 100% de Botana y Abarrotes —
-    `DBC_dim_almacen_oficina` no trae `persona` para esas 2 divisiones. Con la
-    tarifa nueva Botana pasó de 0,2% a 87,6% de cobertura, así que este hueco
-    ahora es mucho más visible en pantalla que antes.
+~82% a ~92% del facturado en alcance.
+
+`base_unidad`/`cantidad_base` (2026-09-07, confirmado con la distribución real
+de `sales_unit`): ya vienen resueltas para las 5 divisiones — kg en H/IA (vía
+`net_weight`), pieza en A/L, paquete en BO. Ya no es un pendiente.
+
+`comisionista` (2026-09-08): cambió de fuente, de `DBC_dim_almacen_oficina`
+(sin `persona` para Botana/Abarrotes, de ahí el 0% de esas 2 divisiones) a
+`DBC_dim_comisionista`, cruzada por sociedad+oficina con `persona_cod` como
+llave real — ver `v1_comision_dbc_gold_v2.sql`. Cubre ~87% de las
+combinaciones que trae la facturación, sin importar la división: el hueco ya
+no es "0% en Botana y Abarrotes, resto bien", es un resto repartido entre
+todas.
 Las 4 oficinas de venta directa/bodega (0001/0174/0175/0181, ~$51 M) ya NO
 cuentan en `monto_total`: se excluyen desde el origen (antes se incluían y se
 marcaban como bloqueadas). No se consulta la tabla base directamente porque
@@ -45,10 +49,10 @@ TRES COSAS QUE NO SON EVIDENTES:
    `sap_pago`) sigue sin ver el 100% del cobro real — por eso NO se llaman
    "pagable": son el suelo conocido.
 
-2. `cantidad_base` MEZCLA KILOS Y CAJAS si se suma entre divisiones. Hoy solo
-   viene para H e IA (kg, confirmado). BO/L/A vienen con `base_unidad` NULL a
-   propósito — pendiente de la auditoría de `cantidad_cajas` — así que su
-   comisión SÍ está calculada pero sin cantidad que mostrar todavía.
+2. `cantidad_base` MEZCLA KILOS Y CAJAS si se suma entre divisiones. Confirmado
+   2026-09-07 para las 5: kg en H/IA (peso real), pieza en A/L, paquete en BO
+   — sumar entre divisiones sigue sin tener sentido, pero ya no falta ningún
+   dato por división.
 
 3. `comision_min`/`comision_max` (horquilla de tarifas en conflicto) ya no
    aplican con esta fuente: verificado que las tablas de tarifa oficial
@@ -75,7 +79,7 @@ _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 # SQL sirva a todas las combinaciones de filtro sin construir la cadena a trozos.
 _DETALLE_SQL = f"""
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, comisionista,
+  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista,
   tipo_venta, `set`, base_unidad, comision_estado,
   num_lineas, monto_total, cantidad_base_total,
   comision_total, comision_min_total, comision_max_total,
@@ -119,6 +123,11 @@ def _nuevo() -> dict:
         # comisionista con la mitad de su venta bloqueada es indistinguible de
         # uno con poca venta.
         "monto_calculable": 0.0,
+        # Lado facturado de `comision_con_cobro` (2026-09-09, pedido de
+        # Silvana): ya se traía en `_DETALLE_SQL` pero nunca se sumaba. Mismo
+        # límite que `comision_con_cobro` -- suelo conocido, no "lo pagable"
+        # (ver el punto 1 del docstring del módulo).
+        "monto_cobrado": 0.0,
     }
 
 
@@ -128,6 +137,7 @@ def _acumular(destino: dict, clave, fila: dict) -> None:
     a["monto"] += fila["monto_total"] or 0.0
     a["comision"] += fila["comision_total"] or 0.0
     a["comision_con_cobro"] += fila["comision_cobrada"] or 0.0
+    a["monto_cobrado"] += fila["monto_cobrado"] or 0.0
     if fila["comision_estado"] == CALCULADA:
         a["monto_calculable"] += fila["monto_total"] or 0.0
 
@@ -206,11 +216,13 @@ def _desglose(filas: list[dict], dimensiones: tuple[str, ...]) -> list[dict]:
 
 
 # ─── Desglose de lo bloqueado ──────────────────────────────────────────────
-# Mismas 4 dimensiones que la llave de tarifa (sociedad + división + oficina +
-# SET + tipo de venta), pero filtrado a las líneas que NO calcularon y
-# agrupado también por motivo -- para que la pantalla pueda abrir un motivo
-# de "bloqueado" (ej. "sin tarifa para esa llave") y enseñar exactamente qué
-# llaves lo componen, en vez de solo el total.
+# La llave de tarifa (sociedad + división + oficina + SET + tipo de venta)
+# MÁS `almacen` -- ese último no hace falta para "sin tarifa para esa llave"
+# (esa llave no lo usa), pero sí para "sin CEDIS/tipo de venta": esa se
+# resuelve por almacén+oficina, no por SET+tipo de venta (que ahí es
+# justamente lo que falta). Se agrupa también por motivo -- para que la
+# pantalla pueda abrir cualquiera de los dos y enseñar exactamente qué llaves
+# lo componen, en vez de solo el total.
 def _bloqueado_desglose(filas: list[dict]) -> list[dict]:
     acumulado: dict = defaultdict(lambda: {"num_lineas": 0, "monto": 0.0})
     nombre_division: dict = {}
@@ -219,8 +231,8 @@ def _bloqueado_desglose(filas: list[dict]) -> list[dict]:
         if motivo == CALCULADA:
             continue
         clave = (
-            motivo, fila["sociedad"], fila["division_code"],
-            fila["oficina"], fila["set"], fila["tipo_venta"],
+            motivo, fila["sociedad"], fila["division_code"], fila["oficina"],
+            fila["almacen"], fila["set"], fila["tipo_venta"],
         )
         a = acumulado[clave]
         a["num_lineas"] += fila["num_lineas"] or 0
@@ -228,7 +240,7 @@ def _bloqueado_desglose(filas: list[dict]) -> list[dict]:
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
 
-    dimensiones = ("motivo", "sociedad", "division_code", "oficina", "set", "tipo_venta")
+    dimensiones = ("motivo", "sociedad", "division_code", "oficina", "almacen", "set", "tipo_venta")
     return [
         {
             **dict(zip(dimensiones, clave)),

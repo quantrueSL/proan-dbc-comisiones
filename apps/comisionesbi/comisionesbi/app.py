@@ -79,6 +79,10 @@ class ReconciliationQuery(BaseModel):
     """Fechas de verdad: la tabla gold de conciliación es por periodo de pago
     (normalmente sáb-vie, pero no siempre — ver v1_conciliacion_producto_semanal.sql)."""
 
+    # DBC o PAN. Solo lo usan /diario y /factura (detalle de UN comisionista ya
+    # elegido en pantalla) -- la misma persona puede tener datos en las dos
+    # sociedades, y sin este filtro se mezclan en una sola hoja del Excel.
+    sociedad: str | None = None
     division: str | None = None
     comisionista: str | None = None
     start_date: date
@@ -176,6 +180,7 @@ def post_reconciliation_diario(body: ReconciliationQuery) -> list[dict]:
     ver conciliacion_engine.detalle_diario.
     """
     return detalle_diario(
+        sociedad=body.sociedad,
         division=body.division,
         comisionista=body.comisionista,
         start_date=body.start_date,
@@ -189,6 +194,7 @@ def post_reconciliation_factura(body: ReconciliationQuery) -> list[dict]:
     detalle del Excel exportado. Ver conciliacion_engine.detalle_factura.
     """
     return detalle_factura(
+        sociedad=body.sociedad,
         division=body.division,
         comisionista=body.comisionista,
         start_date=body.start_date,

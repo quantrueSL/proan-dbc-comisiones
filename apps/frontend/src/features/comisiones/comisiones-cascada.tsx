@@ -66,6 +66,7 @@ export function jerarquia(niveles: NivelCascada[]): string {
 type Totales = {
   monto: number;
   monto_calculable: number;
+  monto_cobrado: number;
   comision: number;
   comision_con_cobro: number;
   cantidad_base: number;
@@ -87,6 +88,7 @@ function nuevoTotal(): Totales {
   return {
     monto: 0,
     monto_calculable: 0,
+    monto_cobrado: 0,
     comision: 0,
     comision_con_cobro: 0,
     cantidad_base: 0,
@@ -97,6 +99,7 @@ function nuevoTotal(): Totales {
 function sumar(destino: Totales, fila: ComisionDesgloseRow) {
   destino.monto += fila.monto;
   destino.monto_calculable += fila.monto_calculable;
+  destino.monto_cobrado += fila.monto_cobrado;
   destino.comision += fila.comision;
   destino.comision_con_cobro += fila.comision_con_cobro;
   destino.cantidad_base += fila.cantidad_base;
@@ -171,6 +174,7 @@ function recortar(hijos: Nodo[], tope: number, rutaPadre: string): { visibles: N
   for (const nodo of sobrantes) {
     totales.monto += nodo.totales.monto;
     totales.monto_calculable += nodo.totales.monto_calculable;
+    totales.monto_cobrado += nodo.totales.monto_cobrado;
     totales.comision += nodo.totales.comision;
     totales.comision_con_cobro += nodo.totales.comision_con_cobro;
     totales.cantidad_base += nodo.totales.cantidad_base;
@@ -290,8 +294,8 @@ export function ComisionesCascada({
             <th className="n">Cantidad</th>
             <th className="n">Facturado</th>
             <th className="n">Con tarifa</th>
-            <th className="n">Comisión devengada</th>
-            <th className="n">Con cobro registrado</th>
+            <th className="n">Comisión sobre facturación</th>
+            <th className="n">Comisión sobre cobro</th>
           </tr>
         </thead>
         <tbody>{raiz.map((nodo) => pintar(nodo))}</tbody>

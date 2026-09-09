@@ -88,6 +88,10 @@ base AS (
     ba.business_area_name                                    AS division,
     cr.cedis,
     t.oficina_ventas                                         AS oficina,
+    -- Para el detalle detrás de "sin CEDIS/tipo de venta" (2026-09-08): esa
+    -- llave es almacén+oficina, no división+oficina+SET+tipo de venta como la
+    -- de tarifa, y sin almacén no se puede mostrar cuál falta.
+    t.almacen,
     COALESCE(co.persona, cod.persona)                        AS comisionista,
     t.tipo_venta,
     t.set_material                                           AS `set`,
@@ -122,7 +126,7 @@ base AS (
         AND cod.division = t.division
 )
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
+  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista, tipo_venta, `set`,
   base_unidad, comision_estado,
   CAST(NULL AS STRING) AS tipo_venta_origen,
   COUNT(*)                    AS num_lineas,
@@ -135,5 +139,5 @@ SELECT
   SUM(monto_cobrado)           AS monto_cobrado,
   COUNTIF(sin_importe)         AS lineas_sin_importe
 FROM base
-GROUP BY fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta, `set`,
+GROUP BY fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista, tipo_venta, `set`,
          base_unidad, comision_estado;

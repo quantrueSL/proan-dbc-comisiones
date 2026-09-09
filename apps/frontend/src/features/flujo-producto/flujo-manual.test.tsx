@@ -58,9 +58,13 @@ describe("fechas de corte", () => {
 });
 
 describe("pendientes", () => {
-  it("deja documentado lo que falta y de qué depende", () => {
+  it("deja documentado, en términos de negocio, lo que falta en los 3 módulos", () => {
     const texto = manual();
-    for (const pendiente of [/MB51/, /GS03/, /ZSDFI_001/, /rango de números de proveedor/]) {
+    for (const pendiente of [
+      /entrada de mercancía al CEDIS/,
+      /no se sabe todavía a quién pagarle/,
+      /fecha de venta para emparejar el pago/
+    ]) {
       expect(texto).toMatch(pendiente);
     }
   });

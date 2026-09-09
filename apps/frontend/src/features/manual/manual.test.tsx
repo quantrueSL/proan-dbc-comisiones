@@ -67,22 +67,26 @@ describe("qué es la plataforma", () => {
 });
 
 describe("estado real de los módulos", () => {
-  it("no presenta como terminado lo que está bloqueado", () => {
-    const contenido = texto();
-    expect(contenido).toMatch(/funcionando/);
-    expect(contenido).toMatch(/bloqueado/);
+  it("presenta los tres módulos como activos, no como bloqueados", () => {
+    // Comisiones y Conciliación dejaron de devolver 501 el 24/08 y el 08/09:
+    // si el manual sigue diciendo "bloqueado" está mintiendo sobre el producto.
+    const marcado = html();
+    expect(marcado).toContain('data-estado="activo"');
+    expect(marcado).not.toContain('data-estado="bloqueado"');
   });
 
-  it("dice qué falta exactamente en cada módulo bloqueado", () => {
-    const contenido = texto();
-    for (const pendiente of [/GS03/, /ZSDFI_001/, /rango de números de proveedor/]) {
-      expect(contenido).toMatch(pendiente);
+  it("cada módulo enlaza a su pantalla real", () => {
+    const marcado = html();
+    for (const ruta of ["/flujo-producto", "/comisiones", "/conciliacion"]) {
+      expect(marcado, `no enlaza a ${ruta}`).toContain(`href="${ruta}"`);
     }
   });
 
-  it("deja claro que los módulos bloqueados no inventan datos", () => {
-    // La promesa que sostiene la credibilidad de la herramienta.
-    expect(texto()).toMatch(/501/);
+  it("dice qué falta en Comisiones y Conciliación, en términos de negocio", () => {
+    const contenido = texto();
+    for (const pendiente of [/no se sabe qué comisionista cobra ahí/, /fecha que junta ambos lados es la de la venta/]) {
+      expect(contenido).toMatch(pendiente);
+    }
   });
 });
 

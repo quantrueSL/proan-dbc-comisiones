@@ -30,9 +30,10 @@ function dias(desde: string, cuantos: number): string[] {
 const PASO_MIN = 13;
 
 describe("qué grano cabe", () => {
-  it("deja el día cuando el rango es el de por defecto (mes y medio)", () => {
-    // Es el rango con el que se entra a la pantalla: del día 1 del mes pasado a
-    // hoy. Si esto pasara a semanas, la pantalla mentiría de entrada.
+  it("deja el día en un rango corto (mes y medio)", () => {
+    // Cualquier rango de hasta ~1-2 meses (el que queda al pulsar un mes
+    // suelto, o al acotar el periodo a mano) tiene que verse día a día. Si
+    // esto pasara a semanas, la pantalla mentiría de entrada.
     expect(granoQueCabe(dias("2026-07-01", 52), 900, PASO_MIN)).toBe("dia");
   });
 

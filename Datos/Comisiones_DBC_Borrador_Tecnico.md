@@ -405,4 +405,157 @@ Silvana planteó que la captura del cliente quizás cortaba el 29, no el 30. Ver
 
 **La comisión sigue sin cuadrar, y ahora es un hueco más claro.** Con importe y peso ya alineados al mismo periodo, $3,641.20 contra $2,831.50 (confirmado por Silvana que el real es ~$2,8 mil) es una diferencia real de +28.6% que la fecha no explica — mismo patrón que 17.1/17.2 (calculado por encima del pago real en IA, allá +25.4% para la semana completa), ahora con un tercer punto de datos que apunta en la misma dirección.
 
+## 18. Sesión del 9 de septiembre de 2026 — recopilatorio de pendientes y preguntas
+
+Este proyecto lleva 18 sesiones de hallazgos repartidos entre este documento, los
+comentarios de cada SQL y la memoria de Claude. Esta sección junta todo lo que
+sigue genuinamente abierto hoy, con cifras vigentes (medidas hoy contra las
+tablas gold actuales, no arrastradas de sesiones viejas), y poda lo que las
+sesiones 16-17 ya habían resuelto pero seguía repetido en las secciones 9/10/15.
+
+### 18.0 Limpieza — qué de las secciones 9/10/15 ya no aplica
+
+- **Sección 15.2, punto 1** (Export de GS03): llegó el 24/08/2026. Pero ver
+  18.1.1 — el export que llegó agrupa por marca, no cubre cada material de esa
+  marca, así que la pregunta no está tan cerrada como parecía.
+- **Sección 15.2, punto 2** (tabla `ZSDFI_001`): resuelta 01/09/2026 —
+  `proan_ZTSD_OV_COM_{H,BO,IA,L,A}_20260829` es esa fuente oficial.
+- **Sección 15.2, punto 3** (agrupación comisionista↔oficina): resuelta
+  08/09/2026 vía `DBC_dim_comisionista` — cubre las 5 divisiones, sin el hueco
+  de 0% en Botana/Abarrote que tenía `DBC_dim_almacen_oficina`. Sigue siendo un
+  Excel del cliente, no una tabla nativa de SAP — ver 18.1.3.
+- **Comisión sobre lo cobrado** (borrador secciones 6-7, "pendiente"): sigue
+  siendo cierto que no se puede — `sap_bsad_cleared_items` no baja a material —
+  pero ya no es una laguna sin plan: `comision_cobrada` da el suelo conocido
+  (~87% de cobertura) y así se presenta en pantalla.
+
+### 18.1 Preguntas para el cliente, por impacto
+
+**18.1.1 — GS03 no cubre cada material, solo la marca (nuevo, 09/09/2026).**
+El export que llegó el 24/08 asigna SET por marca, pero varios materiales de
+esas mismas marcas nunca se dieron de alta en él. Caso confirmado hoy: de 11
+variantes de "Huevo San Juan" revisadas (tamaños 10 a 24), solo 2 tienen SET
+(`HSANJUAN`) — las otras 9 no están en `sap_setleaf_comisiones` en absoluto.
+Impacto medido ahora mismo en la tabla gold: **$2,278,454 en 119 líneas de
+Huevo** caen en "material sin SET" (`DBC_gold_comision_diaria_v2`,
+`comision_estado`). Pregunta: ¿puede el cliente completar el export de GS03
+material por material, no solo por marca?
+
+**18.1.2 — El mismo material que le falta SET, casi siempre también le falta
+el peso real en SAP (nuevo, 09/09/2026).** Para Huevo/Alimento la comisión se
+calcula sobre `net_weight` (peso, no cajas). Medido hoy sobre mayo 2026: en
+líneas **sin SET**, el 75.7% trae `net_weight` idéntico a la cantidad en cajas
+(o sea, sin peso real — cae al conteo de piezas). En líneas **con SET**, ese
+mismo síntoma solo aparece en 7.5%. Están correlacionados pero no son el mismo
+hueco: hay un problema de captura de peso en el maestro de materiales del
+cliente más amplio que el de SET. Pregunta: ¿el maestro de materiales tiene un
+factor de conversión pieza→kg confiable que se pueda exportar, en vez de
+depender de que cada línea de factura traiga el peso ya calculado?
+
+**18.1.3 — Comisionista↔oficina sigue siendo un Excel del cliente, no una
+tabla de SAP.** `DBC_dim_comisionista` (resuelto 08/09) cerró el hueco de
+cobertura, pero la fuente sigue siendo un archivo que Silvana carga a mano
+(`scripts/tablas_cliente.py`), no algo que el cliente mantenga en su sistema.
+Pregunta: ¿existe una transacción o tabla en SAP que sea la fuente real de esta
+relación, para dejar de depender de que alguien actualice un Excel cada vez
+que cambia un comisionista?
+
+**18.1.4 — Oficina 0227 (Celaya, "Genaro", Botana), sin respuesta desde
+agosto.** De las 5 oficinas de venta directa/bodega que preguntamos, el
+cliente confirmó 4 (`0001/0174/0175/0181`, ya excluidas del cálculo) y dijo que
+la quinta "está pendiente de posibles actualizaciones" — nunca volvió a
+contestar. Hoy esa oficina SIGUE calculando comisión normal, sin excluir ni
+marcar. Pregunta: ¿0227 se comporta como las otras 4 (venta directa, sin
+comisión) o es una oficina real?
+
+**18.1.5 — Rango de número de proveedor que identifica comisionistas en SAP.**
+Pregunta original del proyecto (sección 10, nunca contestada). Hoy es menos
+urgente que en agosto —`DBC_dim_comisionista` resuelve la asignación por otra
+vía—, pero sigue sin respuesta y la necesitaría cualquier intento futuro de
+bajar el pago agregado de BSAK a factura (sección 16.3, sigue sin fuente).
+
+**18.1.6 — Frecuencia de liquidación formal (semanal/mensual).** Nunca
+confirmada por escrito; se infiere de los textos de BSAK ("COMISION CROQUETA
+25-30 ABRIL") que es semanal, sábado a viernes, con el corte de fin de mes que
+aplica hoy `v1_dim_periodo_pago.sql` — pero sigue siendo un supuesto de
+Silvana, no una regla que el cliente haya dado (ver 18.2.1).
+
+### 18.2 Supuestos internos aplicados, pendientes de confirmar con el cliente
+
+**18.2.1 — Corte de periodo en fin de mes.** `v1_dim_periodo_pago.sql` corta la
+semana sábado-viernes al llegar a fin de mes (el mes que termina se queda con
+lo suyo hasta su último día; los días sueltos se pegan al periodo siguiente).
+Reproduce exacto el caso de prueba (Florentino, abril 2026), pero es un
+supuesto de Silvana, sin confirmar. [[conciliacion_periodo_pago_fin_de_mes]]
+
+**18.2.2 — Fecha de venta vs. fecha de cobro para emparejar pago con cálculo.**
+`v1_conciliacion_pago_semanal.sql` usa fecha de venta. Medido con Florentino/IA
+(7 pagos, semanas maduras): por semana de cobro 11.4% de diferencia mediana,
+por semana de venta 10.7% — prácticamente indistinguibles, así que la elección
+no explica el hueco que queda. Pendiente de que el cliente diga cuál usan de
+verdad.
+
+### 18.3 Hallazgos con hueco cuantificado, sin explicación todavía
+
+**18.3.1 — El pago real en BSAK no cuadra con lo calculado, ni siquiera
+después de arreglar fecha y ventana.** Caso Florentino (las 4 divisiones que
+factura, oficina 0011, semana del 25-30 abril): diferencias de **-10.9% (H),
+-11.9% (BO), +25.4% (IA), +17.2% (L)** — dos arriba, dos abajo, no es un
+multiplicador desfasado. Sección 17 lo dejó así: "probablemente hay mínimos,
+bonos o ajustes en el proceso real de nómina de comisión que no están en las
+facturas" — sin confirmar.
+
+**18.3.2 — La comparación agregada (26 comisionistas, ene-jun 2026) apunta a
+un sesgo de -14.2%, casi todo en Huevo (-31.9%), con una hipótesis SIN
+VERIFICAR.** `v1_conciliacion_pago_comisionista_vs_cobro.sql` (medido
+07/09/2026) plantea que el sesgo de Huevo podría deberse a que parte de esa
+comisión se paga por la sociedad PAN, no vista en esa consulta. **Ojo:** esa
+consulta se escribió el 07/09, un día ANTES de integrar PAN a
+`dbc_comisiones_calculadas_cobro` (08/09), y no filtra su propio lado
+(`nuestro_cobro`) por `bukrs` — así que hoy mezclaría comisión de DBC y PAN al
+comparar contra un pago que sigue siendo solo de DBC. Hay que corregir ese
+filtro y volver a correrla antes de dar el -31.9% por bueno o por descartado.
+
+**18.3.3 — 3 comisionistas (~$5.1M calculados) sin ningún pago encontrado en
+BSAK, en ninguna división ni sociedad.** Ver `conciliacion_engine.py`
+(`calculo_sin_pago`). Medido antes del cambio de fuente de comisionista
+(08/09) — vale la pena reconfirmar con el join actual antes de preguntarle al
+cliente, por si el cambio de `DBC_dim_almacen_oficina` a `DBC_dim_comisionista`
+ya movió el número. [[comisionistas_sin_pago_bsak]]
+
+**18.3.4 — `proan_BSAK_20260708` (el pago real) está congelada en julio.**
+Cualquier conciliación de agosto en adelante sale "sin pago" por diseño, no
+por error — hace falta un export más reciente para poder conciliar el periodo
+actual. [[bsak_snapshot_congelado]]
+
+**18.3.5 — Oficina H717/0122 (Celaya) es el único caso real de las 36
+ambigüedades de `dm_cedis`.** La regla provisional de desempate (primer sector
+alfabético) da el resultado correcto en 35 de 36 combinaciones — en esta,
+cambia entre "Celaya Agustín" (`EXTRAS`) y "Celaya Genaro" (`VTA EN RUTA`), y
+coincide justo con los dos comisionistas de Celaya. Bajo impacto, pero es el
+único de los 36 casos con una respuesta potencialmente equivocada hoy.
+
+### 18.4 Cuánto queda bloqueado hoy, por división y motivo (medido 09/09/2026)
+
+Sobre `DBC_gold_comision_diaria_v2`, todo el histórico (no un periodo):
+
+| División | Motivo | Líneas | Monto facturado |
+|---|---|---:|---:|
+| Botana | sin tarifa para esa llave | 1,029 | $16,424,230 |
+| Botana | sin CEDIS/tipo de venta | 1,349 | $10,595,983 |
+| Huevo | sin CEDIS/tipo de venta | 185 | $5,472,677 |
+| Huevo | material sin SET | 119 | $2,278,454 |
+| Alimento | sin CEDIS/tipo de venta | 211 | $1,795,789 |
+| Leche | sin CEDIS/tipo de venta | 174 | $1,450,066 |
+| Leche | sin tarifa para esa llave | 635 | $703,905 |
+| Alimento | sin tarifa para esa llave | 110 | $115,849 |
+| Abarrotes | sin tarifa para esa llave | 67 | $21,475 |
+| Alimento | material sin SET | 4 | $10,151 |
+
+**Botana concentra cerca del 70% de lo bloqueado ($27,0M de $38,9M total)** —
+es donde más rinde empujar primero, no Huevo (aunque Huevo es el caso que
+trajo esta sesión). "Sin CEDIS/tipo de venta" en Botana ($10,6M) todavía no
+se investigó con el mismo detalle que se le dio hoy a Huevo — mismo patrón de
+pregunta que 18.1.1/18.1.2, pendiente de repetir el ejercicio ahí.
+
 **Cierre de este hilo:** el desfase de fecha queda resuelto (era el 25-29 vs 25-30, no un problema de datos). El desfase de comisión no — sin el archivo original de la captura (solo imagen, resolución insuficiente para leer tarifa por línea) y con el detalle de BSIK agotado desde 16.3, la conciliación factura-por-factura del pago a comisionista sigue como límite de datos conocido, no como bug identificado en nuestras consultas.

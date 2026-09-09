@@ -17,6 +17,7 @@ def _fila(
     division="H",
     cedis="Leon 1",
     oficina="0016",
+    almacen="H702",
     fecha=date(2026, 7, 1),
     conjunto="HPORTALES",
     tipo="VTA EN RUTA",
@@ -26,6 +27,7 @@ def _fila(
     cantidad=100.0,
     comision=40.0,
     cobrada=0.0,
+    monto_cobrado=0.0,
     cmin=None,
     cmax=None,
     sin_importe=0,
@@ -37,6 +39,7 @@ def _fila(
         "division": {"H": "Huevo", "BO": "Botana", "L": "Leche"}.get(division, division),
         "cedis": cedis,
         "oficina": oficina,
+        "almacen": almacen,
         "comisionista": comisionista,
         "tipo_venta": tipo,
         "set": conjunto,
@@ -49,7 +52,7 @@ def _fila(
         "comision_min_total": cmin,
         "comision_max_total": cmax,
         "comision_cobrada": cobrada,
-        "monto_cobrado": 0.0,
+        "monto_cobrado": monto_cobrado,
         "lineas_sin_importe": sin_importe,
     }
 
@@ -217,10 +220,33 @@ def test_bloqueado_desglose_agrupa_por_motivo_y_llave_de_tarifa(cliente):
     assert mayor["division_code"] == "H"
     assert mayor["division"] == "Huevo"
     assert mayor["oficina"] == "0028"
+    assert mayor["almacen"] == "H702"
     assert mayor["set"] == "HPORTALES"
     assert mayor["tipo_venta"] == "VTA EN RUTA"
     assert mayor["monto"] == 500.0
     assert mayor["num_lineas"] == 2
+
+
+def test_bloqueado_desglose_agrupa_sin_cedis_por_almacen(cliente):
+    # "sin CEDIS/tipo de venta" se resuelve por almacén+oficina, no por
+    # SET+tipo de venta (que ahí justo falta) -- el almacén tiene que
+    # distinguir dos llaves aunque el resto coincida.
+    cliente(
+        [
+            _fila(estado="sin CEDIS/tipo de venta", division="BO", oficina="0188",
+                  almacen="BO43", tipo=None, monto=9_520_000.0, comision=None),
+            _fila(estado="sin CEDIS/tipo de venta", division="L", oficina="0153",
+                  almacen="H735", tipo=None, monto=90_000.0, comision=None),
+        ]
+    )
+
+    desglose = _informe()["bloqueado_desglose"]
+
+    assert len(desglose) == 2
+    assert desglose[0]["almacen"] == "BO43"
+    assert desglose[0]["oficina"] == "0188"
+    assert desglose[0]["tipo_venta"] is None
+    assert desglose[1]["almacen"] == "H735"
 
 
 def test_bloqueado_desglose_no_incluye_lo_ya_calculado(cliente):
@@ -310,6 +336,25 @@ def test_lo_que_tiene_cobro_registrado_va_aparte_y_no_se_llama_pagable(cliente):
     assert totales["comision"] == 40.0
     assert totales["comision_con_cobro"] == 12.0
     assert "comision_pagable" not in totales
+
+
+def test_monto_cobrado_se_suma_igual_que_su_comision(cliente):
+    # Lado facturado de `comision_con_cobro` (2026-09-09): ya se traía de SQL
+    # pero nunca se sumaba en el acumulador -- se propaga solo a todos los
+    # agrupados (por_comisionista, desglose, etc.) porque todos pasan por el
+    # mismo `_nuevo()`/`_acumular()`.
+    cliente(
+        [
+            _fila(comisionista="ANA", monto=1000.0, monto_cobrado=300.0),
+            _fila(comisionista="ANA", monto=500.0, monto_cobrado=200.0),
+        ]
+    )
+
+    totales = _informe()["totales"]
+    ana = next(f for f in _informe()["por_comisionista"] if f["comisionista"] == "ANA")
+
+    assert totales["monto_cobrado"] == 500.0
+    assert ana["monto_cobrado"] == 500.0
 
 
 def test_cuenta_las_lineas_sin_importe(cliente):

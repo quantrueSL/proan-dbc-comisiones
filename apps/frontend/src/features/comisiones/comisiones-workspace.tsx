@@ -85,6 +85,12 @@ const COLOR_COMISION = "#3d3d7c";
 /** Barras de CEDIS que se dibujan antes de mandar la cola a la tabla. */
 const TOPE_CEDIS = 8;
 
+// Los dos motivos de "bloqueado" con detalle disponible en `bloqueado_desglose`
+// (ver comisiones_engine.py). Cada uno se lee por una llave distinta -- por
+// eso el modal que los muestra tiene columnas distintas, no las mismas dos.
+const MOTIVO_SIN_TARIFA = "sin tarifa para esa llave";
+const MOTIVO_SIN_CEDIS = "sin CEDIS/tipo de venta";
+
 /** "2026-01-02" -> "2 de enero de 2026", sin que el huso horario reste un día.
  *  `new Date("2026-01-02")` se interpreta como UTC y al formatearlo en México
  *  sale el 1 de enero. Construyéndola por partes se queda en local. */
@@ -218,14 +224,40 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   // La horquilla solo existe donde las dos hojas del cliente se contradicen.
   const horquilla = bloqueado.reduce((suma, b) => suma + (b.comision_max - b.comision_min), 0);
   const bloqueadoDesglose = report?.bloqueado_desglose ?? [];
-  const detalleDelMotivo = useMemo(
-    () => bloqueadoDesglose.filter((d) => d.motivo === motivoDetalle),
-    [bloqueadoDesglose, motivoDetalle]
+  // "sin tarifa para esa llave": la llave es sociedad+división+oficina+SET+
+  // tipo de venta, tal cual la manda el backend -- una fila por combinación.
+  const detalleSinTarifa = useMemo(
+    () => bloqueadoDesglose.filter((d) => d.motivo === MOTIVO_SIN_TARIFA),
+    [bloqueadoDesglose]
   );
-  // Por ahora solo esta fila abre detalle -- es la que se pidió. El dato de
-  // los otros dos motivos ya viaja en `bloqueado_desglose` si algún día hace
-  // falta conectarlos también, sin tocar el backend.
-  const MOTIVO_CON_DETALLE = "sin tarifa para esa llave";
+  // "sin CEDIS/tipo de venta": la llave es almacén+oficina, no SET+tipo de
+  // venta (que ahí es justo lo que falta). El backend manda el mismo grano de
+  // siempre (con sociedad/SET incluidos), así que se reagrupa aquí -- sin
+  // eso, la misma combinación almacén+oficina aparecería repetida por cada
+  // SET/sociedad que le tocó, igual que la tabla que ya se armó a mano.
+  const detalleSinCedis = useMemo(() => {
+    const acumulado = new Map<
+      string,
+      { division: string | null; division_code: string | null; oficina: string | null; almacen: string | null; num_lineas: number; monto: number }
+    >();
+    for (const d of bloqueadoDesglose) {
+      if (d.motivo !== MOTIVO_SIN_CEDIS) continue;
+      const clave = `${d.division_code}|${d.oficina}|${d.almacen}`;
+      const actual = acumulado.get(clave) ?? {
+        division: d.division,
+        division_code: d.division_code,
+        oficina: d.oficina,
+        almacen: d.almacen,
+        num_lineas: 0,
+        monto: 0
+      };
+      actual.num_lineas += d.num_lineas;
+      actual.monto += d.monto;
+      acumulado.set(clave, actual);
+    }
+    return Array.from(acumulado.values()).sort((a, b) => b.monto - a.monto);
+  }, [bloqueadoDesglose]);
+  const detalleDelMotivo = motivoDetalle === MOTIVO_SIN_CEDIS ? detalleSinCedis : detalleSinTarifa;
 
   // Comisionistas a los que hay algo que pagarles. Ni el total de la tabla (que
   // incluye a quien devengó cero) ni el del catálogo del cliente (57 nombres,
@@ -260,7 +292,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
       },
       {
         clave: "devengada",
-        etiqueta: "Comisión devengada",
+        etiqueta: "Comisión sobre facturación",
         valor: comision,
         ancho: 100,
         color: COLOR_COMISION,
@@ -272,7 +304,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
       },
       {
         clave: "con-cobro",
-        etiqueta: "Con cobro registrado",
+        etiqueta: "Comisión sobre cobro",
         valor: comision_con_cobro,
         ancho: comision ? (comision_con_cobro / comision) * 100 : 0,
         color: COLOR_COMISION,
@@ -729,7 +761,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
                 </thead>
                 <tbody>
                   {bloqueado.map((b) => {
-                    const clicable = b.motivo === MOTIVO_CON_DETALLE;
+                    const clicable = b.motivo === MOTIVO_SIN_TARIFA || b.motivo === MOTIVO_SIN_CEDIS;
                     return (
                       <tr
                         className={clicable ? "comisiones-bloqueado-clicable" : undefined}
@@ -746,7 +778,13 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
                             : undefined
                         }
                         tabIndex={clicable ? 0 : undefined}
-                        title={clicable ? "Ver el detalle por división, oficina, SET y tipo de venta" : undefined}
+                        title={
+                          clicable
+                            ? b.motivo === MOTIVO_SIN_TARIFA
+                              ? "Ver el detalle por división, oficina, SET y tipo de venta"
+                              : "Ver el detalle por división, oficina y almacén"
+                            : undefined
+                        }
                       >
                         <td>
                           {b.motivo}
@@ -780,30 +818,57 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
             titulo={motivoDetalle}
           >
             <table>
-              <thead>
-                <tr>
-                  <th>Sociedad</th>
-                  <th>División</th>
-                  <th>Oficina</th>
-                  <th>SET</th>
-                  <th>Tipo de venta</th>
-                  <th className="n">Líneas</th>
-                  <th className="n">Facturado</th>
-                </tr>
-              </thead>
-              <tbody>
-                {detalleDelMotivo.map((d, indice) => (
-                  <tr key={indice}>
-                    <td>{d.sociedad ?? "—"}</td>
-                    <td>{d.division ?? d.division_code ?? "—"}</td>
-                    <td>{d.oficina ?? "—"}</td>
-                    <td>{d.set ?? "—"}</td>
-                    <td>{d.tipo_venta ?? "—"}</td>
-                    <td className="n">{numero.format(d.num_lineas)}</td>
-                    <td className="n">{pesos(d.monto)}</td>
-                  </tr>
-                ))}
-              </tbody>
+              {motivoDetalle === MOTIVO_SIN_CEDIS ? (
+                <>
+                  <thead>
+                    <tr>
+                      <th>División</th>
+                      <th>Oficina</th>
+                      <th>Almacén</th>
+                      <th className="n">Líneas</th>
+                      <th className="n">Facturado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleSinCedis.map((d, indice) => (
+                      <tr key={indice}>
+                        <td>{d.division ?? d.division_code ?? "—"}</td>
+                        <td>{d.oficina ?? "—"}</td>
+                        <td>{d.almacen ?? "—"}</td>
+                        <td className="n">{numero.format(d.num_lineas)}</td>
+                        <td className="n">{pesos(d.monto)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              ) : (
+                <>
+                  <thead>
+                    <tr>
+                      <th>Sociedad</th>
+                      <th>División</th>
+                      <th>Oficina</th>
+                      <th>SET</th>
+                      <th>Tipo de venta</th>
+                      <th className="n">Líneas</th>
+                      <th className="n">Facturado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalleSinTarifa.map((d, indice) => (
+                      <tr key={indice}>
+                        <td>{d.sociedad ?? "—"}</td>
+                        <td>{d.division ?? d.division_code ?? "—"}</td>
+                        <td>{d.oficina ?? "—"}</td>
+                        <td>{d.set ?? "—"}</td>
+                        <td>{d.tipo_venta ?? "—"}</td>
+                        <td className="n">{numero.format(d.num_lineas)}</td>
+                        <td className="n">{pesos(d.monto)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              )}
             </table>
           </Modal>
         ) : null}

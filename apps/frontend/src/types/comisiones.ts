@@ -144,6 +144,9 @@ export type ComisionTotales = {
   /** Del importe del grupo, cuánto llegó a tener tarifa. Sin esto, poca venta y
    *  media venta bloqueada se ven igual. */
   monto_calculable: number;
+  /** Lado facturado de `comision_con_cobro` -- mismo límite (suelo conocido,
+   *  no lo pagable). */
+  monto_cobrado: number;
 };
 
 export type ComisionPorComisionista = ComisionTotales & { comisionista: string | null };
@@ -199,8 +202,11 @@ export type ComisionBloqueo = {
 /**
  * El detalle detrás de un motivo de `ComisionBloqueo`: la misma llave de
  * tarifa que `ComisionDesgloseRow` (sociedad + división + oficina + SET +
- * tipo de venta), pero solo de las líneas que NO calcularon. La pantalla la
- * filtra por `motivo` al abrir esa fila de "lo que todavía no entra".
+ * tipo de venta) MÁS `almacen`, pero solo de las líneas que NO calcularon.
+ * La pantalla la filtra por `motivo` al abrir esa fila de "lo que todavía no
+ * entra" -- "sin tarifa para esa llave" usa sociedad/SET/tipo de venta,
+ * "sin CEDIS/tipo de venta" usa `almacen` (esa llave es almacén+oficina, no
+ * SET+tipo de venta, que ahí es justo lo que falta).
  */
 export type ComisionBloqueoDesgloseRow = {
   motivo: string;
@@ -208,6 +214,7 @@ export type ComisionBloqueoDesgloseRow = {
   division_code: string | null;
   division: string | null;
   oficina: string | null;
+  almacen: string | null;
   set: string | null;
   tipo_venta: string | null;
   num_lineas: number;
@@ -240,6 +247,7 @@ export const EMPTY_REPORT: ReportResponse = {
     comision: 0,
     comision_con_cobro: 0,
     monto_calculable: 0,
+    monto_cobrado: 0,
     pct_calculable: 0,
     lineas_sin_importe: 0
   },
@@ -266,6 +274,10 @@ export const EMPTY_REPORT: ReportResponse = {
 // que comparar el total contra lo que le pagaron, no reconstruir la hoja.
 
 export type ConciliacionFilters = {
+  /** `DBC` o `PAN`. Solo se usa al pedir el detalle de UN comisionista (diario
+   *  y factura, para exportar): la misma persona puede tener datos en las dos
+   *  sociedades, y sin este filtro se mezclan en una sola hoja. */
+  sociedad?: string | null;
   division: string | null;
   comisionista: string | null;
   /** ISO `YYYY-MM-DD`. La tabla de origen agrupa por PERIODO DE PAGO, no
@@ -279,6 +291,9 @@ export type ConciliacionFilters = {
 /** Nivel 1 de la pantalla: a quién hay que pagarle. Una fila por
  *  (comisionista, división) — la misma persona cobra cada división aparte. */
 export type ConciliacionPorComisionista = {
+  /** `DBC` o `PAN`. La misma persona puede tener oficinas y pago distintos en
+   *  cada una (ver `DBC_dim_comisionista`) -- cada sociedad es su propia fila. */
+  sociedad: string | null;
   comisionista: string | null;
   division_code: string | null;
   division: string | null;
@@ -288,12 +303,27 @@ export type ConciliacionPorComisionista = {
   /** Cantidad entregada con importe cero — no es un error, ver comisiones. */
   lineas_sin_comision: number;
   num_semanas: number;
+  /** Lo que de verdad se le pagó (BSAK, identificado por texto) y lo
+   *  calculado para esos MISMOS periodos de pago -- `null` cuando esa fuente
+   *  no tiene nada que decir de esta fila (no es lo mismo que cero). */
+  pago_real: number | null;
+  comision_calculada: number | null;
+  diferencia: number | null;
+  diff_pct: number | null;
+  /** Se le pagó algo que no calculamos para ningún periodo -- puede ser un
+   *  ajuste real o un problema de cruce, no necesariamente un error. */
+  pago_sin_calculo: boolean;
+  /** Calculamos comisión pero su LIFNR nunca aparece pagando en BSAK. */
+  calculo_sin_pago: boolean;
 };
 
 /** Nivel 2: una fila por producto — el mismo grano que ella escribe a mano.
  *  `matnr` es de SAP; `descripcion` sale de MAKT (SPRAS='S'), no siempre
  *  necesaria para leer la fila pero sí para justificarla ante Hacienda. */
 export type ConciliacionDetalleRow = {
+  /** `DBC` o `PAN` -- la misma persona puede tener oficinas y datos distintos
+   *  en cada una (ver `ConciliacionPorComisionista.sociedad`). */
+  sociedad: string | null;
   /** Inicio del periodo de pago (normalmente el sábado, 7 días — pero puede
    *  arrancar el día 1 de un mes y durar más si absorbió los días sueltos del
    *  cierre anterior, ver ConciliacionFilters). */
@@ -324,6 +354,18 @@ export type ConciliacionDetalleRow = {
   lineas_sin_comision: number;
 };
 
+/** Pago real (BSAK) por periodo, SIN colapsar en un solo total como
+ *  `ConciliacionPorComisionista.pago_real` -- el nivel 2 lo usa para mostrar
+ *  Pagado al lado de Calculado en cada periodo, no solo el total del rango. */
+export type ConciliacionPagoPeriodoRow = {
+  sociedad: string | null;
+  comisionista: string | null;
+  division_code: string | null;
+  periodo: string;
+  periodo_fin: string;
+  pago_real: number;
+};
+
 export type ConciliacionResponse = {
   cobertura: { desde?: string; hasta?: string };
   por_comisionista: ConciliacionPorComisionista[];
@@ -331,6 +373,7 @@ export type ConciliacionResponse = {
    *  unas semanas son decenas de filas, así que la pantalla arma la cascada
    *  CEDIS → oficina → tipo de venta agrupando esto en memoria. */
   detalle: ConciliacionDetalleRow[];
+  pago_semanal: ConciliacionPagoPeriodoRow[];
 };
 
 /** Mismo grano que `ConciliacionDetalleRow` pero por día (`fecha`) en vez de
@@ -348,6 +391,8 @@ export type ConciliacionDiarioRow = Omit<ConciliacionDetalleRow, "semana"> & { f
  *  propósito a "en pausa perseguir cobro" (2026-09-02) -- cuando se pueda
  *  calcular comisión sobre lo cobrado, sale de esta fuente. */
 export type ConciliacionFacturaRow = {
+  /** `DBC` o `PAN` -- ver `ConciliacionDetalleRow.sociedad`. */
+  sociedad: string | null;
   billing_document: string;
   item_number: string;
   fecha: string;
@@ -377,5 +422,6 @@ export type ConciliacionFacturaRow = {
 export const EMPTY_CONCILIACION: ConciliacionResponse = {
   cobertura: {},
   por_comisionista: [],
-  detalle: []
+  detalle: [],
+  pago_semanal: []
 };

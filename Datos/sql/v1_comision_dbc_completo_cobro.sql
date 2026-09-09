@@ -24,6 +24,19 @@
 -- tarifa real -- confirmado en las 16 llaves bloqueadas de HSANJUAN/HPORTALES:
 -- 100% con _MAY vacía y _MMAY con valor. $61,1 M que antes caían en "sin
 -- tarifa para esa llave" ahora sí calculan.
+--
+-- 2026-09-08: REDISEÑO -- el tipo de venta (y con él la tarifa) ya no sale de
+-- `dim_cedis_v1`/`dim_cedis_oficina_v1`, sale de la propia tabla de tarifa
+-- (CTE `resuelto`, más abajo). Esto reemplaza y generaliza el fix anterior de
+-- MED MAYOREO/MAYOREO -- ahora aplica a las 5 categorías de huevo y también a
+-- botana/alimento, con el mismo principio: si dm_cedis apunta a una columna
+-- con valor, se respeta; si no, se toma la única columna de esa tarifa que sí
+-- tiene valor. Medido corriendo la query completa antes/después del cambio:
+-- $110,4 M que antes caían en "sin tarifa para esa llave" ahora calculan --
+-- $106,6 M en huevo (donde SIN_TARIFA queda en $0 -- el hueco que queda,
+-- $5,5 M, es genuino: ninguna de las 5 columnas tiene valor, no un problema
+-- de tipo de venta), $3,3 M en botana, $0,5 M en alimento. Leche y Abarrotes
+-- no cambian (su tarifa no distingue tipo de venta/canal, nada que resolver).
 -- =============================================================================
 CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` AS
 
@@ -37,6 +50,16 @@ sets AS (
   GROUP BY matnr_clean
 ),
 
+-- 2026-09-08: BUG CORREGIDO -- `dim_cedis_almacen_v1` no tiene columna
+-- `tipo_venta` (solo resuelve nombre de CEDIS, que esta CTE ni siquiera
+-- expone), pero su éxito bloqueaba el tercer intento (`dim_cedis_oficina_v1`)
+-- igual que si hubiera resuelto tipo_venta. Confirmado con datos: 6 de las 23
+-- combinaciones bloqueadas por "sin CEDIS/tipo de venta" tenían el tipo de
+-- venta esperando en `dim_cedis_oficina_v1`, nunca consultado porque
+-- `dim_cedis_almacen_v1` encontraba un CEDIS por otro lado. Se quita ese join
+-- (no aporta nada a esta CTE) y el tercer intento ahora depende de si
+-- `tipo_venta` sigue sin resolver, no de si el segundo intento encontró algo
+-- que aquí ni se usa. ~$0,26 M que antes caían en "sin CEDIS/tipo de venta".
 cedis AS (
   SELECT
     f.storage_location AS almacen,
@@ -55,10 +78,8 @@ cedis AS (
         WHERE company_code IN ('DBC','PAN')) f
   LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc
          ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
-         ON dc.cedis IS NULL AND dal.almacen = f.storage_location
   LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
-         ON dc.cedis IS NULL AND dal.cedis IS NULL AND dco.oficina = f.sales_office
+         ON dc.tipo_venta IS NULL AND dco.oficina = f.sales_office
 ),
 
 tarifas_h AS (
@@ -273,78 +294,230 @@ base AS (
    AND f.matnr_clean = ta.matnr_clean
 ),
 
-con_tarifa AS (
+-- 2026-09-08: TIPO DE VENTA (y por lo tanto la tarifa) SE TOMA DE LA PROPIA
+-- TABLA DE TARIFA, no de `dim_cedis_v1`/`dim_cedis_oficina_v1`. Motivo: esa
+-- dimensión es una fuente aparte que puede quedar desactualizada frente a la
+-- tarifa oficial de SAP -- ya probado en huevo con un caso real (H719/0028:
+-- para DBC decía "VTA EN RUTA" y sí correspondía, pero para PAN el mismo
+-- almacén+oficina es "MED MAYOREO" -- dim_cedis no distingue sociedad y solo
+-- acertaba para una de las dos). Encontrado también H701/0121 y H707/0106,
+-- errados para ambas sociedades -- y muchos más una vez medido a fondo: en
+-- total $110,4 M que caían en "sin tarifa para esa llave" tenían tarifa real
+-- esperando bajo el tipo de venta correcto ($5,5 M de hueco genuino en huevo
+-- se quedan sin tarifa igual -- ver comentario del encabezado del archivo).
+--
+-- Aplicado a las 3 divisiones donde la tarifa distingue tipo de venta/canal
+-- por columnas (H, BO, IA) -- Leche y Abarrotes no tienen esa distinción en
+-- su tabla de tarifa, así que ahí no hay nada que resolver y siguen igual.
+-- Regla por SET: si dim_cedis apunta a una columna que SÍ tiene tarifa, se
+-- respeta (cubre los sitios con más de una columna con valor -- 2 de 360
+-- llaves en H, 0 en BO/IA -- donde la tarifa sola no alcanza para decidir).
+-- Si dim_cedis no confirma nada (vacío o apunta a una columna vacía), se toma
+-- la tarifa directo de la única columna con valor. En huevo, para H únicamente
+-- se sobreescribe también el tipo de venta mostrado (es la fuente real de la
+-- tarifa); en botana/alimento el tipo de venta mostrado sigue viniendo de
+-- dim_cedis sin cambio (informativo, la tarifa ya no depende de él).
+resuelto AS (
   SELECT
     *,
     CASE
-      -- 2026-09-08: MED MAYOREO y MAYOREO son tarifas DISTINTAS en SAP (columnas
-      -- separadas _MMAY / _MAY, "1/2 mayoreo" y "mayoreo" en el Excel del
-      -- cliente) -- antes las dos apuntaban a _MAYOREO (_MAY) y MED MAYOREO
-      -- salía "sin tarifa" cada vez que _MAY estaba vacía aunque _MMAY tuviera
-      -- una tarifa real (confirmado en las 16 llaves bloqueadas de HSANJUAN/
-      -- HPORTALES: 100% con _MAY vacía y _MMAY con valor). $61,1 M en alcance.
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN RUTA'  THEN HSANJUAN_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'VTA EN PISO'  THEN HSANJUAN_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'MAYOREO'      THEN HSANJUAN_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'MED MAYOREO' THEN HSANJUAN_MMAY
-      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   AND tipo_venta = 'ABASTOS'     THEN HSANJUAN_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN RUTA'  THEN HPORTALES_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'VTA EN PISO'  THEN HPORTALES_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'MAYOREO'      THEN HPORTALES_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'MED MAYOREO' THEN HPORTALES_MMAY
-      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  AND tipo_venta = 'ABASTOS'     THEN HPORTALES_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN RUTA'  THEN HINDUSTRIA_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'VTA EN PISO'  THEN HINDUSTRIA_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'MAYOREO'      THEN HINDUSTRIA_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'MED MAYOREO' THEN HINDUSTRIA_MMAY
-      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' AND tipo_venta = 'ABASTOS'     THEN HINDUSTRIA_ABASTOS
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN RUTA'  THEN HRANCHERO_RUTA
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'VTA EN PISO'  THEN HRANCHERO_MENUDEO
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'MAYOREO'      THEN HRANCHERO_MAYOREO
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'MED MAYOREO' THEN HRANCHERO_MMAY
-      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  AND tipo_venta = 'ABASTOS'     THEN HRANCHERO_ABASTOS
+      WHEN tipo_venta = 'VTA EN RUTA' AND HSANJUAN_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA'  AS tipo_venta, HSANJUAN_RUTA    AS tarifa)
+      WHEN tipo_venta = 'VTA EN PISO' AND HSANJUAN_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO'  AS tipo_venta, HSANJUAN_MENUDEO AS tarifa)
+      WHEN tipo_venta = 'MAYOREO'     AND HSANJUAN_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'      AS tipo_venta, HSANJUAN_MAYOREO AS tarifa)
+      WHEN tipo_venta = 'MED MAYOREO' AND HSANJUAN_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO'  AS tipo_venta, HSANJUAN_MMAY    AS tarifa)
+      WHEN tipo_venta = 'ABASTOS'     AND HSANJUAN_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'      AS tipo_venta, HSANJUAN_ABASTOS AS tarifa)
+      WHEN HSANJUAN_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA' AS tipo_venta, HSANJUAN_RUTA    AS tarifa)
+      WHEN HSANJUAN_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO' AS tipo_venta, HSANJUAN_MENUDEO AS tarifa)
+      WHEN HSANJUAN_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'     AS tipo_venta, HSANJUAN_MAYOREO AS tarifa)
+      WHEN HSANJUAN_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO' AS tipo_venta, HSANJUAN_MMAY    AS tarifa)
+      WHEN HSANJUAN_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'     AS tipo_venta, HSANJUAN_ABASTOS AS tarifa)
+    END AS HSANJUAN_r,
+    CASE
+      WHEN tipo_venta = 'VTA EN RUTA' AND HPORTALES_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA'  AS tipo_venta, HPORTALES_RUTA    AS tarifa)
+      WHEN tipo_venta = 'VTA EN PISO' AND HPORTALES_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO'  AS tipo_venta, HPORTALES_MENUDEO AS tarifa)
+      WHEN tipo_venta = 'MAYOREO'     AND HPORTALES_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'      AS tipo_venta, HPORTALES_MAYOREO AS tarifa)
+      WHEN tipo_venta = 'MED MAYOREO' AND HPORTALES_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO'  AS tipo_venta, HPORTALES_MMAY    AS tarifa)
+      WHEN tipo_venta = 'ABASTOS'     AND HPORTALES_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'      AS tipo_venta, HPORTALES_ABASTOS AS tarifa)
+      WHEN HPORTALES_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA' AS tipo_venta, HPORTALES_RUTA    AS tarifa)
+      WHEN HPORTALES_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO' AS tipo_venta, HPORTALES_MENUDEO AS tarifa)
+      WHEN HPORTALES_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'     AS tipo_venta, HPORTALES_MAYOREO AS tarifa)
+      WHEN HPORTALES_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO' AS tipo_venta, HPORTALES_MMAY    AS tarifa)
+      WHEN HPORTALES_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'     AS tipo_venta, HPORTALES_ABASTOS AS tarifa)
+    END AS HPORTALES_r,
+    CASE
+      WHEN tipo_venta = 'VTA EN RUTA' AND HINDUSTRIA_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA'  AS tipo_venta, HINDUSTRIA_RUTA    AS tarifa)
+      WHEN tipo_venta = 'VTA EN PISO' AND HINDUSTRIA_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO'  AS tipo_venta, HINDUSTRIA_MENUDEO AS tarifa)
+      WHEN tipo_venta = 'MAYOREO'     AND HINDUSTRIA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'      AS tipo_venta, HINDUSTRIA_MAYOREO AS tarifa)
+      WHEN tipo_venta = 'MED MAYOREO' AND HINDUSTRIA_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO'  AS tipo_venta, HINDUSTRIA_MMAY    AS tarifa)
+      WHEN tipo_venta = 'ABASTOS'     AND HINDUSTRIA_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'      AS tipo_venta, HINDUSTRIA_ABASTOS AS tarifa)
+      WHEN HINDUSTRIA_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA' AS tipo_venta, HINDUSTRIA_RUTA    AS tarifa)
+      WHEN HINDUSTRIA_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO' AS tipo_venta, HINDUSTRIA_MENUDEO AS tarifa)
+      WHEN HINDUSTRIA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'     AS tipo_venta, HINDUSTRIA_MAYOREO AS tarifa)
+      WHEN HINDUSTRIA_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO' AS tipo_venta, HINDUSTRIA_MMAY    AS tarifa)
+      WHEN HINDUSTRIA_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'     AS tipo_venta, HINDUSTRIA_ABASTOS AS tarifa)
+    END AS HINDUSTRIA_r,
+    CASE
+      WHEN tipo_venta = 'VTA EN RUTA' AND HRANCHERO_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA'  AS tipo_venta, HRANCHERO_RUTA    AS tarifa)
+      WHEN tipo_venta = 'VTA EN PISO' AND HRANCHERO_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO'  AS tipo_venta, HRANCHERO_MENUDEO AS tarifa)
+      WHEN tipo_venta = 'MAYOREO'     AND HRANCHERO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'      AS tipo_venta, HRANCHERO_MAYOREO AS tarifa)
+      WHEN tipo_venta = 'MED MAYOREO' AND HRANCHERO_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO'  AS tipo_venta, HRANCHERO_MMAY    AS tarifa)
+      WHEN tipo_venta = 'ABASTOS'     AND HRANCHERO_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'      AS tipo_venta, HRANCHERO_ABASTOS AS tarifa)
+      WHEN HRANCHERO_RUTA    IS NOT NULL THEN STRUCT('VTA EN RUTA' AS tipo_venta, HRANCHERO_RUTA    AS tarifa)
+      WHEN HRANCHERO_MENUDEO IS NOT NULL THEN STRUCT('VTA EN PISO' AS tipo_venta, HRANCHERO_MENUDEO AS tarifa)
+      WHEN HRANCHERO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO'     AS tipo_venta, HRANCHERO_MAYOREO AS tarifa)
+      WHEN HRANCHERO_MMAY    IS NOT NULL THEN STRUCT('MED MAYOREO' AS tipo_venta, HRANCHERO_MMAY    AS tarifa)
+      WHEN HRANCHERO_ABASTOS IS NOT NULL THEN STRUCT('ABASTOS'     AS tipo_venta, HRANCHERO_ABASTOS AS tarifa)
+    END AS HRANCHERO_r,
 
-      WHEN gsber = 'BO' AND SETNAME = 'CHOCOLATE'  AND canal = 'MENUDEO' THEN CHOCOLATE_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'CHOCOLATE'  AND canal = 'MAYOREO' THEN CHOCOLATE_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'VAINILLA'   AND canal = 'MENUDEO' THEN VAINILLA_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'VAINILLA'   AND canal = 'MAYOREO' THEN VAINILLA_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'CAJETA'     AND canal = 'MENUDEO' THEN CAJETA_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'CAJETA'     AND canal = 'MAYOREO' THEN CAJETA_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'SWICH'      AND canal = 'MENUDEO' THEN SWICH_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'SWICH'      AND canal = 'MAYOREO' THEN SWICH_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'SW_ROLL'    AND canal = 'MENUDEO' THEN SW_ROLL_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'SW_ROLL'    AND canal = 'MAYOREO' THEN SW_ROLL_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'BIG_CHO'    AND canal = 'MENUDEO' THEN BIG_CHO_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'BIG_CHO'    AND canal = 'MAYOREO' THEN BIG_CHO_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'BIG_VAI'    AND canal = 'MENUDEO' THEN BIG_VAI_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'BIG_VAI'    AND canal = 'MAYOREO' THEN BIG_VAI_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'VUALA_BOLD' AND canal = 'MENUDEO' THEN VUALA_BOLD_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'VUALA_BOLD' AND canal = 'MAYOREO' THEN VUALA_BOLD_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'PINA'       AND canal = 'MENUDEO' THEN PINA_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'PINA'       AND canal = 'MAYOREO' THEN PINA_MAYOREO
-      WHEN gsber = 'BO' AND SETNAME = 'PMUERTO'    AND canal = 'MENUDEO' THEN PMUERTO_MENUDEO
-      WHEN gsber = 'BO' AND SETNAME = 'PMUERTO'    AND canal = 'MAYOREO' THEN PMUERTO_MAYOREO
+    CASE
+      WHEN canal = 'MENUDEO' AND CHOCOLATE_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CHOCOLATE_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND CHOCOLATE_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CHOCOLATE_MAYOREO AS tarifa)
+      WHEN CHOCOLATE_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CHOCOLATE_MENUDEO AS tarifa)
+      WHEN CHOCOLATE_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CHOCOLATE_MAYOREO AS tarifa)
+    END AS CHOCOLATE_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND VAINILLA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, VAINILLA_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND VAINILLA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, VAINILLA_MAYOREO AS tarifa)
+      WHEN VAINILLA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, VAINILLA_MENUDEO AS tarifa)
+      WHEN VAINILLA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, VAINILLA_MAYOREO AS tarifa)
+    END AS VAINILLA_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND CAJETA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CAJETA_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND CAJETA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CAJETA_MAYOREO AS tarifa)
+      WHEN CAJETA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CAJETA_MENUDEO AS tarifa)
+      WHEN CAJETA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CAJETA_MAYOREO AS tarifa)
+    END AS CAJETA_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND SWICH_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, SWICH_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND SWICH_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, SWICH_MAYOREO AS tarifa)
+      WHEN SWICH_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, SWICH_MENUDEO AS tarifa)
+      WHEN SWICH_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, SWICH_MAYOREO AS tarifa)
+    END AS SWICH_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND SW_ROLL_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, SW_ROLL_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND SW_ROLL_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, SW_ROLL_MAYOREO AS tarifa)
+      WHEN SW_ROLL_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, SW_ROLL_MENUDEO AS tarifa)
+      WHEN SW_ROLL_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, SW_ROLL_MAYOREO AS tarifa)
+    END AS SW_ROLL_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND BIG_CHO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BIG_CHO_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND BIG_CHO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BIG_CHO_MAYOREO AS tarifa)
+      WHEN BIG_CHO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BIG_CHO_MENUDEO AS tarifa)
+      WHEN BIG_CHO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BIG_CHO_MAYOREO AS tarifa)
+    END AS BIG_CHO_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND BIG_VAI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BIG_VAI_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND BIG_VAI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BIG_VAI_MAYOREO AS tarifa)
+      WHEN BIG_VAI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BIG_VAI_MENUDEO AS tarifa)
+      WHEN BIG_VAI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BIG_VAI_MAYOREO AS tarifa)
+    END AS BIG_VAI_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND VUALA_BOLD_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, VUALA_BOLD_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND VUALA_BOLD_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, VUALA_BOLD_MAYOREO AS tarifa)
+      WHEN VUALA_BOLD_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, VUALA_BOLD_MENUDEO AS tarifa)
+      WHEN VUALA_BOLD_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, VUALA_BOLD_MAYOREO AS tarifa)
+    END AS VUALA_BOLD_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND PINA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, PINA_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND PINA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, PINA_MAYOREO AS tarifa)
+      WHEN PINA_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, PINA_MENUDEO AS tarifa)
+      WHEN PINA_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, PINA_MAYOREO AS tarifa)
+    END AS PINA_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND PMUERTO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, PMUERTO_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND PMUERTO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, PMUERTO_MAYOREO AS tarifa)
+      WHEN PMUERTO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, PMUERTO_MENUDEO AS tarifa)
+      WHEN PMUERTO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, PMUERTO_MAYOREO AS tarifa)
+    END AS PMUERTO_r,
 
-      WHEN gsber = 'IA' AND SETNAME = 'CHOP'  AND canal = 'MENUDEO' THEN CHOP_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'CHOP'  AND canal = 'MAYOREO' THEN CHOP_MAYOREO
-      WHEN gsber = 'IA' AND SETNAME = 'BALU'  AND canal = 'MENUDEO' THEN BALU_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'BALU'  AND canal = 'MAYOREO' THEN BALU_MAYOREO
-      WHEN gsber = 'IA' AND SETNAME = 'WOOFI' AND canal = 'MENUDEO' THEN WOOFI_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'WOOFI' AND canal = 'MAYOREO' THEN WOOFI_MAYOREO
-      WHEN gsber = 'IA' AND SETNAME = 'BALTO' AND canal = 'MENUDEO' THEN BALTO_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'BALTO' AND canal = 'MAYOREO' THEN BALTO_MAYOREO
-      WHEN gsber = 'IA' AND SETNAME = 'MIXI'  AND canal = 'MENUDEO' THEN MIXI_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'MIXI'  AND canal = 'MAYOREO' THEN MIXI_MAYOREO
-      WHEN gsber = 'IA' AND SETNAME = 'BONGO' AND canal = 'MENUDEO' THEN BONGO_MENUDEO
-      WHEN gsber = 'IA' AND SETNAME = 'BONGO' AND canal = 'MAYOREO' THEN BONGO_MAYOREO
+    CASE
+      WHEN canal = 'MENUDEO' AND CHOP_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CHOP_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND CHOP_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CHOP_MAYOREO AS tarifa)
+      WHEN CHOP_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, CHOP_MENUDEO AS tarifa)
+      WHEN CHOP_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, CHOP_MAYOREO AS tarifa)
+    END AS CHOP_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND BALU_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BALU_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND BALU_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BALU_MAYOREO AS tarifa)
+      WHEN BALU_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BALU_MENUDEO AS tarifa)
+      WHEN BALU_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BALU_MAYOREO AS tarifa)
+    END AS BALU_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND WOOFI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, WOOFI_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND WOOFI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, WOOFI_MAYOREO AS tarifa)
+      WHEN WOOFI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, WOOFI_MENUDEO AS tarifa)
+      WHEN WOOFI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, WOOFI_MAYOREO AS tarifa)
+    END AS WOOFI_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND BALTO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BALTO_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND BALTO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BALTO_MAYOREO AS tarifa)
+      WHEN BALTO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BALTO_MENUDEO AS tarifa)
+      WHEN BALTO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BALTO_MAYOREO AS tarifa)
+    END AS BALTO_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND MIXI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, MIXI_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND MIXI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, MIXI_MAYOREO AS tarifa)
+      WHEN MIXI_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, MIXI_MENUDEO AS tarifa)
+      WHEN MIXI_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, MIXI_MAYOREO AS tarifa)
+    END AS MIXI_r,
+    CASE
+      WHEN canal = 'MENUDEO' AND BONGO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BONGO_MENUDEO AS tarifa)
+      WHEN canal = 'MAYOREO' AND BONGO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BONGO_MAYOREO AS tarifa)
+      WHEN BONGO_MENUDEO IS NOT NULL THEN STRUCT('MENUDEO' AS canal, BONGO_MENUDEO AS tarifa)
+      WHEN BONGO_MAYOREO IS NOT NULL THEN STRUCT('MAYOREO' AS canal, BONGO_MAYOREO AS tarifa)
+    END AS BONGO_r
+  FROM base
+),
+
+con_tarifa AS (
+  SELECT
+    * EXCEPT (
+      HSANJUAN_r, HPORTALES_r, HINDUSTRIA_r, HRANCHERO_r,
+      CHOCOLATE_r, VAINILLA_r, CAJETA_r, SWICH_r, SW_ROLL_r, BIG_CHO_r, BIG_VAI_r, VUALA_BOLD_r, PINA_r, PMUERTO_r,
+      CHOP_r, BALU_r, WOOFI_r, BALTO_r, MIXI_r, BONGO_r
+    ),
+    CASE
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   THEN HSANJUAN_r.tarifa
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  THEN HPORTALES_r.tarifa
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' THEN HINDUSTRIA_r.tarifa
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  THEN HRANCHERO_r.tarifa
+
+      WHEN gsber = 'BO' AND SETNAME = 'CHOCOLATE'  THEN CHOCOLATE_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'VAINILLA'   THEN VAINILLA_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'CAJETA'     THEN CAJETA_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'SWICH'      THEN SWICH_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'SW_ROLL'    THEN SW_ROLL_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'BIG_CHO'    THEN BIG_CHO_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'BIG_VAI'    THEN BIG_VAI_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'VUALA_BOLD' THEN VUALA_BOLD_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'PINA'       THEN PINA_r.tarifa
+      WHEN gsber = 'BO' AND SETNAME = 'PMUERTO'    THEN PMUERTO_r.tarifa
+
+      WHEN gsber = 'IA' AND SETNAME = 'CHOP'  THEN CHOP_r.tarifa
+      WHEN gsber = 'IA' AND SETNAME = 'BALU'  THEN BALU_r.tarifa
+      WHEN gsber = 'IA' AND SETNAME = 'WOOFI' THEN WOOFI_r.tarifa
+      WHEN gsber = 'IA' AND SETNAME = 'BALTO' THEN BALTO_r.tarifa
+      WHEN gsber = 'IA' AND SETNAME = 'MIXI'  THEN MIXI_r.tarifa
+      WHEN gsber = 'IA' AND SETNAME = 'BONGO' THEN BONGO_r.tarifa
 
       WHEN gsber = 'L' AND SETNAME = 'LENTERA' THEN LENTERA
       WHEN gsber = 'L' AND SETNAME = 'LLIGHT'  THEN LLIGHT
       WHEN gsber = 'L' AND SETNAME = 'LDESLAC' THEN LDESLAC
 
       WHEN gsber = 'A' THEN tarifa_a
-    END AS tarifa
-  FROM base
+    END AS tarifa,
+    -- Tipo de venta resuelto: para H, viene del mismo struct que resolvió la
+    -- tarifa (self-healed contra dm_cedis). Para BO/IA/L/A no cambia -- su
+    -- tabla de tarifa no distingue más que canal (BO/IA) o nada (L/A), así
+    -- que el tipo de venta que se muestra sigue siendo el de dm_cedis.
+    CASE
+      WHEN gsber = 'H' AND SETNAME = 'HSANJUAN'   THEN HSANJUAN_r.tipo_venta
+      WHEN gsber = 'H' AND SETNAME = 'HPORTALES'  THEN HPORTALES_r.tipo_venta
+      WHEN gsber = 'H' AND SETNAME = 'HINDUSTRIA' THEN HINDUSTRIA_r.tipo_venta
+      WHEN gsber = 'H' AND SETNAME = 'HRANCHERO'  THEN HRANCHERO_r.tipo_venta
+      ELSE tipo_venta
+    END AS tipo_venta_resuelto
+  FROM resuelto
 ),
 
 -- Cobro: mismas dos CTEs que v1_flujo_producto_dbc_prototipo_v2.sql. Denominador
@@ -386,15 +559,15 @@ SELECT
   t.werks           AS planta,
   t.matnr_clean     AS matnr,
   t.SETNAME         AS set_material,
-  t.tipo_venta,
+  t.tipo_venta_resuelto AS tipo_venta,
   t.canal,
   t.cantidad,
   t.importe_mxn,
   t.tarifa,
   CASE
-    WHEN t.tarifa     IS NOT NULL THEN 'OK'
-    WHEN t.SETNAME    IS NULL     THEN 'SIN_SET'
-    WHEN t.tipo_venta IS NULL     THEN 'SIN_CEDIS'
+    WHEN t.tarifa              IS NOT NULL THEN 'OK'
+    WHEN t.SETNAME              IS NULL    THEN 'SIN_SET'
+    WHEN t.tipo_venta_resuelto  IS NULL    THEN 'SIN_CEDIS'
     ELSE 'SIN_TARIFA'
   END AS status,
 

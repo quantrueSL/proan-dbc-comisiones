@@ -10,6 +10,7 @@ from comisionesbi import conciliacion_engine, db
 
 def _fila(
     *,
+    sociedad="DBC",
     semana=date(2026, 8, 29),
     periodo_fin=date(2026, 9, 4),
     comisionista="EDGARDO TRUJILLO",
@@ -30,6 +31,7 @@ def _fila(
     sin_comision=0,
 ):
     return {
+        "sociedad": sociedad,
         "semana": semana,
         "periodo_fin": periodo_fin,
         "division_code": division,
@@ -52,14 +54,39 @@ def _fila(
     }
 
 
+def _fila_pago(
+    *,
+    sociedad="DBC",
+    comisionista="EDGARDO TRUJILLO",
+    division="IA",
+    periodo=date(2026, 8, 29),
+    periodo_fin=date(2026, 9, 4),
+    pago_real=1750.0,
+):
+    return {
+        "sociedad": sociedad,
+        "comisionista": comisionista,
+        "division_code": division,
+        "periodo": periodo,
+        "periodo_fin": periodo_fin,
+        "pago_real": pago_real,
+    }
+
+
 class _ClienteFalso:
-    def __init__(self, detalle):
+    def __init__(self, detalle, pago=None):
         self.detalle = detalle
+        self.pago = pago or []
         self.llamadas = []
 
     def query(self, sql, job_config=None):
         self.llamadas.append((sql, job_config))
-        filas = [{"desde": date(2026, 1, 3), "hasta": date(2026, 8, 29)}] if "MIN(semana)" in sql else self.detalle
+        if "MIN(fecha)" in sql:
+            filas = [{"desde": date(2026, 1, 3), "hasta": date(2026, 8, 29)}]
+        elif "DBC_gold_conciliacion_pago_semanal" in sql:
+            filas = self.pago
+        else:
+            filas = self.detalle
         resultado = MagicMock()
         resultado.result.return_value = filas
         return resultado
@@ -67,8 +94,8 @@ class _ClienteFalso:
 
 @pytest.fixture
 def cliente(monkeypatch):
-    def _instalar(detalle):
-        falso = _ClienteFalso(detalle)
+    def _instalar(detalle, pago=None):
+        falso = _ClienteFalso(detalle, pago)
         monkeypatch.setattr(db, "get_bq_client", lambda: falso)
         return falso
 
@@ -105,10 +132,10 @@ def test_suma_por_comisionista_y_division(cliente):
     assert por["NOEL GARCIA"]["comision_total"] == 980.0
 
 
-def test_ordena_alfabetico_por_comisionista_y_nulos_al_final(cliente):
-    # A diferencia de comisiones_engine (que ordena por lo que se debe pagar),
-    # aquí se busca a una persona concreta en la lista -- alfabético es lo que
-    # sirve para eso.
+def test_sin_pago_que_comparar_cae_alfabetico_y_nulos_al_final(cliente):
+    # Sin datos de pago, no hay diferencia que ordenar -- todas empatan, y el
+    # empate cae alfabético (útil para buscar a una persona concreta), con los
+    # sin nombre al final.
     cliente(
         [
             _fila(comisionista="ZOE", comision=90.0),
@@ -179,6 +206,141 @@ def test_cuenta_las_lineas_sin_comision(cliente):
     assert total == 5
 
 
+# ─── Nivel 1: pago real (BSAK) vs. calculado ──────────────────────────────
+
+
+def test_junta_pago_real_y_calculado_por_comisionista(cliente):
+    cliente(
+        [_fila(comisionista="EDGARDO TRUJILLO", division="IA", comision=1750.0)],
+        pago=[_fila_pago(comisionista="EDGARDO TRUJILLO", division="IA", pago_real=1600.0)],
+    )
+
+    fila = _informe()["por_comisionista"][0]
+
+    # `comision_calculada` (lo que se muestra como "Calculado") es el mismo
+    # total devengado en TODO el rango filtrado, no solo lo que cae en el
+    # periodo de un pago real -- "el total es el total", igual que pago_real.
+    assert fila["comision_total"] == 1750.0
+    assert fila["pago_real"] == 1600.0
+    assert fila["comision_calculada"] == 1750.0
+    assert fila["diferencia"] == pytest.approx(150.0)
+    assert fila["diff_pct"] == pytest.approx(9.4, abs=0.05)
+
+
+def test_dos_periodos_de_pago_se_suman(cliente):
+    cliente(
+        [_fila(comisionista="ANA", division="H", comision=3000.0)],
+        pago=[
+            _fila_pago(comisionista="ANA", division="H", periodo=date(2026, 8, 1), pago_real=1000.0),
+            _fila_pago(comisionista="ANA", division="H", periodo=date(2026, 8, 8), pago_real=2000.0),
+        ],
+    )
+
+    fila = _informe()["por_comisionista"][0]
+
+    assert fila["pago_real"] == 3000.0
+    assert fila["comision_calculada"] == 3000.0
+    assert fila["diferencia"] == 0.0
+
+
+def test_pago_sin_calculo_se_marca_y_no_rompe_con_division_cero(cliente):
+    # Un pago real para un comisionista+división que no tiene NINGUNA línea de
+    # comisión calculada en todo el rango. Tiene que poder decir "esto no se
+    # pudo calcular" (None, no cero) sin reventar diff_pct con una división
+    # entre cero disfrazada.
+    cliente([], pago=[_fila_pago(comisionista="RAUL", division="BO", pago_real=5000.0)])
+
+    fila = _informe()["por_comisionista"][0]
+
+    assert fila["pago_sin_calculo"] is True
+    assert fila["calculo_sin_pago"] is False
+    assert fila["comision_calculada"] is None
+    assert fila["diferencia"] is None
+    assert fila["diff_pct"] is None
+
+
+def test_calculo_sin_pago_se_marca(cliente):
+    # Lo inverso: comisión calculada real, pero ningún pago de BSAK cruza con
+    # ese comisionista+división -- el caso de los 3 comisionistas cuyo LIFNR
+    # nunca aparece pagando comisión (ver memoria de sesión). "Calculado" debe
+    # seguir mostrando el total real (800), no $0: hubo un bug donde
+    # `comision_calculada` solo se llenaba desde los periodos con pago real,
+    # así que un comisionista sin ningún pago mostraba "Calculado: $0" a pesar
+    # de tener comisión de verdad (visible en el detalle de la fila).
+    cliente([_fila(comisionista="JONATHAN", division="BO", comision=800.0)], pago=[])
+
+    fila = _informe()["por_comisionista"][0]
+
+    assert fila["calculo_sin_pago"] is True
+    assert fila["pago_sin_calculo"] is False
+    assert fila["pago_real"] is None
+    assert fila["comision_calculada"] == 800.0
+    assert fila["diferencia"] is None
+
+
+def test_las_dos_sociedades_del_mismo_comisionista_no_se_mezclan(cliente):
+    # Un comisionista puede tener oficinas en DBC y en PAN con pagos y
+    # cálculos distintos (ver DBC_dim_comisionista) -- tienen que quedar en
+    # filas separadas, no sumadas en una bolsa.
+    cliente(
+        [
+            _fila(sociedad="DBC", comisionista="GENARO QUIROZ PEREZ", division="H", comision=500.0),
+            _fila(sociedad="PAN", comisionista="GENARO QUIROZ PEREZ", division="H", comision=9000.0),
+        ],
+        pago=[
+            _fila_pago(sociedad="DBC", comisionista="GENARO QUIROZ PEREZ", division="H", pago_real=480.0),
+            _fila_pago(sociedad="PAN", comisionista="GENARO QUIROZ PEREZ", division="H", pago_real=9200.0),
+        ],
+    )
+
+    por_sociedad = {f["sociedad"]: f for f in _informe()["por_comisionista"]}
+
+    assert len(por_sociedad) == 2
+    assert por_sociedad["DBC"]["pago_real"] == 480.0
+    assert por_sociedad["PAN"]["pago_real"] == 9200.0
+
+
+def test_ordena_por_pagado_de_mayor_a_menor(cliente):
+    # Pedido de Silvana (2026-09-09): a quién más se le pagó primero, no la
+    # diferencia. Los importes de abajo se eligen para que el orden por pago
+    # (ALTO, MEDIO, BAJO) sea el CONTRARIO del orden por diferencia absoluta
+    # (MEDIO $4M, ALTO $3M, BAJO $99,500) -- si el sort se quedara en el
+    # criterio viejo, esta prueba fallaría.
+    cliente(
+        [
+            _fila(comisionista="ALTO", division="H", comision=10.0),
+            _fila(comisionista="MEDIO", division="IA", comision=5_000_000.0),
+            _fila(comisionista="BAJO", division="BO", comision=500.0),
+        ],
+        pago=[
+            _fila_pago(comisionista="ALTO", division="H", pago_real=3_000_000.0),
+            _fila_pago(comisionista="MEDIO", division="IA", pago_real=1_000_000.0),
+            _fila_pago(comisionista="BAJO", division="BO", pago_real=100_000.0),
+        ],
+    )
+
+    nombres = [f["comisionista"] for f in _informe()["por_comisionista"]]
+
+    assert nombres == ["ALTO", "MEDIO", "BAJO"]
+
+
+def test_sin_pago_va_al_final_del_orden_por_pagado(cliente):
+    # Un comisionista sin pago real (calculo_sin_pago) no tiene con qué
+    # ordenarse por "Pagado" -- va al final sin importar cuánto se calculó,
+    # no compite en el orden como si fuera $0.
+    cliente(
+        [
+            _fila(comisionista="SIN_PAGO", division="H", comision=999_999.0),
+            _fila(comisionista="CON_PAGO", division="IA", comision=10.0),
+        ],
+        pago=[_fila_pago(comisionista="CON_PAGO", division="IA", pago_real=5.0)],
+    )
+
+    nombres = [f["comisionista"] for f in _informe()["por_comisionista"]]
+
+    assert nombres == ["CON_PAGO", "SIN_PAGO"]
+
+
 # ─── Nivel 2/3: el detalle que arma la cascada y la tabla de producto ─────
 
 
@@ -198,6 +360,27 @@ def test_el_detalle_trae_una_fila_por_producto_sin_agregar(cliente):
     assert len(detalle) == 2
     assert {d["descripcion"] for d in detalle} == {"CHOP ADULTO 25Kg", "BALTO ADULTO 20 K"}
     assert detalle[0]["semana"] == "2026-08-29"
+
+
+def test_pago_semanal_trae_el_pago_real_sin_colapsar_por_periodo(cliente):
+    # A diferencia de `por_comisionista` (un solo total del rango), esto trae
+    # una fila por periodo -- lo que necesita el nivel 2 para comparar Pagado
+    # contra Calculado periodo por periodo, no solo el gran total.
+    cliente(
+        [_fila(comisionista="ANA", division="H", comision=100.0)],
+        pago=[
+            _fila_pago(comisionista="ANA", division="H", periodo=date(2026, 8, 1), pago_real=1000.0),
+            _fila_pago(comisionista="ANA", division="H", periodo=date(2026, 8, 8), pago_real=2000.0),
+        ],
+    )
+
+    pago_semanal = _informe()["pago_semanal"]
+
+    assert len(pago_semanal) == 2
+    assert {(p["periodo"], p["pago_real"]) for p in pago_semanal} == {
+        ("2026-08-01", 1000.0),
+        ("2026-08-08", 2000.0),
+    }
 
 
 def test_el_detalle_conserva_cedis_oficina_y_tipo_de_venta(cliente):
@@ -272,7 +455,7 @@ def test_detalle_diario_trae_una_fila_por_dia_sin_agregar_por_periodo(cliente):
     )
 
     filas = conciliacion_engine.detalle_diario(
-        division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     assert [f["fecha"] for f in filas] == ["2026-04-25", "2026-04-30", "2026-05-01"]
@@ -282,11 +465,12 @@ def test_detalle_diario_pasa_los_filtros_como_parametros(cliente):
     falso = cliente([_fila_diaria()])
 
     conciliacion_engine.detalle_diario(
-        division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad="DBC", division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
+    assert valores["sociedad"] == "DBC"
     assert valores["division"] == "IA"
     assert valores["comisionista"] == "EDGARDO TRUJILLO"
 
@@ -316,7 +500,7 @@ def test_detalle_factura_trae_billing_document_e_item_number(cliente):
     cliente([_fila_factura(billing_document="2071163278", item_number="1")])
 
     filas = conciliacion_engine.detalle_factura(
-        division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     assert filas[0]["billing_document"] == "2071163278"
@@ -334,7 +518,7 @@ def test_detalle_factura_trae_cobro_por_linea(cliente):
     )
 
     filas = conciliacion_engine.detalle_factura(
-        division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     cobrada = next(f for f in filas if f["se_cobro"])
@@ -350,10 +534,11 @@ def test_detalle_factura_pasa_los_filtros_como_parametros(cliente):
     falso = cliente([_fila_factura()])
 
     conciliacion_engine.detalle_factura(
-        division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad="DBC", division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
+    assert valores["sociedad"] == "DBC"
     assert valores["division"] == "IA"
     assert valores["comisionista"] == "EDGARDO TRUJILLO"

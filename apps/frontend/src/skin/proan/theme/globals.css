@@ -6872,6 +6872,37 @@ body.proan-report-assistant-open .proan-content-scroll {
 .conciliacion-tabla-fija td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conciliacion-tabla-fija th { white-space: normal; line-height: 1.25; }
 .conciliacion-tabla-fija td.conciliacion-col-ancha { white-space: normal; overflow-wrap: anywhere; }
+/* Pago vs. calculado (2026-09-08). Mismo rojo que .financial-metric-subtitle.is-negative:
+   un solo color de "esto va corto" en toda la app, no uno nuevo por pantalla.
+   Dos selectores a propósito (2026-09-09): la clase sola alcanza para el
+   texto suelto de las tarjetas de periodo (nivel 2), pero DENTRO de la tabla
+   el skin de Proan trae `.hydro-table-wrap td { color: #343735 }` (línea
+   ~6928) con más especificidad que una sola clase -- sin calificar también
+   con `.conciliacion-tabla-fija td`, esa regla ganaba y la diferencia
+   negativa se veía negra igual que todo lo demás, nunca roja. */
+.conciliacion-dif-negativa { color: #d32f2f; font-weight: 700; }
+.conciliacion-tabla-fija td.conciliacion-dif-negativa { color: #d32f2f; font-weight: 700; }
+
+/* Tarjetas de periodo del nivel 2 (2026-09-09): Calculado vs. Pagado por
+   periodo, el mismo comparativo del nivel 1 pero para ESTE comisionista --
+   antes solo estaba el total del rango completo, no por periodo. En fila
+   cuando cabe, apiladas si hay varios periodos (el caso normal, con el rango
+   por defecto de un solo periodo, es una sola tarjeta). */
+.conciliacion-resumen-periodos { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 6px; }
+.conciliacion-periodo-card {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px;
+  border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; padding: 8px 14px; font-size: 13px;
+}
+.conciliacion-periodo-card > span:first-child { min-width: 84px; color: #172033; font-weight: 700; }
+.conciliacion-periodo-card b { margin-right: 4px; color: #64748b; font-weight: 600; }
+/* Directo en pantalla, no en un aviso que haya que abrir (pedido de Silvana,
+   2026-09-09): "Pagado" viene de BSAK por periodo completo y no se recorta al
+   filtro -- la confusión real fue ver una cifra que no cuadraba con el rango
+   elegido sin saber por qué. */
+.conciliacion-aviso-pago {
+  margin: 6px 0 4px; border-radius: 8px; border-left: 3px solid #5f62d0;
+  background: #f4f4fc; color: #3d3d7c; padding: 9px 13px; font-size: 12px; line-height: 1.5;
+}
 /* ── Comisiones ─────────────────────────────────────────────────────────
    La nota bajo el indicador existe para una cifra concreta: "con cobro
    registrado" se lee como "lo que hay que pagar" si no se dice lo contrario,
@@ -11017,19 +11048,21 @@ body.proan-report-assistant-open .proan-content-scroll {
 /* ── Titular ───────────────────────────────────────────────────────────────
    Un número, no una fila de tarjetas: los otros tres indicadores que había
    son los pasos del embudo, y repetidos arriba como cifras sueltas no dejaban
-   ver la relación entre ellos, que es justo lo que hay que entender. */
-.comisiones-titular { justify-self: end; text-align: right; padding-bottom: 2px; }
-.comisiones-titular span {
+   ver la relación entre ellos, que es justo lo que hay que entender.
+   `.conciliacion-titular` comparte estas reglas (2026-09-09): mismo hueco en
+   el mismo grid de `.operational-summary`, solo cambia qué número se muestra. */
+.comisiones-titular, .conciliacion-titular { justify-self: end; text-align: right; padding-bottom: 2px; }
+.comisiones-titular span, .conciliacion-titular span {
   display: block; color: #787269; font-size: 10.5px; font-weight: 700;
   letter-spacing: .04em; text-transform: uppercase;
 }
-.comisiones-titular strong {
+.comisiones-titular strong, .conciliacion-titular strong {
   display: block; margin: 2px 0 3px; color: #25272b;
   font-family: var(--font-proan-primary);
   font-size: clamp(28px, 3.1vw, 44px); font-weight: 700;
   font-variant-numeric: tabular-nums; letter-spacing: -.045em; line-height: 1;
 }
-.comisiones-titular small { display: block; color: #918a80; font-size: 11px; }
+.comisiones-titular small, .conciliacion-titular small { display: block; color: #918a80; font-size: 11px; }
 
 /* ── Embudo ────────────────────────────────────────────────────────────────
    Cuatro pasos en fila con una flecha entre cada dos. El corte de unidad

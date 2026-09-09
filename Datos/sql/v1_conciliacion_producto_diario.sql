@@ -8,6 +8,11 @@
 -- pausa perseguir cobro mientras se arma la presentación. Si esto cambia,
 -- las columnas ya existen en `DBC_gold_conciliacion_factura_linea` y solo
 -- hace falta sumarlas aquí.
+--
+-- `sociedad` agregada 2026-09-08 (al integrar PAN en huevo): 11 comisionistas
+-- de huevo tienen operación en DBC Y en PAN (Genaro entre ellos) -- sin esta
+-- columna en la llave, sus productos de las dos sociedades se sumaban en una
+-- sola fila.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario`
@@ -15,7 +20,7 @@ PARTITION BY fecha
 CLUSTER BY division_code, comisionista
 AS
 SELECT
-  fecha, division_code, division, cedis, oficina, comisionista, tipo_venta,
+  fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta,
   matnr, descripcion, unidad_venta, unidad_tarifa,
   ANY_VALUE(tarifa)             AS tarifa,
   COUNT(*)                      AS num_lineas,
@@ -25,5 +30,5 @@ SELECT
   SUM(comision)                 AS comision_total,
   COUNTIF(comision_estado != 'calculada') AS lineas_sin_comision
 FROM `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`
-GROUP BY fecha, division_code, division, cedis, oficina, comisionista, tipo_venta,
+GROUP BY fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta,
          matnr, descripcion, unidad_venta, unidad_tarifa;

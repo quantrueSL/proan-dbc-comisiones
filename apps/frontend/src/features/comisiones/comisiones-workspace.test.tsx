@@ -240,7 +240,8 @@ describe("el detalle de una fila bloqueada", () => {
     ...INFORME,
     bloqueado: [
       ...INFORME.bloqueado,
-      { motivo: "sin tarifa para esa llave", num_lineas: 1_282, monto: 61_083_000, comision_min: 0, comision_max: 0 }
+      { motivo: "sin tarifa para esa llave", num_lineas: 1_282, monto: 61_083_000, comision_min: 0, comision_max: 0 },
+      { motivo: "sin CEDIS/tipo de venta", num_lineas: 1_181, monto: 9_520_000, comision_min: 0, comision_max: 0 }
     ],
     bloqueado_desglose: [
       {
@@ -249,25 +250,42 @@ describe("el detalle de una fila bloqueada", () => {
         division_code: "H",
         division: "Huevo",
         oficina: "0028",
+        almacen: "H719",
         set: "HPORTALES",
         tipo_venta: "VTA EN RUTA",
         num_lineas: 210,
         monto: 47_607_643
+      },
+      {
+        motivo: "sin CEDIS/tipo de venta",
+        sociedad: "DBC",
+        division_code: "BO",
+        division: "Botana",
+        oficina: "0188",
+        almacen: "BO43",
+        set: "BOVUALA",
+        tipo_venta: null,
+        num_lineas: 1_181,
+        monto: 9_520_000
       }
     ]
   };
 
-  it("solo la fila de \"sin tarifa para esa llave\" queda marcada como clicable", () => {
+  it("las dos filas con detalle disponible quedan marcadas como clicables, las otras dos no", () => {
     const html = pantalla(CON_DETALLE);
     expect(html).toMatch(/<tr class="comisiones-bloqueado-clicable"[^>]*>\s*<td>\s*sin tarifa para esa llave/);
+    expect(html).toMatch(/<tr class="comisiones-bloqueado-clicable"[^>]*>\s*<td>\s*sin CEDIS\/tipo de venta/);
     // Las otras dos filas del bloqueado NO llevan la clase.
     expect(html).not.toMatch(/<tr class="comisiones-bloqueado-clicable"[^>]*>\s*<td>\s*(tarifa en conflicto entre hojas|material sin SET)/);
   });
 
   it("no se abre solo, aunque haya desglose disponible", () => {
     // El modal depende de estado de cliente (`motivoDetalle`), que arranca en
-    // `null`: la carga inicial nunca debe traer el modal ya abierto.
-    expect(pantalla(CON_DETALLE)).not.toMatch(/Sociedad<\/th>/);
+    // `null`: la carga inicial nunca debe traer el modal ya abierto, para
+    // ninguno de los dos motivos.
+    const html = pantalla(CON_DETALLE);
+    expect(html).not.toMatch(/Sociedad<\/th>/);
+    expect(html).not.toMatch(/Almacén<\/th>/);
   });
 });
 
@@ -288,8 +306,8 @@ describe("las cifras que se leen mal por defecto", () => {
 });
 
 describe("la cabecera", () => {
-  it("enseña la comisión devengada como titular", () => {
-    expect(texto()).toMatch(/Comisión devengada \$18,260,942/);
+  it("enseña la Comisión sobre facturación como titular", () => {
+    expect(texto()).toMatch(/Comisión sobre facturación \$18,260,942/);
   });
 
   it("cuenta comisionistas a pagar, y no las líneas calculadas", () => {
@@ -307,8 +325,8 @@ describe("el embudo", () => {
     for (const paso of [
       "Facturado en alcance",
       "Con tarifa aplicable",
-      "Comisión devengada",
-      "Con cobro registrado"
+      "Comisión sobre facturación",
+      "Comisión sobre cobro"
     ]) {
       expect(t).toMatch(paso);
     }

@@ -1,14 +1,13 @@
 // Manual de la pantalla de flujo de producto.
 //
 // No es un "acerca de": está escrito para que alguien que abre esto por primera
-// vez entienda qué está viendo y, sobre todo, no saque conclusiones falsas. Las
-// tres trampas de esta pantalla no se adivinan mirándola:
-//   1. "Vendido" va semanas por detrás de las otras dos fases.
-//   2. Dos tercios del importe no tienen CEDIS asignado.
-//   3. Las cantidades no se pueden sumar entre unidades.
-// Cada una tiene su apartado, con el porqué, qué hacer con ello y —desde el
-// rediseño del manual— un juguete al lado que hace la cosa MAL a propósito para
-// que se vea el tamaño del error. Los juguetes están en `manual-demos.tsx`.
+// vez entienda qué está viendo y, sobre todo, no saque conclusiones falsas.
+// Dos apartados: `lectura` (qué entra, las tres líneas, cómo se lee) y
+// `trampas` (las tres cosas que no se adivinan mirándola: vendido va atrás,
+// dos tercios del importe no tenían CEDIS asignado y hoy es residual, y las
+// cantidades no se suman entre unidades). Cada trampa lleva su porqué y un
+// juguete al lado que hace la cosa MAL a propósito para que se vea el tamaño
+// del error — los juguetes están en `manual-demos.tsx`, sin tocar.
 //
 // Sigue siendo un componente de SERVIDOR: el texto se escribe en el HTML y las
 // demos son islas de cliente dentro. Lo que este manual dice es lo importante;
@@ -45,46 +44,26 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
 
   return (
     <>
-      {/* Va lo primero a propósito: es lo que hay que saber ANTES de leer
-          cualquier cifra de la pantalla, porque los totales no son los de SAP
-          y sin esto la diferencia parece un error. Ninguna de las dos
-          exclusiones lleva cartel permanente en la pantalla —la de almacenes
-          centrales está en un aviso desplegable y la de divisiones no lleva
-          ninguno—, así que este es el sitio donde queda escrito. */}
-      <section className="manual-seccion" id="alcance">
-        <h2>Qué entra y qué no en esta pantalla</h2>
+      {/* Fusiona lo que antes eran tres apartados (alcance, fases, gráfica):
+          es una sola pregunta — "¿qué estoy viendo?" — antes de entrar en las
+          trampas concretas de la sección siguiente. */}
+      <section className="manual-seccion" id="lectura">
+        <h2>Cómo leer Flujo de producto</h2>
         <p>
-          Los totales de aquí <b>no son todo lo que factura DBC</b>, y no por un fallo: hay dos
-          cosas que se dejan fuera a propósito, las dos confirmadas por el cliente el 25 de agosto
-          de 2026.
-        </p>
-        <p>
-          <b>Solo las divisiones que DBC opera</b>: huevo, botana, croqueta, abarrotes y leche. Las
-          demás —derivados de ganado, derivados de huevo, común, cárnicos, comida preparada— están
-          configuradas en SAP pero las llevan otros departamentos, y se les nota: entre el 82% y el
-          100% de su importe no cruza con ningún CEDIS porque nadie mantiene ese mapeo. Verás cuáles
-          hay en el desglose por división.
-        </p>
-        <p>
-          <b>Y cuatro almacenes centrales</b>: BO28 (ALM. CENTRAL 2), BO01 (ALM. CENT. VUALA), H723
-          (ALM. CENTRAL) y H793 (CEDIS SAN JUAN). No pasan por ningún CEDIS y no generan comisión,
-          así que un desglose por CEDIS que los incluyera no significaría nada — su respuesta
-          correcta es «ninguno». El aviso de la barra superior dice cuánto suman en el periodo que
-          estés viendo.
+          Los totales de aquí <b>no son todo lo que factura DBC</b>, y no por un fallo: solo entran
+          las divisiones que DBC opera —huevo, botana, croqueta, abarrotes y leche—, ni los cuatro
+          almacenes centrales que no pasan por ningún CEDIS y no generan comisión. Las dos exclusiones
+          están confirmadas por el cliente; el aviso de la barra superior dice cuánto suman los
+          almacenes centrales en el periodo que estés viendo.
         </p>
         <p className="manual-nota">
-          El nombre de H793 en SAP es «CEDIS SAN JUAN», y aun así no es un CEDIS. Durante un tiempo
-          lo dimos por tal precisamente por el nombre, hasta que el cliente lo desmintió. Un rótulo
+          Uno de esos almacenes se llama «CEDIS SAN JUAN» en SAP y aun así no es un CEDIS. Un rótulo
           no es una fuente.
         </p>
-      </section>
 
-      <section className="manual-seccion" id="fases">
-        <h2>Las tres líneas de la gráfica</h2>
         <p>
-          Cada línea es una etapa del recorrido y son <b>momentos distintos de la misma venta</b>, así
-          que sus importes no tienen por qué coincidir: entre lo que se pide, lo que se factura y lo
-          que se acaba cobrando hay diferencias reales de negocio.
+          Cada una de las tres líneas de la gráfica es un <b>momento distinto de la misma venta</b>,
+          así que sus importes no tienen por qué coincidir:
         </p>
         <ol className="flujo-manual-fases">
           {FASES.map((fase) => (
@@ -98,89 +77,82 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
           ))}
         </ol>
         <p className="manual-nota">
-          Falta una cuarta etapa, los <b>traspasos</b> (la entrada de producto al CEDIS). Está
-          pendiente de que el cliente diga qué código de movimiento usa en su MB51.
+          Falta una cuarta etapa, los <b>traspasos</b> (la entrada de producto al CEDIS, antes de
+          poder venderlo) — pendiente de que el cliente diga cómo la identifica en su propio sistema.
+        </p>
+
+        <p>
+          Cada día lleva sus tres barras juntas; pasa el ratón por encima para ver las tres cifras de
+          ese día. Si el periodo es largo, las barras agrupan por semana o por mes y la leyenda lo
+          dice.
         </p>
       </section>
 
       {/* `manual-doble`: el texto a un lado y el juguete al otro. En pantalla
           ancha se leen juntos —que es como se entienden— y en estrecha se
-          apilan solos. */}
-      <section className="manual-seccion" id="grafica">
-        <h2>Cómo se lee la gráfica</h2>
+          apilan solos. Fusiona lo que antes eran tres apartados: vendido,
+          sin-asignar y unidades son, las tres, la misma idea — algo de la
+          pantalla se puede leer mal si nadie avisa antes. */}
+      <section className="manual-seccion" id="trampas">
+        <h2>Tres trampas de la pantalla</h2>
+
+        <h3>Vendido va atrás</h3>
         <div className="manual-doble">
           <div>
             <p>
-              Cada día lleva tres barras juntas, una por etapa. Pasa el ratón por encima para ver las
-              tres cifras de ese día, y usa los tres indicadores de arriba para elegir qué fase
-              gobierna las barras de abajo. Si el periodo es largo, las barras pasan a agrupar por
-              semana o por mes y la leyenda lo dice.
+              La tabla de pedidos de SAP dejó de recibir datos nuevos
+              {hastaVendido ? (
+                <>
+                  {" "}
+                  el <b>{hastaVendido}</b>
+                </>
+              ) : null}
+              , mientras que facturado sigue llegando
+              {hastaFacturado ? (
+                <>
+                  {" "}
+                  hasta el <b>{hastaFacturado}</b>
+                </>
+              ) : null}
+              . No es un fallo de esta herramienta: es la ingesta de SAP, compartida con el resto del
+              grupo.
             </p>
-            <p>
-              <b>Si falta la barra de una fase, es que no hay dato de ese día, no que fuera cero.</b> Por
-              eso no se dibuja nada en vez de dibujar una barra a ras del suelo: un cero diría que ese
-              día no hubo movimiento, y sería mentira.
+            <p className="manual-nota">
+              Mientras dure, no compares vendido con facturado en las fechas recientes: parecerá un
+              desplome de ventas y solo es una laguna de datos. Y{" "}
+              <b>si falta la barra de una fase, es que no hay dato de ese día, no que fuera cero</b> —
+              por eso no se dibuja nada en vez de una barra a ras del suelo, que diría que ese día no
+              hubo movimiento y sería mentira.
             </p>
           </div>
           <DemoHueco />
         </div>
-      </section>
 
-      <section className="manual-seccion" id="vendido">
-        <h2>Por qué «Vendido» se queda atrás</h2>
-        <p>
-          La tabla de líneas de pedido de SAP dejó de recibir datos nuevos
-          {hastaVendido ? (
-            <>
-              {" "}
-              el <b>{hastaVendido}</b>
-            </>
-          ) : null}
-          , mientras que facturado sigue llegando
-          {hastaFacturado ? (
-            <>
-              {" "}
-              hasta el <b>{hastaFacturado}</b>
-            </>
-          ) : null}
-          . No es un fallo de esta herramienta ni de las consultas: es la ingesta de SAP, que es
-          compartida con el resto del grupo. La cabecera del pedido sí llega al día; son las líneas
-          las que no entran.
-        </p>
-        <p className="manual-nota">
-          Mientras dure, no compares vendido con facturado en las fechas recientes: parecerá un
-          desplome de ventas y solo es una laguna de datos. Para el cálculo de comisión importa menos
-          de lo que parece, porque se paga sobre lo cobrado y esa etapa sí está al día.
-        </p>
-      </section>
-
-      <section className="manual-seccion" id="sin-asignar">
-        <h2>Qué es la fila «Sin asignar»</h2>
+        <h3>Qué es la fila «Sin asignar»</h3>
         <div className="manual-doble">
           <div>
             <p>
               Son las ventas cuya combinación de almacén y oficina no existe en el catálogo de CEDIS,
               así que no se pueden atribuir a ninguno. Aparecen en su propia fila en vez de
-              esconderse, para que la suma de la tabla cuadre con los indicadores de arriba.
+              esconderse, para que la suma de la tabla cuadre con los indicadores de arriba. Al
+              filtrar por un CEDIS concreto esta fila desaparece, porque esas ventas no pertenecen a
+              ninguno.
             </p>
             <p>
-              <b>Hoy es residual:</b> el 0,2% del importe. Pero conviene saber de dónde viene,
-              porque durante meses fue el 65% y esa cifra circuló.
+              <b>Hoy es residual:</b> el 0,2% del importe. Pero conviene saber de dónde viene, porque
+              durante meses fue el 65% y esa cifra circuló.
             </p>
             <p className="manual-nota">
-              Aquel 65% no era un fallo de mapeo. Dos tercios eran divisiones que DBC no opera y
-              almacenes centrales que, correctamente, no pertenecen a ningún CEDIS — y ninguna de las
-              dos cosas se enseña ya en esta pantalla. El tercio que sí lo era se cerró con la lista
-              de almacenes que mandó el cliente. Lo que queda sin asignar de verdad son 5.485 líneas,
-              $1,3 M.
+              Aquel 65% no era un fallo de mapeo: dos tercios eran divisiones que DBC no opera y
+              almacenes centrales que, correctamente, no pertenecen a ningún CEDIS — ninguna de las
+              dos cosas se enseña ya aquí. El tercio que sí lo era se cerró con la lista de almacenes
+              que mandó el cliente. Lo que queda sin asignar de verdad son 5.485 líneas, $1,3 M.
             </p>
           </div>
           <DemoSinAsignar />
         </div>
-      </section>
 
-      <section className="manual-seccion" id="unidades">
-        <h2>Por qué las cantidades no se suman</h2>
+        <h3>Las cantidades no se suman</h3>
         <div className="manual-doble">
           <div>
             <p>
@@ -189,10 +161,9 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
               unidad y no verás nunca un total de cantidad.
             </p>
             <p>
-              La única cantidad comparable es la de <b>cajas</b>, y ya existe en las tres etapas: en
-              facturado viene de SAP, en vendido de la conversión de la unidad de venta, y en cobrado
-              se reparte la de la factura según la proporción cobrada. Es también la unidad en la que
-              se paga la comisión, así que no es un detalle menor.
+              La única cantidad comparable es la de <b>cajas</b>, y ya existe en las tres etapas. Es
+              también la unidad en la que se paga la comisión —la misma que usan Comisiones y
+              Conciliación para calcular la tarifa—, así que no es un detalle menor.
             </p>
             <p className="manual-nota">
               Con precisión: es la cantidad en la <b>unidad de manejo</b> de cada producto, que suele
@@ -204,49 +175,29 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
         </div>
       </section>
 
-      <section className="manual-seccion" id="filtros">
-        <h2>Los filtros</h2>
-        <p>
-          El periodo se elige en el panel de la izquierda. La división, el CEDIS y el tipo de venta se
-          filtran <b>pulsando sobre la propia gráfica</b>: una barra, un trozo del donut, un mes.
-        </p>
-        <p>
-          Todo se aplica en el servidor y queda escrito en la dirección de la página: puedes guardar
-          el enlace o mandárselo a alguien y verá exactamente lo mismo, sin explicarle qué tocar.
-        </p>
-        <p className="manual-nota">
-          Ojo: al filtrar por un CEDIS concreto desaparece la fila «Sin asignar», porque esas
-          operaciones no pertenecen a ningún CEDIS. Los totales bajarán mucho respecto a la vista sin
-          filtrar.
-        </p>
-      </section>
-
       <section className="manual-seccion" id="falta">
         <h2>Qué falta todavía</h2>
         <p>
-          Nada de esto se resuelve con más SQL: son datos que solo tiene el cliente. Está aquí a la
-          vista para que se sepa qué se está esperando.
+          Nada de esto se resuelve con más SQL: son respuestas que solo tiene el cliente, o números
+          que todavía no se pueden cruzar contra nada. Está aquí a la vista para que se sepa qué se
+          está esperando.
         </p>
         <ul className="flujo-manual-pendientes">
           <li>
-            <b>Traspasos</b> — falta el código de movimiento de MB51 para validar la entrada de
-            producto al CEDIS.
+            <b>Flujo de producto</b> — todavía no se ve la entrada de mercancía al CEDIS, el primer
+            paso antes de vender. Depende de que el cliente confirme cómo la identifica en su propio
+            sistema.
           </li>
           <li>
-            <b>Mapeo de CEDIS</b> — las doce combinaciones de almacén y oficina que concentran el
-            importe sin asignar.
+            <b>Comisiones</b> — en una parte de las oficinas no se sabe todavía a quién pagarle. Y del
+            total calculado, solo una parte tiene ya un pago real con el que compararse: el resto es
+            cartera que aún no se cobra, no un error.
           </li>
           <li>
-            <b>Detalle por marca o línea de producto</b> — depende del export de los SETs de producto
-            (GS03).
-          </li>
-          <li>
-            <b>Cálculo de comisión</b> — además de lo anterior, falta la tabla oficial de tarifas
-            (ZSDFI_001). Es el módulo de Comisiones, todavía sin construir.
-          </li>
-          <li>
-            <b>Conciliación documental</b> — falta saber qué rango de números de proveedor identifica
-            a los comisionistas.
+            <b>Conciliación</b> — compara el total de la semana, no factura por factura. Usa la fecha
+            de venta para emparejar el pago, pendiente de confirmar con el cliente. Y unos pocos
+            comisionistas salen con comisión calculada pero sin ningún pago encontrado — a revisar
+            caso por caso.
           </li>
         </ul>
       </section>
