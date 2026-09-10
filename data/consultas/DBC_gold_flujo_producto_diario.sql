@@ -33,6 +33,9 @@ CLUSTER BY cedis, division_code
 AS
 SELECT
   fase,
+  -- 2026-09-10: DBC o PAN (huevo, alcance_pan) -- ver v1_flujo_producto_dbc.sql
+  -- sección 2. "Vendido" siempre es 'DBC'.
+  sociedad,
   fecha,
   division_code,
   division,
@@ -67,5 +70,5 @@ SELECT
   SUM(cantidad_cajas) AS cantidad_cajas_total,
   SUM(monto) AS monto_total
 FROM `proan-quantrue.ZZ_PRUEBAS.DBC_silver_flujo_producto`
-GROUP BY fase, fecha, division_code, division, cedis, tipo_venta, cedis_origen,
+GROUP BY fase, sociedad, fecha, division_code, division, cedis, tipo_venta, cedis_origen,
          almacen_central, division_en_operacion, unidad;

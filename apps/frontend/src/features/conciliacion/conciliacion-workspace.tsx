@@ -19,7 +19,7 @@
 // (nivel 2), que es lo que se descarga. No hay match automático contra lo
 // pagado -- eso sigue sin fuente, así que no se finge que existe.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiltersSidebar } from "@/components/filters-sidebar";
 import type {
@@ -31,11 +31,40 @@ import type {
   ConciliacionResponse
 } from "@/types/comisiones";
 
-type Filtros = { division: string; comisionista: string; desde: string; hasta: string };
+type Filtros = { division: string; comisionistaId: string; desde: string; hasta: string };
 // `sociedad` es parte de la selección, no solo de la fila: la misma persona
 // puede tener datos en DBC y en PAN, y sin este campo el detalle (nivel 2) y
 // el Excel exportado mezclaban las dos sociedades bajo el mismo nombre.
-type Seleccion = { sociedad: string | null; comisionista: string | null; division_code: string | null };
+// `comisionista_id` es la llave real -- `comisionista` (texto) puede repetirse
+// para dos personas reales o llegar distinto para la misma (ver
+// `ConciliacionPorComisionista.comisionista_id`).
+type Seleccion = {
+  sociedad: string | null;
+  comisionista_id: string | null;
+  comisionista: string | null;
+  division_code: string | null;
+};
+
+/** Nivel 1 agrupado por persona: una fila por comisionista, con sus
+ *  combinaciones sociedad-división (`hijos`) desplegables debajo con el "+" --
+ *  sin nivel intermedio de sociedad porque PAN solo vende Huevo, no hay una
+ *  segunda rama que lo justifique. Los agregados son null-safe (mismo
+ *  criterio que `totalDiferencia` más abajo): si ninguno de los hijos tiene
+ *  pago/cálculo, el agregado es `null`, no cero. */
+type GrupoComisionista = {
+  comisionista_id: string;
+  comisionista: string | null;
+  hijos: ConciliacionPorComisionista[];
+  pago_real: number | null;
+  comision_calculada: number | null;
+  diferencia: number | null;
+  diff_pct: number | null;
+  // Suma de periodos por división, no de semanas distintas -- un comisionista
+  // en dos divisiones tiene dos series de periodos independientes, no se
+  // pisan entre sí.
+  num_semanas: number;
+  tieneAlerta: boolean;
+};
 
 type Props = {
   initialError: string | null;
@@ -399,7 +428,7 @@ function descargarBlob(nombreArchivo: string, blob: Blob) {
 export function ConciliacionWorkspace({ initialError, initialResponse, rangoInicial }: Props) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [division, setDivision] = useState("");
-  const [comisionista, setComisionista] = useState("");
+  const [comisionistaId, setComisionistaId] = useState("");
   const [desde, setDesde] = useState(rangoInicial.desde);
   const [hasta, setHasta] = useState(rangoInicial.hasta);
   const [response, setResponse] = useState(initialResponse);
@@ -407,6 +436,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
   const [loading, setLoading] = useState(false);
   const [exportando, setExportando] = useState(false);
   const [seleccion, setSeleccion] = useState<Seleccion | null>(null);
+  const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
   // El panel se porta a document.body (ver más abajo): en el layout autenticado
   // algún ancestro trae `backdrop-filter`/`transform`, que en CSS crea un nuevo
   // "containing block" para `position: fixed` -- el panel quedaba atrapado
@@ -417,13 +447,13 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
   useEffect(() => setMontado(true), []);
 
   async function load(cambios: Partial<Filtros> = {}) {
-    const f: Filtros = { division, comisionista, desde, hasta, ...cambios };
+    const f: Filtros = { division, comisionistaId, desde, hasta, ...cambios };
     setLoading(true);
     setError(null);
     try {
       const body: ConciliacionFilters = {
         division: f.division || null,
-        comisionista: f.comisionista || null,
+        comisionista_id: f.comisionistaId || null,
         start_date: f.desde,
         end_date: f.hasta
       };
@@ -454,26 +484,118 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [seleccion]);
 
-  const activeFilterCount = [division, comisionista].filter(Boolean).length;
+  const activeFilterCount = [division, comisionistaId].filter(Boolean).length;
   const filasComisionista = response?.por_comisionista ?? [];
   // Titular de la cabecera: suma de `diferencia` (ya viene null cuando falta
-  // pago o cálculo, así que no se cuenta como cero) y cuántas filas traen
-  // alguno de los dos badges -- lo que alguien entrando a la pantalla
-  // necesita saber antes de escanear la tabla fila por fila.
+  // pago o cálculo, así que no se cuenta como cero) -- misma cifra agrupada
+  // por comisionista o sin agrupar, es la misma suma total.
   const totalDiferencia = filasComisionista.reduce((suma, f) => suma + (f.diferencia ?? 0), 0);
-  const totalAlertas = filasComisionista.filter((f) => f.pago_sin_calculo || f.calculo_sin_pago).length;
 
-  const nombresComisionista = useMemo(
-    () => Array.from(new Set(filasComisionista.map((f) => f.comisionista).filter((n): n is string => Boolean(n)))).sort(),
-    [filasComisionista]
-  );
+  // Nivel 1 agrupado por persona: `filasComisionista` ya viene del backend
+  // ordenada por Pagado descendente (nulos al final, ver
+  // conciliacion_engine.py:build_conciliacion), así que agrupar recorriéndola
+  // en orden basta -- cada grupo hereda el orden interno de sus hijos sin
+  // tener que reordenarlos.
+  const gruposComisionista = useMemo(() => {
+    const porId = new Map<string, GrupoComisionista>();
+    const sinId: ConciliacionPorComisionista[] = [];
+    for (const fila of filasComisionista) {
+      if (!fila.comisionista_id) {
+        sinId.push(fila);
+        continue;
+      }
+      const grupo = porId.get(fila.comisionista_id);
+      if (grupo) {
+        grupo.hijos.push(fila);
+      } else {
+        porId.set(fila.comisionista_id, {
+          comisionista_id: fila.comisionista_id,
+          comisionista: fila.comisionista,
+          hijos: [fila],
+          pago_real: null,
+          comision_calculada: null,
+          diferencia: null,
+          diff_pct: null,
+          num_semanas: 0,
+          tieneAlerta: false
+        });
+      }
+    }
+    // Sin comisionista asignado: una fila hoja por combinación, igual que hoy
+    // -- agruparlas bajo un mismo "grupo" fingiría que son la misma persona.
+    for (const fila of sinId) {
+      porId.set(`__sin__${porId.size}`, {
+        comisionista_id: "",
+        comisionista: null,
+        hijos: [fila],
+        pago_real: null,
+        comision_calculada: null,
+        diferencia: null,
+        diff_pct: null,
+        num_semanas: 0,
+        tieneAlerta: false
+      });
+    }
+
+    const grupos = Array.from(porId.values()).map((grupo) => {
+      const hayPago = grupo.hijos.some((h) => h.pago_real !== null);
+      const hayCalculo = grupo.hijos.some((h) => h.comision_calculada !== null);
+      const pago_real = hayPago ? grupo.hijos.reduce((s, h) => s + (h.pago_real ?? 0), 0) : null;
+      const comision_calculada = hayCalculo
+        ? grupo.hijos.reduce((s, h) => s + (h.comision_calculada ?? 0), 0)
+        : null;
+      const diferencia = hayPago && hayCalculo ? comision_calculada! - pago_real! : null;
+      const diff_pct = diferencia !== null && pago_real ? Math.round((100 * diferencia) / pago_real * 10) / 10 : null;
+      return {
+        ...grupo,
+        pago_real,
+        comision_calculada,
+        diferencia,
+        diff_pct,
+        num_semanas: grupo.hijos.reduce((s, h) => s + h.num_semanas, 0),
+        tieneAlerta: grupo.hijos.some((h) => h.pago_sin_calculo || h.calculo_sin_pago)
+      };
+    });
+
+    return grupos.sort(
+      (a, b) =>
+        compararCantidadDescNulosAlFinal(a.pago_real, b.pago_real) ||
+        compararConNulosAlFinal(a.comisionista, b.comisionista)
+    );
+  }, [filasComisionista]);
+
+  // Cuántas PERSONAS traen alguna alerta, no cuántas filas hoja -- el rótulo
+  // dice "comisionista(s) con alerta", así que tiene que contar personas.
+  const totalAlertas = gruposComisionista.filter((g) => g.tieneAlerta).length;
+
+  function alternarExpandido(id: string) {
+    setExpandidos((previos) => {
+      const siguiente = new Set(previos);
+      if (siguiente.has(id)) siguiente.delete(id);
+      else siguiente.add(id);
+      return siguiente;
+    });
+  }
+
+  // Opciones del filtro dedupicadas por id, no por texto: el mismo
+  // persona_cod puede traer nombre distinto entre DBC y PAN, y el texto de
+  // dos personas reales puede coincidir (ver `ConciliacionPorComisionista`).
+  const opcionesComisionista = useMemo(() => {
+    const vistos = new Map<string, string>();
+    for (const f of filasComisionista) {
+      if (f.comisionista_id && !vistos.has(f.comisionista_id)) {
+        vistos.set(f.comisionista_id, f.comisionista ?? f.comisionista_id);
+      }
+    }
+    return Array.from(vistos.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [filasComisionista]);
 
   const detalleSeleccion = useMemo(() => {
     if (!seleccion || !response) return [];
     return response.detalle
       .filter(
         (d) =>
-          d.comisionista === seleccion.comisionista &&
+          d.comisionista_id === seleccion.comisionista_id &&
           d.division_code === seleccion.division_code &&
           d.sociedad === seleccion.sociedad
       )
@@ -499,7 +621,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
     if (!seleccion || !response) return [];
     return response.pago_semanal.filter(
       (p) =>
-        p.comisionista === seleccion.comisionista &&
+        p.comisionista_id === seleccion.comisionista_id &&
         p.division_code === seleccion.division_code &&
         p.sociedad === seleccion.sociedad
     );
@@ -550,7 +672,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
       const filtro: ConciliacionFilters = {
         sociedad: seleccion.sociedad,
         division: seleccion.division_code,
-        comisionista: seleccion.comisionista,
+        comisionista_id: seleccion.comisionista_id,
         start_date: desde,
         end_date: hasta
       };
@@ -591,7 +713,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
         comisionista: nombreComisionista(seleccion.comisionista),
         division: filasComisionista.find(
           (f) =>
-            f.comisionista === seleccion.comisionista &&
+            f.comisionista_id === seleccion.comisionista_id &&
             f.division_code === seleccion.division_code &&
             f.sociedad === seleccion.sociedad
         )?.division ?? seleccion.division_code ?? "",
@@ -608,6 +730,66 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
     } finally {
       setExportando(false);
     }
+  }
+
+  /** Una fila hoja (sociedad+división), igual en ambos casos: comisionista con
+   *  una sola combinación (se pinta sola, sin "+") o una de las combinaciones
+   *  desplegadas de un comisionista con varias. El clic sigue abriendo el
+   *  panel de nivel 2 exactamente igual que siempre. */
+  function filaHoja(fila: ConciliacionPorComisionista, key: string, indentada: boolean) {
+    const seleccionar = () =>
+      setSeleccion({
+        sociedad: fila.sociedad,
+        comisionista_id: fila.comisionista_id,
+        comisionista: fila.comisionista,
+        division_code: fila.division_code
+      });
+    return (
+      <tr
+        key={key}
+        onClick={seleccionar}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            seleccionar();
+          }
+        }}
+        tabIndex={0}
+      >
+        <td title={nombreComisionista(fila.comisionista)}>
+          {/* Mismo hueco del tamaño del botón "+" en TODAS las filas hoja
+              (con o sin combinaciones que desplegar) -- si no, el nombre de
+              un comisionista de una sola división arranca pegado al borde y
+              el de uno con varias arranca corrido por el botón de arriba, y
+              los nombres cortos parecen subdivisiones de los largos. */}
+          <span className="cascada-sangria" style={indentada ? { paddingLeft: "17px" } : undefined}>
+            <span aria-hidden="true" className="cascada-mas cascada-mas-hueco" />
+            <span className="cascada-etiqueta">{nombreComisionista(fila.comisionista)}</span>
+          </span>
+        </td>
+        <td>{fila.sociedad ?? "—"}</td>
+        <td>{fila.division ?? fila.division_code ?? "—"}</td>
+        <td className="n">{fila.num_semanas}</td>
+        <td className="n">{fila.pago_real === null ? "—" : pesos(fila.pago_real)}</td>
+        <td className="n">{fila.comision_calculada === null ? "—" : pesos(fila.comision_calculada)}</td>
+        <td className={`n ${fila.diferencia !== null && fila.diferencia < 0 ? "conciliacion-dif-negativa" : ""}`}>
+          {fila.diferencia === null
+            ? "—"
+            : `${pesosConSigno(fila.diferencia)}${fila.diff_pct !== null ? ` (${pct(fila.diff_pct)})` : ""}`}
+        </td>
+        <td>
+          {fila.pago_sin_calculo ? (
+            <span className="hydro-badge is-review" title="Se le pagó algo que no calculamos para ningún periodo de este rango.">
+              pago sin cálculo
+            </span>
+          ) : fila.calculo_sin_pago ? (
+            <span className="hydro-badge is-review" title="Calculamos comisión pero no encontramos un pago de BSAK que le corresponda.">
+              cálculo sin pago
+            </span>
+          ) : null}
+        </td>
+      </tr>
+    );
   }
 
   return (
@@ -654,11 +836,11 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
         </label>
         <label>
           Comisionista
-          <select onChange={(e) => setComisionista(e.target.value)} value={comisionista}>
+          <select onChange={(e) => setComisionistaId(e.target.value)} value={comisionistaId}>
             <option value="">Todos</option>
-            {nombresComisionista.map((n) => (
-              <option key={n} value={n}>
-                {n}
+            {opcionesComisionista.map(([id, nombre]) => (
+              <option key={id} value={id}>
+                {nombre}
               </option>
             ))}
           </select>
@@ -679,7 +861,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
             className="hydro-link-button"
             onClick={() => {
               setDivision("");
-              setComisionista("");
+              setComisionistaId("");
               setDesde(rangoInicial.desde);
               setHasta(rangoInicial.hasta);
             }}
@@ -706,14 +888,14 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
               </span>
             </div>
           </div>
-          {filasComisionista.length ? (
+          {gruposComisionista.length ? (
             <div className="conciliacion-titular">
               <span>Diferencia total</span>
               <strong>{pesosConSigno(totalDiferencia)}</strong>
               <small>
                 Calculado − Pagado, {totalDiferencia >= 0 ? "posible pago de menos" : "posible pago de más"}
                 {" · "}
-                {numero.format(filasComisionista.length)} comisionista(s)
+                {numero.format(gruposComisionista.length)} comisionista(s)
                 {totalAlertas ? ` · ${numero.format(totalAlertas)} con alerta` : ""}
               </small>
             </div>
@@ -733,19 +915,27 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
           <div className="hydro-table-title">
             <div>
               <h2>Comisionistas</h2>
-              <span>{numero.format(filasComisionista.length)} comisionista(s) · división · clic en una fila para ver el detalle</span>
+              <span>
+                {numero.format(gruposComisionista.length)} comisionista(s) · clic en <b>+</b> para ver sus divisiones,
+                clic en una fila para ver el detalle
+              </span>
             </div>
           </div>
-          {filasComisionista.length ? (
-            <div className="hydro-table-wrap">
+          {gruposComisionista.length ? (
+            // `cascada` (2026-09-10): sin esta clase, `cascada-sangria`/
+            // `cascada-mas`/`cascada-etiqueta` no llevan el flex/tamaño fijo
+            // que define globals.css (están acotados con `.cascada ...`), y
+            // el botón "+" sin estilo desalineaba los nombres -- los cortos
+            // parecían subdivisión de los largos.
+            <div className="hydro-table-wrap cascada">
               <table className="conciliacion-tabla-fija">
                 {/* Ancho explícito por columna: sin esto el nombre del
                     comisionista (puede traer el apodo entre paréntesis) se
                     desborda sobre División, que es la que menos espacio
                     necesita (HUEVO, BOTANA... siempre corto). */}
                 <colgroup>
-                  <col style={{ width: "8%" }} />
                   <col style={{ width: "26%" }} />
+                  <col style={{ width: "8%" }} />
                   <col style={{ width: "9%" }} />
                   <col style={{ width: "7%" }} />
                   <col style={{ width: "12%" }} />
@@ -755,8 +945,8 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>Sociedad</th>
                     <th>Comisionista</th>
+                    <th>Sociedad</th>
                     <th>División</th>
                     <th className="n">Periodos</th>
                     <th className="n">Pagado</th>
@@ -768,44 +958,67 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                   </tr>
                 </thead>
                 <tbody>
-                  {filasComisionista.map((fila, indice) => (
-                    <tr
-                      key={indice}
-                      onClick={() =>
-                        setSeleccion({ sociedad: fila.sociedad, comisionista: fila.comisionista, division_code: fila.division_code })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setSeleccion({ sociedad: fila.sociedad, comisionista: fila.comisionista, division_code: fila.division_code });
-                        }
-                      }}
-                      tabIndex={0}
-                    >
-                      <td>{fila.sociedad ?? "—"}</td>
-                      <td title={nombreComisionista(fila.comisionista)}>{nombreComisionista(fila.comisionista)}</td>
-                      <td>{fila.division ?? fila.division_code ?? "—"}</td>
-                      <td className="n">{fila.num_semanas}</td>
-                      <td className="n">{fila.pago_real === null ? "—" : pesos(fila.pago_real)}</td>
-                      <td className="n">{fila.comision_calculada === null ? "—" : pesos(fila.comision_calculada)}</td>
-                      <td className={`n ${fila.diferencia !== null && fila.diferencia < 0 ? "conciliacion-dif-negativa" : ""}`}>
-                        {fila.diferencia === null
-                          ? "—"
-                          : `${pesosConSigno(fila.diferencia)}${fila.diff_pct !== null ? ` (${pct(fila.diff_pct)})` : ""}`}
-                      </td>
-                      <td>
-                        {fila.pago_sin_calculo ? (
-                          <span className="hydro-badge is-review" title="Se le pagó algo que no calculamos para ningún periodo de este rango.">
-                            pago sin cálculo
-                          </span>
-                        ) : fila.calculo_sin_pago ? (
-                          <span className="hydro-badge is-review" title="Calculamos comisión pero no encontramos un pago de BSAK que le corresponda.">
-                            cálculo sin pago
-                          </span>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
+                  {gruposComisionista.map((grupo, indiceGrupo) => {
+                    const claveGrupo = grupo.comisionista_id || `sin-${indiceGrupo}`;
+                    // Un solo hijo: no hay nada que desplegar, se pinta como
+                    // siempre. Solo los que tienen más de una combinación
+                    // sociedad-división ganan la fila resumen con el "+".
+                    if (grupo.hijos.length === 1) {
+                      return filaHoja(grupo.hijos[0], claveGrupo, false);
+                    }
+                    const abierto = expandidos.has(claveGrupo);
+                    return (
+                      <Fragment key={claveGrupo}>
+                        <tr>
+                          {/* Sociedad/División van fusionadas en esta celda (colSpan) en vez
+                              de dos columnas en "—": en una fila resumen esas dos SIEMPRE
+                              están vacías (se reparten entre los hijos), así que mostrarlas
+                              aquí solo repetía guiones. Aparecen de verdad al abrir el "+". */}
+                          <td colSpan={3}>
+                            <span className="cascada-sangria">
+                              <button
+                                aria-expanded={abierto}
+                                className="cascada-mas"
+                                onClick={() => alternarExpandido(claveGrupo)}
+                                title={
+                                  abierto
+                                    ? `Cerrar ${nombreComisionista(grupo.comisionista)}`
+                                    : `Ver las divisiones de ${nombreComisionista(grupo.comisionista)}`
+                                }
+                                type="button"
+                              >
+                                {abierto ? "−" : "+"}
+                              </button>
+                              <span className="cascada-etiqueta" title={nombreComisionista(grupo.comisionista)}>
+                                {nombreComisionista(grupo.comisionista)}
+                              </span>
+                            </span>
+                          </td>
+                          <td className="n">{grupo.num_semanas}</td>
+                          <td className="n">{grupo.pago_real === null ? "—" : pesos(grupo.pago_real)}</td>
+                          <td className="n">{grupo.comision_calculada === null ? "—" : pesos(grupo.comision_calculada)}</td>
+                          <td className={`n ${grupo.diferencia !== null && grupo.diferencia < 0 ? "conciliacion-dif-negativa" : ""}`}>
+                            {grupo.diferencia === null
+                              ? "—"
+                              : `${pesosConSigno(grupo.diferencia)}${grupo.diff_pct !== null ? ` (${pct(grupo.diff_pct)})` : ""}`}
+                          </td>
+                          <td>
+                            {grupo.tieneAlerta ? (
+                              <span
+                                className="hydro-badge is-review"
+                                title="Alguna de sus divisiones tiene pago sin cálculo o cálculo sin pago -- ábrela con el + para ver cuál."
+                              >
+                                revisar
+                              </span>
+                            ) : null}
+                          </td>
+                        </tr>
+                        {abierto
+                          ? grupo.hijos.map((fila, indiceHijo) => filaHoja(fila, `${claveGrupo}-${indiceHijo}`, true))
+                          : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -834,7 +1047,7 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
                 {seleccion.sociedad ?? "—"} ·{" "}
                 {filasComisionista.find(
                   (f) =>
-                    f.comisionista === seleccion.comisionista &&
+                    f.comisionista_id === seleccion.comisionista_id &&
                     f.division_code === seleccion.division_code &&
                     f.sociedad === seleccion.sociedad
                 )?.division ?? seleccion.division_code}{" "}

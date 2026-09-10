@@ -53,6 +53,9 @@ type Filtros = {
   division: string | null;
   cedis: string | null;
   tipoVenta: string | null;
+  /** `DBC` o `PAN` (2026-09-10). "Vendido" es siempre DBC -- filtrar por PAN
+   *  en esa fase da vacío, no es un bug. */
+  sociedad: string | null;
 };
 
 type Props = {
@@ -127,9 +130,19 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
     por_cedis,
     por_division,
     por_tipo_venta,
+    por_sociedad,
     cantidad_por_unidad,
     excluido_almacen_central: excluido
   } = initialFlujo;
+
+  // Opciones del selector: se derivan de los datos, no de un catálogo estático
+  // (mismo patrón que Comisiones) -- si un día PAN deja de facturar huevo, el
+  // selector no sigue ofreciendo una sociedad que ya no aparece en nada.
+  const sociedades = useMemo(
+    () =>
+      Array.from(new Set(por_sociedad.map((f) => f.sociedad).filter((s): s is string => Boolean(s)))).sort(),
+    [por_sociedad]
+  );
 
   const totales = useMemo(() => Object.fromEntries(resumen.map((r) => [r.fase, r])), [resumen]);
   const hayCajas = resumen.some((r) => r.cantidad_cajas_total !== null);
@@ -224,12 +237,13 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
     router.push(`/flujo-producto?${params.toString()}`);
   }
 
-  function navegar(cambios: Partial<Record<"division" | "cedis" | "tipo_venta", string | null>>) {
+  function navegar(cambios: Partial<Record<"division" | "cedis" | "tipo_venta" | "sociedad", string | null>>) {
     const params = new URLSearchParams({ desde, hasta });
     const actual = {
       division: filtros.division,
       cedis: filtros.cedis,
       tipo_venta: filtros.tipoVenta,
+      sociedad: filtros.sociedad,
       ...cambios
     };
     for (const [clave, valor] of Object.entries(actual)) {
@@ -243,8 +257,11 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
       ? { clave: "division" as const, texto: `División: ${nombreDivision.get(filtros.division) ?? filtros.division}` }
       : null,
     filtros.cedis ? { clave: "cedis" as const, texto: `CEDIS: ${filtros.cedis}` } : null,
-    filtros.tipoVenta ? { clave: "tipo_venta" as const, texto: `Tipo de venta: ${filtros.tipoVenta}` } : null
-  ].filter((c): c is { clave: "division" | "cedis" | "tipo_venta"; texto: string } => c !== null);
+    filtros.tipoVenta ? { clave: "tipo_venta" as const, texto: `Tipo de venta: ${filtros.tipoVenta}` } : null,
+    filtros.sociedad ? { clave: "sociedad" as const, texto: `Sociedad: ${filtros.sociedad}` } : null
+  ].filter(
+    (c): c is { clave: "division" | "cedis" | "tipo_venta" | "sociedad"; texto: string } => c !== null
+  );
 
   return (
     <div className="workspace-with-sidebar">
@@ -275,13 +292,28 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
           Hasta
           <input onChange={(e) => setHasta(e.target.value)} type="date" value={hasta} />
         </label>
+        <label>
+          Sociedad
+          <select
+            onChange={(e) => navegar({ sociedad: e.target.value || null })}
+            value={filtros.sociedad ?? ""}
+          >
+            <option value="">Todas</option>
+            {sociedades.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="filters-sidebar-actions">
           <button className="hydro-button" onClick={() => navegar({})} type="button">
             Aplicar periodo
           </button>
         </div>
         <p className="flujo-pista">
-          La división, el CEDIS y el tipo de venta se filtran pulsando sobre las barras.
+          La división, el CEDIS y el tipo de venta se filtran pulsando sobre las barras. PAN solo
+          aparece en facturado y cobrado (huevo) -- vendido es siempre DBC.
         </p>
       </FiltersSidebar>
 
@@ -400,7 +432,7 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
               ))}
               <button
                 className="flujo-chip-limpiar"
-                onClick={() => navegar({ division: null, cedis: null, tipo_venta: null })}
+                onClick={() => navegar({ division: null, cedis: null, tipo_venta: null, sociedad: null })}
                 type="button"
               >
                 Limpiar

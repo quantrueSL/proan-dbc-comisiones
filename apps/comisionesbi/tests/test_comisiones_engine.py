@@ -12,6 +12,7 @@ from comisionesbi import comisiones_engine, db
 def _fila(
     *,
     estado="calculada",
+    comisionista_id=None,
     comisionista="JAIME ROJAS",
     sociedad="DBC",
     division="H",
@@ -32,6 +33,12 @@ def _fila(
     cmax=None,
     sin_importe=0,
 ):
+    # Sin `comisionista_id` explícito, se usa el texto como si fuera la llave
+    # -- válido en casi todos los tests, donde un nombre distinto ya implica
+    # persona distinta. Los que quieren probar el caso real (mismo persona_cod,
+    # texto distinto entre DBC y PAN) pasan `comisionista_id` a mano.
+    if comisionista_id is None:
+        comisionista_id = comisionista
     return {
         "fecha": fecha,
         "sociedad": sociedad,
@@ -40,6 +47,7 @@ def _fila(
         "cedis": cedis,
         "oficina": oficina,
         "almacen": almacen,
+        "comisionista_id": comisionista_id,
         "comisionista": comisionista,
         "tipo_venta": tipo,
         "set": conjunto,
@@ -141,6 +149,28 @@ def test_el_comisionista_sin_nombre_va_al_final(cliente):
     cliente([_fila(comisionista=None, comision=999.0), _fila(comisionista="ANA", comision=1.0)])
 
     assert [f["comisionista"] for f in _informe()["por_comisionista"]] == ["ANA", None]
+
+
+def test_mismo_comisionista_con_grafia_distinta_por_sociedad_no_se_duplica(cliente):
+    # El mismo persona_cod llega con texto distinto desde el Excel de DBC y el
+    # de PAN (ver v1_comision_dbc_gold_v2.sql) -- agrupar por `comisionista_id`
+    # en vez de por texto evita que la misma persona salga partida en dos filas.
+    cliente(
+        [
+            _fila(comisionista_id="0000014718", comisionista="AGUSTIN JAIMES MENDOZA",
+                  sociedad="DBC", comision=10.0, monto=100.0),
+            _fila(comisionista_id="0000014718", comisionista="AGUSTIN JAIMES",
+                  sociedad="PAN", comision=20.0, monto=200.0),
+        ]
+    )
+
+    por = _informe()["por_comisionista"]
+
+    assert len(por) == 1
+    assert por[0]["comision"] == 30.0
+    # El nombre mostrado es el de la primera fila que trajo texto -- lo que
+    # importa aquí es que no haya dos filas, no cuál grafía "gana".
+    assert por[0]["comisionista"] in {"AGUSTIN JAIMES MENDOZA", "AGUSTIN JAIMES"}
 
 
 # ─── Lo que NO se devenga, que es la otra mitad ───────────────────────────
@@ -487,13 +517,13 @@ def test_el_desglose_se_niega_a_agrupar_sin_la_unidad_en_la_llave(cliente):
 def test_los_filtros_viajan_como_parametros_y_no_pegados_al_sql(cliente):
     falso = cliente([_fila()])
 
-    _informe(division="H", cedis="Leon 1", comisionista="JAIME ROJAS")
+    _informe(division="H", cedis="Leon 1", comisionista_id="0000014718")
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
     assert valores["division"] == "H"
-    assert valores["comisionista"] == "JAIME ROJAS"
-    assert "JAIME ROJAS" not in falso.llamadas[0][0]
+    assert valores["comisionista_id"] == "0000014718"
+    assert "0000014718" not in falso.llamadas[0][0]
 
 
 def test_un_rango_sin_datos_devuelve_estructura_vacia_pero_con_cobertura(cliente):

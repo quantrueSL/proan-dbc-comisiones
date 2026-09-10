@@ -61,7 +61,7 @@ class ReportQuery(BaseModel):
 
     division: str | None = None
     cedis: str | None = None
-    comisionista: str | None = None
+    comisionista_id: str | None = None
     # DBC o PAN. Huevo se factura por las dos y la comisión de PAN es la mayor
     # parte del total, así que hay que poder mirarlas por separado.
     sociedad: str | None = None
@@ -84,7 +84,7 @@ class ReconciliationQuery(BaseModel):
     # sociedades, y sin este filtro se mezclan en una sola hoja del Excel.
     sociedad: str | None = None
     division: str | None = None
-    comisionista: str | None = None
+    comisionista_id: str | None = None
     start_date: date
     end_date: date
 
@@ -105,6 +105,9 @@ class FlujoQuery(BaseModel):
     division: str | None = None
     cedis: str | None = None
     tipo_venta: str | None = None
+    # DBC o PAN (2026-09-10) -- ver flujo_engine.py, mismo criterio que
+    # ReportQuery.sociedad de arriba.
+    sociedad: str | None = None
     start_date: date
     end_date: date
 
@@ -138,6 +141,7 @@ def post_flujo(body: FlujoQuery) -> dict:
         division=body.division,
         cedis=body.cedis,
         tipo_venta=body.tipo_venta,
+        sociedad=body.sociedad,
         start_date=body.start_date,
         end_date=body.end_date,
     )
@@ -154,7 +158,7 @@ def post_report(body: ReportQuery) -> dict:
     return build_report(
         division=body.division,
         cedis=body.cedis,
-        comisionista=body.comisionista,
+        comisionista_id=body.comisionista_id,
         sociedad=body.sociedad,
         start_date=body.start_date,
         end_date=body.end_date,
@@ -166,7 +170,7 @@ def post_reconciliation(body: ReconciliationQuery) -> dict:
     """Conciliación por comisionista, detalle por producto — ver conciliacion_engine.py."""
     return build_conciliacion(
         division=body.division,
-        comisionista=body.comisionista,
+        comisionista_id=body.comisionista_id,
         start_date=body.start_date,
         end_date=body.end_date,
     )
@@ -182,7 +186,7 @@ def post_reconciliation_diario(body: ReconciliationQuery) -> list[dict]:
     return detalle_diario(
         sociedad=body.sociedad,
         division=body.division,
-        comisionista=body.comisionista,
+        comisionista_id=body.comisionista_id,
         start_date=body.start_date,
         end_date=body.end_date,
     )
@@ -196,7 +200,7 @@ def post_reconciliation_factura(body: ReconciliationQuery) -> list[dict]:
     return detalle_factura(
         sociedad=body.sociedad,
         division=body.division,
-        comisionista=body.comisionista,
+        comisionista_id=body.comisionista_id,
         start_date=body.start_date,
         end_date=body.end_date,
     )

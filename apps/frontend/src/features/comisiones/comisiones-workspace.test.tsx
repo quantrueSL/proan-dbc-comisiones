@@ -15,17 +15,20 @@ const INFORME: ReportResponse = {
     comision: 18_260_942,
     comision_con_cobro: 4_817_432,
     monto_calculable: 426_927_014,
+    monto_cobrado: 3_500_000,
     pct_calculable: 58.3,
     lineas_sin_importe: 12_434
   },
   por_comisionista: [
     {
+      comisionista_id: "0000004276",
       comisionista: "ELIAS BARBA",
       num_lineas: 100,
       monto: 10_000_000,
       comision: 1_159_105,
       comision_con_cobro: 300_000,
-      monto_calculable: 10_000_000
+      monto_calculable: 10_000_000,
+      monto_cobrado: 2_000_000
     }
   ],
   por_division: [
@@ -36,7 +39,8 @@ const INFORME: ReportResponse = {
       monto: 352_021_615,
       comision: 11_512_783,
       comision_con_cobro: 0,
-      monto_calculable: 300_000_000
+      monto_calculable: 300_000_000,
+      monto_cobrado: 0
     }
   ],
   por_cedis: [
@@ -46,7 +50,8 @@ const INFORME: ReportResponse = {
       monto: 8_000_000,
       comision: 900_000,
       comision_con_cobro: 0,
-      monto_calculable: 8_000_000
+      monto_calculable: 8_000_000,
+      monto_cobrado: 0
     },
     {
       cedis: null,
@@ -54,7 +59,8 @@ const INFORME: ReportResponse = {
       monto: 1_300_000,
       comision: 12_000,
       comision_con_cobro: 0,
-      monto_calculable: 0
+      monto_calculable: 0,
+      monto_cobrado: 0
     }
   ],
   // Los cinco tipos que existen de verdad, más el grupo sin tipo: es el caso que
@@ -72,7 +78,8 @@ const INFORME: ReportResponse = {
     monto: 1_000_000,
     comision: 900_000 - indice * 100_000,
     comision_con_cobro: 0,
-    monto_calculable: 1_000_000
+    monto_calculable: 1_000_000,
+    monto_cobrado: 0
   })),
   por_fecha: [
     {
@@ -81,7 +88,8 @@ const INFORME: ReportResponse = {
       monto: 1_000_000,
       comision: 120_000,
       comision_con_cobro: 0,
-      monto_calculable: 1_000_000
+      monto_calculable: 1_000_000,
+      monto_cobrado: 0
     },
     {
       fecha: "2026-02-05",
@@ -89,13 +97,15 @@ const INFORME: ReportResponse = {
       monto: 1_000_000,
       comision: 90_000,
       comision_con_cobro: 0,
-      monto_calculable: 1_000_000
+      monto_calculable: 1_000_000,
+      monto_cobrado: 0
     }
   ],
   // Hojas del desglose: el grano de la tarifa. De aquí salen las dos cascadas.
   desglose: [
     {
       sociedad: "DBC",
+      comisionista_id: "0000004276",
       comisionista: "ELIAS BARBA",
       division_code: "H",
       division: "Huevo",
@@ -109,10 +119,12 @@ const INFORME: ReportResponse = {
       monto: 6_000_000,
       comision: 700_000,
       comision_con_cobro: 200_000,
-      monto_calculable: 6_000_000
+      monto_calculable: 6_000_000,
+      monto_cobrado: 1_500_000
     },
     {
       sociedad: "DBC",
+      comisionista_id: "0000004276",
       comisionista: "ELIAS BARBA",
       division_code: "BO",
       division: "Botana",
@@ -126,10 +138,12 @@ const INFORME: ReportResponse = {
       monto: 4_000_000,
       comision: 459_105,
       comision_con_cobro: 100_000,
-      monto_calculable: 2_000_000
+      monto_calculable: 2_000_000,
+      monto_cobrado: 500_000
     },
     {
       sociedad: "DBC",
+      comisionista_id: "0000006001",
       comisionista: "JAIME ROJAS",
       division_code: "H",
       division: "Huevo",
@@ -143,7 +157,8 @@ const INFORME: ReportResponse = {
       monto: 2_000_000,
       comision: 250_000,
       comision_con_cobro: 0,
-      monto_calculable: 2_000_000
+      monto_calculable: 2_000_000,
+      monto_cobrado: 0
     }
   ],
   bloqueado: [

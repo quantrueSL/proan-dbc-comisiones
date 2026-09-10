@@ -79,7 +79,7 @@ _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 # SQL sirva a todas las combinaciones de filtro sin construir la cadena a trozos.
 _DETALLE_SQL = f"""
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista,
+  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista,
   tipo_venta, `set`, base_unidad, comision_estado,
   num_lineas, monto_total, cantidad_base_total,
   comision_total, comision_min_total, comision_max_total,
@@ -88,7 +88,7 @@ FROM {_TABLA}
 WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
   AND (@cedis IS NULL OR cedis = @cedis)
-  AND (@comisionista IS NULL OR comisionista = @comisionista)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
   AND (@sociedad IS NULL OR sociedad = @sociedad)
 """
 
@@ -175,8 +175,15 @@ def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
 # COLUMNAS (por división: división → CEDIS → comisionista → hoja; por
 # comisionista: comisionista → división → hoja), así que un solo array las sirve
 # a las dos y el navegador no tiene que pedir nada al abrir un nodo.
+#
+# `comisionista_id` VA JUNTO A `comisionista` (2026-09-10, mismo motivo que
+# `division_code`+`division`): el texto de `comisionista` puede repetirse para
+# dos personas reales (el Excel de PAN abrevia "RAUL SALDAÑA" para dos LIFNR
+# distintos) -- agrupar solo por texto los mezclaría en un nodo. El id es la
+# llave real; el texto es solo la etiqueta.
 DIMENSIONES_DESGLOSE = (
     "sociedad",
+    "comisionista_id",
     "comisionista",
     "division_code",
     "division",
@@ -255,7 +262,7 @@ def _build_report(
     *,
     division: str | None,
     cedis: str | None,
-    comisionista: str | None,
+    comisionista_id: str | None,
     sociedad: str | None,
     start_date: date,
     end_date: date,
@@ -271,7 +278,7 @@ def _build_report(
             "end": ("DATE", end_date),
             "division": ("STRING", division),
             "cedis": ("STRING", cedis),
-            "comisionista": ("STRING", comisionista),
+            "comisionista_id": ("STRING", comisionista_id),
             "sociedad": ("STRING", sociedad),
         },
     )
@@ -293,6 +300,10 @@ def _build_report(
     # clave lleva la unidad dentro.
     por_unidad: dict = defaultdict(float)
     nombre_division: dict = {}
+    # Se agrupa por `comisionista_id`, no por el texto: el mismo persona_cod
+    # llega con grafía distinta desde DBC y desde PAN (ver `v1_comision_dbc_gold_v2.sql`).
+    # Mismo patrón que `nombre_division` de arriba.
+    nombre_comisionista: dict = {}
 
     bloqueado: dict = defaultdict(
         lambda: {"num_lineas": 0, "monto": 0.0, "comision_min": 0.0, "comision_max": 0.0}
@@ -302,7 +313,7 @@ def _build_report(
     lineas_sin_importe = 0
 
     for fila in filas:
-        _acumular(por_comisionista, fila["comisionista"], fila)
+        _acumular(por_comisionista, fila["comisionista_id"], fila)
         _acumular(por_division, fila["division_code"], fila)
         _acumular(por_cedis, fila["cedis"], fila)
         _acumular(por_fecha, _iso(fila["fecha"]), fila)
@@ -314,6 +325,9 @@ def _build_report(
 
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
+
+        if fila["comisionista_id"] and fila["comisionista"]:
+            nombre_comisionista[fila["comisionista_id"]] = fila["comisionista"]
 
         if fila["base_unidad"] and fila["cantidad_base_total"] is not None:
             por_unidad[fila["base_unidad"]] += fila["cantidad_base_total"]
@@ -333,6 +347,10 @@ def _build_report(
     for entrada in divisiones:
         entrada["division"] = nombre_division.get(entrada["division_code"])
 
+    comisionistas = _ordenadas(por_comisionista, "comisionista_id")
+    for entrada in comisionistas:
+        entrada["comisionista"] = nombre_comisionista.get(entrada["comisionista_id"])
+
     monto = total["monto"]
     return {
         "cobertura": cobertura(),
@@ -342,7 +360,7 @@ def _build_report(
             "pct_calculable": (total["monto_calculable"] / monto * 100) if monto else 0.0,
             "lineas_sin_importe": lineas_sin_importe,
         },
-        "por_comisionista": _ordenadas(por_comisionista, "comisionista"),
+        "por_comisionista": comisionistas,
         "por_division": divisiones,
         "por_cedis": _ordenadas(por_cedis, "cedis"),
         "por_set": _ordenadas(por_set, "set"),
@@ -418,14 +436,14 @@ def build_report(
     *,
     division: str | None,
     cedis: str | None,
-    comisionista: str | None = None,
+    comisionista_id: str | None = None,
     sociedad: str | None = None,
     start_date: date,
     end_date: date,
 ) -> dict:
     """Punto de entrada de POST /v1/comisionesbi/report. Cacheado con TTL por
     combinación de filtros -- ver el comentario de arriba."""
-    clave = (division, cedis, comisionista, sociedad,
+    clave = (division, cedis, comisionista_id, sociedad,
              start_date.isoformat(), end_date.isoformat())
 
     ttl = _report_cache_ttl_seconds()
@@ -433,7 +451,7 @@ def build_report(
         # Desactivada de verdad: no se guarda nada, así que tampoco hay copia
         # caducada que servir si BigQuery falla.
         return _build_report(
-            division=division, cedis=cedis, comisionista=comisionista,
+            division=division, cedis=cedis, comisionista_id=comisionista_id,
             sociedad=sociedad, start_date=start_date, end_date=end_date,
         )
 
@@ -444,7 +462,7 @@ def build_report(
 
         try:
             informe = _build_report(
-                division=division, cedis=cedis, comisionista=comisionista,
+                division=division, cedis=cedis, comisionista_id=comisionista_id,
                 sociedad=sociedad, start_date=start_date, end_date=end_date,
             )
         except BigQueryError:

@@ -1,18 +1,24 @@
 -- =============================================================================
--- Comisiones DBC — v1: flujo de producto (vendido, facturado, cobrado)
+-- Comisiones DBC+PAN — v1: flujo de producto (vendido, facturado, cobrado)
 -- =============================================================================
 -- Proyecto BigQuery: proan-quantrue (región us-west4).
 -- Basado en Datos/Comisiones_DBC_Borrador_Tecnico.md, secciones 2, 3, 4, 9 y 11.
 --
 -- QUÉ SÍ incluye v1 (las 3 capas ya resueltas y validadas — sección 4):
---   - Vendido    (sap_VBAK + sap_VBAP)
---   - Facturado  (sap_2lis_13_vditm_billing_document_item)
+--   - Vendido    (sap_VBAK + sap_VBAP) -- SOLO DBC, ver sección 2 más abajo
+--   - Facturado  (sap_2lis_13_vditm_billing_document_item) -- DBC + PAN (huevo, alcance_pan)
 --   - Cobrado    (sap_bsad_cleared_items desde el 2026-09-07, antes sap_pago;
---                 UN RENGLÓN POR FACTURA, heredando CEDIS/oficina/división/canal
---                 de la factura vía billing_document porque la fuente de cobro
---                 no trae esos campos — sección 4.1. Ver el comentario de
+--                 UN RENGLÓN POR FACTURA, heredando CEDIS/oficina/división/canal/
+--                 sociedad de la factura vía billing_document porque la fuente de
+--                 cobro no trae esos campos — sección 4.1. Ver el comentario de
 --                 `pago_factura_v1` para el porqué del `GROUP BY` y el historial
 --                 de `sap_pago`)
+--
+-- 2026-09-10: SE AGREGA PAN a facturado/cobrado, a pedido de Silvana, para que
+-- esta vista deje de contradecir a Comisiones (que ya sumaba DBC+PAN desde el
+-- 2026-09-08). Ver la sección 2 (más abajo, CTE `alcance_pan`) para el criterio
+-- exacto -- es el MISMO que `v1_comision_dbc_completo_cobro.sql`, no uno nuevo.
+-- "Vendido" se queda solo-DBC (VBAP/VBAK no traen sociedad, ver esa sección).
 --
 -- QUÉ NO incluye v1 (a propósito, para no mezclar cifras sin validar con las
 -- que sí lo están):
@@ -35,15 +41,14 @@
 -- se migra "en limpio" al dataset que corresponda (los origen -- dm_cedis,
 -- dm_business_area, sap_* -- se siguen leyendo de donde ya viven).
 --
--- Filtro DBC: `company_code = 'DBC'` es el filtro maestro (sección 2),
--- confirmado como campo real en `sap_2lis_13_vditm_billing_document_item`
--- (facturado, por la consulta de referencia del senior) Y en
--- `sap_bsad_cleared_items` (`BUKRS_company_code`, verificado 2026-09-07) --
--- ambas ramas filtran directo por su propio `company_code`. En sap_VBAK/VBAP NO existe ese campo
--- (lo más parecido es `BUKRS_VF` en VBAK, semántica sin confirmar, no se
--- usó), así que "vendido" sigue dependiendo de la lista de plantas de la
--- sección 2 -- lista ya corregida contra datos reales (V3): faltaban H7DU y
--- H7TX.
+-- Filtro de sociedad: `company_code` (`sap_2lis_13_vditm_billing_document_item`,
+-- confirmado como campo real por la consulta de referencia del senior) y
+-- `BUKRS_company_code` (`sap_bsad_cleared_items`, verificado 2026-09-07) son el
+-- filtro maestro de facturado/cobrado -- DBC entra completo, PAN solo por
+-- `alcance_pan` (sección 2). En sap_VBAK/VBAP NO existe ese campo (lo más
+-- parecido es `BUKRS_VF` en VBAK, semántica sin confirmar, no se usó), así que
+-- "vendido" sigue dependiendo de la lista de plantas de la sección 2 (solo
+-- DBC) -- lista ya corregida contra datos reales (V3): faltaban H7DU y H7TX.
 --
 -- Confirmado por consulta de referencia del senior + INFORMATION_SCHEMA
 -- (facturado, 64 columnas): `material_number`, `sales_unit` (unidad de
@@ -335,11 +340,38 @@ SELECT * EXCEPT (rn) FROM (
 WHERE rn = 1;
 
 -- ─────────────────────────────────────────────────────────────────────────
--- 2) v1: flujo de producto DBC — vendido + facturado + cobrado, un renglón
---    por evento. `plantas_dbc` (21 plantas, sección 2) es el filtro para
---    "vendido" -- "facturado" y "cobrado" ya filtran directo por su propio
---    `company_code`, así que ahí la lista de plantas es redundante (no
---    estorba, pero el filtro real es `company_code = 'DBC'`).
+-- 2) v1: flujo de producto DBC+PAN — vendido + facturado + cobrado, un
+--    renglón por evento. `plantas_dbc` (21 plantas, sección 2) es el filtro
+--    para "vendido" -- "facturado" y "cobrado" ya filtran directo por su
+--    propio `company_code`.
+--
+-- 2026-09-10: SE AGREGA PAN (solo huevo), a pedido de Silvana, porque
+-- Comisiones ya suma DBC+PAN ($2,832.8 M) y esta vista se había quedado en
+-- solo-DBC ($770.7 M) -- las dos pantallas mostraban totales que parecían
+-- contradecirse sin serlo (ver conversación 2026-09-10). MISMO CRITERIO que
+-- `alcance_pan` de `v1_comision_dbc_completo_cobro.sql`, reutilizado tal
+-- cual, no reinventado: PAN entra SOLO en división Huevo y SOLO en las
+-- combinaciones planta+almacén+oficina que tienen tarifa oficial de PAN en
+-- `proan_ZTSD_OV_COM_H_20260829`.
+--
+-- OJO CON LA MAGNITUD, verificado con datos reales antes de tocar esto: la
+-- planta `PANF` factura $107,800 M en TOTAL (37,9 M líneas) -- PAN es una
+-- empresa mucho más grande que DBC, y casi todo ese negocio no tiene nada que
+-- ver con el huevo de DBC. Filtrar por `company_code = 'PAN'` a secas habría
+-- metido esos $107,800 M enteros. `alcance_pan` es lo que recorta esto a la
+-- rebanada real ($2,113.9 M), y por eso NO se toca ese criterio aquí.
+--
+-- "VENDIDO" (VBAP/VBAK) SE QUEDA SOLO-DBC, a propósito, no por omisión:
+-- ninguna de las dos tablas trae `company_code`, así que no hay forma
+-- confiable de separar líneas de PAN de las de DBC ahí (a diferencia de
+-- facturado/cobrado, que sí traen `company_code` en la fuente). Se podría
+-- aproximar por planta (`WERKS = 'PANF'`, que hoy solo aparece del lado PAN
+-- en facturado -- verificado, cero filas de DBC en esa planta), pero eso es
+-- una inferencia, no un dato confirmado, y "vendido" ya no cruza con
+-- facturado/cobrado por otras razones (numeración de documento distinta, ver
+-- [[flujo_producto_dbc_auditoria]] si existe esa nota) -- no se pierde
+-- comparabilidad real por dejarlo así. `sociedad` en esta rama es literal
+-- 'DBC' siempre.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.v1_flujo_producto_dbc` AS
 WITH plantas_dbc AS (
@@ -351,6 +383,15 @@ WITH plantas_dbc AS (
     'DBCF','DBC1','DBC3','H7LA','H7L1','H7L2','H7SL','H7SI','H7AG','H7SM',
     'H7QU','H7CE','H7SA','H7MI','H7MO','H7UR','H7ZA','H7IR','H7SJ','H7DU','H7TX'
   ]) AS planta
+),
+
+-- Mismo criterio, misma tabla, que `alcance_pan` en
+-- `v1_comision_dbc_completo_cobro.sql` -- no se reinventa el filtro de PAN en
+-- dos sitios distintos que puedan divergir.
+alcance_pan AS (
+  SELECT DISTINCT WERKS, LGORT, VKBUR
+  FROM `proan-quantrue.D00_SANDBOX.proan_ZTSD_OV_COM_H_20260829`
+  WHERE BUKRS = 'PAN'
 ),
 
 -- `sap_2lis_13_vditm_billing_document_item` es a nivel LÍNEA (lo dice el
@@ -369,10 +410,15 @@ WITH plantas_dbc AS (
 -- distribution_channel propios de sap_pago -- sap_bsad_cleared_items (la
 -- nueva fuente) no trae un campo de canal, y su GSBER llega vacío casi
 -- siempre en las cuentas que usamos.
+-- `sociedad` (2026-09-10) viaja con el sitio porque las dos nacen de la misma
+-- línea de factura -- así "cobrado" hereda de qué sociedad es el pago sin
+-- tener que volver a tocar `sap_bsad_cleared_items` (que no trae sociedad
+-- propia confiable).
 factura_sitio_v1 AS (
   SELECT * EXCEPT (rn) FROM (
     SELECT
       billing_document,
+      company_code AS sociedad,
       receiving_plant,
       storage_location,
       sales_office,
@@ -395,6 +441,15 @@ factura_sitio_v1 AS (
 -- (ratio 1,00; ninguno por encima ni por debajo), mientras contra el neto
 -- salía un p99 de 1,16 — que era el IVA, no un sobrepago. Prorratear contra el
 -- neto habría inflado las cajas cobradas hasta un 16%.
+--
+-- 2026-09-10: el WHERE ahora es el MISMO criterio DBC+PAN(alcance_pan) que
+-- `facturas` en `v1_comision_dbc_completo_cobro.sql` -- este CTE es también el
+-- filtro real de qué facturas puede "encontrar" `pago_factura_v1` de aquí en
+-- adelante (ver el nuevo `WHERE ... IN (SELECT billing_document FROM
+-- factura_totales_v1)` de ese CTE, más abajo): así un pago de PAN fuera de
+-- huevo/alcance_pan (que puede ser cualquiera de los $107,800 M de PANF que no
+-- son huevo de la lista oficial) no se cuela disfrazado de "cobrado sin sitio
+-- conocido" como antes pasaba con el hueco de NULL -- simplemente no entra.
 factura_totales_v1 AS (
   SELECT
     billing_document,
@@ -402,7 +457,15 @@ factura_totales_v1 AS (
     SUM(CAST(amount_total_mxn AS FLOAT64)) AS con_impuestos,
     SUM(CAST(stockkeeping_units AS FLOAT64)) AS cajas
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
-  WHERE company_code = 'DBC'
+  WHERE (
+      company_code = 'DBC'
+      OR (company_code = 'PAN'
+          AND sales_division = 'H'
+          AND EXISTS (SELECT 1 FROM alcance_pan k
+                      WHERE k.WERKS = receiving_plant
+                        AND k.LGORT = storage_location
+                        AND k.VKBUR = sales_office))
+    )
   GROUP BY billing_document
 ),
 
@@ -425,22 +488,36 @@ factura_totales_v1 AS (
 -- de sumar cada renglón -- la única cifra defendible era la de una vez por
 -- factura, y con `sap_pago` no había cobros parciales reales (los 39.967
 -- pagos cuadraban exactos con su factura).
+-- 2026-09-10: `BUKRS_company_code IN ('DBC','PAN')` SOLO no bastaría -- BSAD
+-- de PAN trae compensaciones de TODO su negocio, no solo huevo/alcance_pan.
+-- El `AND ... IN (SELECT billing_document FROM factura_totales_v1)` es lo que
+-- de verdad acota: esa lista YA es DBC completo + PAN-huevo-alcance_pan (ver
+-- el CTE de arriba), así que un pago fuera de ese alcance simplemente no
+-- entra aquí -- no llega a existir la fila, en vez de colarse sin sitio
+-- conocido como antes. Esto también es el fix del hueco de `NULL` que se
+-- encontró el 2026-09-10 (pagos sin factura cruzada que se contaban igual que
+-- los confirmados): con este filtro, todo lo que sale de `pago_factura_v1`
+-- SIEMPRE tiene una fila en `factura_totales_v1`, así que el `LEFT JOIN` de
+-- más abajo ya no puede fallar y el `COALESCE(..., g.pagado)` queda como red
+-- de seguridad muerta, no como vía de escape real.
 pago_factura_v1 AS (
   SELECT
     VBELN_billing_document AS billing_document,
     MIN(AUGDT_clearing_dt) AS fecha,
     SUM(DMBTR_amount_in_local_currency) AS pagado
   FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
-  WHERE BUKRS_company_code = 'DBC'
+  WHERE BUKRS_company_code IN ('DBC', 'PAN')
     AND debit_lg
     AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
     AND AUGDT_clearing_dt >= '2026-01-01'
+    AND VBELN_billing_document IN (SELECT billing_document FROM factura_totales_v1)
   GROUP BY VBELN_billing_document
 )
 
 -- Vendido ---------------------------------------------------------------
 SELECT
   'vendido' AS fase,
+  'DBC' AS sociedad,                        -- VBAP/VBAK no traen company_code -- ver el porqué en el comentario de la sección 2, arriba
   CAST(k.ERDAT AS DATE) AS fecha,           -- confirmado vía INFORMATION_SCHEMA: ERDAT existe en ambas (VBAK y VBAP); se toma de la cabecera (k) por ser la fecha de creación del pedido
   CAST(p.VBELN AS STRING) AS documento,
   CAST(p.POSNR AS STRING) AS linea,
@@ -508,6 +585,7 @@ UNION ALL
 -- Facturado ---------------------------------------------------------------
 SELECT
   'facturado' AS fase,
+  f.company_code AS sociedad,
   CAST(f.billing_date AS DATE) AS fecha,
   CAST(f.billing_document AS STRING) AS documento,
   f.item_number AS linea,                    -- confirmado: item_number es el número de línea real (INFORMATION_SCHEMA)
@@ -549,20 +627,37 @@ LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = f.sales_office
-WHERE f.receiving_plant IN (SELECT planta FROM plantas_dbc)
-  AND f.company_code = 'DBC' --Revisar porque puede haber cosas que facture proteina                -- filtro maestro (sección 2), confirmado como campo real por la consulta de referencia del senior
+-- 2026-09-10: se agrega PAN (mismo criterio que `alcance_pan`/`facturas` de
+-- `v1_comision_dbc_completo_cobro.sql`) -- DBC sigue acotado por su lista de
+-- plantas; PAN se acota por división Huevo + combinación con tarifa oficial,
+-- NO por planta (su única planta, PANF, no está en `plantas_dbc`).
+WHERE (
+    (f.company_code = 'DBC' AND f.receiving_plant IN (SELECT planta FROM plantas_dbc))
+    OR (f.company_code = 'PAN'
+        AND f.sales_division = 'H'
+        AND EXISTS (SELECT 1 FROM alcance_pan k
+                    WHERE k.WERKS = f.receiving_plant
+                      AND k.LGORT = f.storage_location
+                      AND k.VKBUR = f.sales_office))
+  )
   AND CAST(f.billing_date AS DATE) BETWEEN '2026-01-01' AND CURRENT_DATE()  -- excluye años inválidos (2201/2202 — sección 2, pendiente #4)
 
 UNION ALL
 
 -- Cobrado / compensado ------------------------------------------------------
--- sap_bsad_cleared_items no trae CEDIS/oficina/planta/división/canal propios
--- confiables -- se heredan de la factura vía billing_document (factura_sitio_v1,
--- extendida el 2026-09-07). Tampoco llega a nivel material. Sí tiene su
--- propio `BUKRS_company_code` (equivalente a `company_code`), así que el
--- filtro DBC va directo en `pago_factura_v1` (si la factura de un pago no
--- hace match en `factura_sitio_v1`, ese pago entra igual, solo con
--- planta/almacén/oficina/división/CEDIS en NULL).
+-- sap_bsad_cleared_items no trae CEDIS/oficina/planta/división/canal/sociedad
+-- propios confiables -- se heredan de la factura vía billing_document
+-- (factura_sitio_v1, extendida el 2026-09-07 y con `sociedad` desde el
+-- 2026-09-10). Tampoco llega a nivel material. Sí tiene su propio
+-- `BUKRS_company_code`, pero eso es la sociedad del PAGO, no necesariamente
+-- la de la factura que salda (en la práctica siempre coinciden) -- por
+-- consistencia con las otras dos fases, `sociedad` aquí sale de la factura,
+-- igual que `division_code`/`canal_code`.
+--
+-- 2026-09-10: YA NO puede haber un pago sin factura cruzada -- `pago_factura_v1`
+-- ahora solo trae `billing_document` que SÍ están en `factura_totales_v1`
+-- (DBC completo + PAN-huevo-alcance_pan), así que el `LEFT JOIN` de
+-- `factura_sitio_v1` de aquí abajo siempre encuentra su sitio.
 --
 -- MISMA VARA QUE LAS OTRAS DOS FASES: el pago que registra SAP lleva impuestos
 -- y el `monto` de facturado es neto, así que aquí se devuelve el NETO
@@ -580,6 +675,7 @@ UNION ALL
 -- La fórmula está escrita para el día que haya cobros parciales de verdad.
 SELECT
   'cobrado' AS fase,
+  f.sociedad,                               -- heredada de la factura, ver el comentario de arriba
   g.fecha,
   CAST(g.billing_document AS STRING) AS documento,
   CAST(NULL AS STRING) AS linea,
@@ -592,7 +688,7 @@ SELECT
        WHEN dal.cedis IS NOT NULL THEN 'solo almacen'
        WHEN dma.cedis IS NOT NULL THEN 'lista de nombres'
        WHEN dco.cedis IS NOT NULL THEN 'solo oficina'
-  END AS cedis_origen,                      -- aquí planta, almacén y oficina vienen heredados de la factura, así que el pago cuya factura no cruza se queda sin nada que usar en ninguno de los cuatro escalones
+  END AS cedis_origen,                      -- aquí planta, almacén y oficina vienen heredados de la factura. PAN (2026-09-10) SIEMPRE sale NULL en los cuatro escalones a propósito: `dm_cedis` es el catálogo de DBC y no conoce los almacenes/oficinas de PAN (H7xx / 00xx propios) -- no es un hueco por resolver, PAN de verdad no tiene CEDIS DBC
   -- Almacén central: el cliente confirmó el 25/08/2026 que estos cuatro NO
   -- pasan por ningún CEDIS y NO generan comisión para nadie. No es que les
   -- falte el dato: es que la respuesta correcta es "ninguno". Son $832,4 M
@@ -608,11 +704,10 @@ SELECT
   CAST(NULL AS STRING) AS unidad,           -- por lo mismo: no hay unidad de venta que heredar
   t.cajas * SAFE_DIVIDE(g.pagado, t.con_impuestos) AS cantidad_cajas,
   COALESCE(t.neto * SAFE_DIVIDE(g.pagado, t.con_impuestos), g.pagado) AS monto,
-  -- FALSE solo si la factura no aparece en la tabla de facturación y no se pudo
-  -- pasar a neto: en ese caso el monto es el pagado con impuestos, que no se
-  -- compara con las otras fases. Hoy no pasa en ninguna de las 39.332 facturas
-  -- cobradas, pero si algún día pasa, el dinero se queda (no desaparece) y
-  -- queda marcado en vez de mezclarse.
+  -- FALSE solo si la factura no aparece en `factura_totales_v1` y no se pudo
+  -- pasar a neto -- desde el 2026-09-10 esto ya NO puede pasar de verdad
+  -- (`pago_factura_v1` solo trae billing_document que están ahí), se deja
+  -- como red de seguridad honesta en vez de asumir TRUE a ciegas.
   t.billing_document IS NOT NULL AS monto_confiable
 FROM pago_factura_v1 g
 LEFT JOIN factura_totales_v1 t ON t.billing_document = g.billing_document
@@ -642,6 +737,7 @@ LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.v1_flujo_producto_dbc_resumen_diario` AS
 SELECT
   fase,
+  sociedad,                                 -- 2026-09-10: DBC o PAN, ver el comentario de la sección 2
   fecha,
   division_code,
   division,
@@ -658,4 +754,4 @@ SELECT
   SUM(cantidad_cajas) AS cantidad_cajas_total,
   SUM(monto) AS monto_total
 FROM `proan-quantrue.ZZ_PRUEBAS.v1_flujo_producto_dbc`
-GROUP BY fase, fecha, division_code, division, cedis, tipo_venta, cedis_origen, unidad;
+GROUP BY fase, sociedad, fecha, division_code, division, cedis, tipo_venta, cedis_origen, unidad;

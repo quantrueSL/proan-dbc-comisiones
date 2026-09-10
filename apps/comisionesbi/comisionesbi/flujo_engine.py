@@ -30,6 +30,14 @@ TRES COSAS QUE ESTE MÓDULO TIENE QUE HACER BIEN, y que no son evidentes:
 
 Falta la cuarta capa, traspasos: depende de validar `sap_mseg` contra MB51, que
 está bloqueado por el código BWART pendiente del cliente.
+
+`sociedad` (2026-09-10): DBC o PAN, mismo alcance que Comisiones (PAN solo
+huevo, solo combinaciones con tarifa oficial -- ver `v1_flujo_producto_dbc.sql`
+sección 2 para el porqué). "Vendido" es siempre 'DBC' -- VBAP/VBAK no traen
+sociedad, así que esa fase no lleva PAN (limitación de la fuente, no un
+pendiente de este módulo). Se agregó porque Comisiones ya sumaba DBC+PAN
+($2,832.8 M) y esta pantalla se había quedado en solo-DBC ($770.7 M): los dos
+totales parecían contradecirse sin serlo.
 """
 
 from __future__ import annotations
@@ -50,7 +58,7 @@ _UNIDAD_MANEJO = {"H": "caja", "IA": "saco", "BO": "paquete", "A": "pieza", "L":
 # para todas las combinaciones, sin construir la cadena a trozos.
 _DETALLE_SQL = f"""
 SELECT
-  fase, fecha, division_code, division, cedis, tipo_venta, unidad,
+  fase, sociedad, fecha, division_code, division, cedis, tipo_venta, unidad,
   almacen_central, division_en_operacion,
   num_lineas, cantidad_total, cantidad_cajas_total, monto_total
 FROM {_TABLA}
@@ -58,6 +66,7 @@ WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
   AND (@cedis IS NULL OR cedis = @cedis)
   AND (@tipo_venta IS NULL OR tipo_venta = @tipo_venta)
+  AND (@sociedad IS NULL OR sociedad = @sociedad)
 """
 
 # La cobertura se calcula sobre la tabla ENTERA, sin los filtros de fecha: "hasta
@@ -115,6 +124,7 @@ def build_flujo(
     division: str | None,
     cedis: str | None,
     tipo_venta: str | None = None,
+    sociedad: str | None = None,
     start_date: date,
     end_date: date,
 ) -> dict:
@@ -128,6 +138,11 @@ def build_flujo(
     pantalla deja pulsar sobre ellas para filtrar el resto; el nombre de la
     división viaja junto a su código para que la interfaz pueda enseñar "Huevo"
     y filtrar por "H" sin tener que cruzar nada.
+
+    `sociedad` (2026-09-10, DBC o PAN) se agrega junto con las demás porque
+    "vendido" es siempre DBC pero facturado/cobrado ya traen PAN (huevo) --
+    sin este desglose, alguien que compare esta pantalla con Comisiones no
+    tiene forma de ver por qué el total no es idéntico entre fases.
     """
     filas = run_query(
         _DETALLE_SQL,
@@ -138,6 +153,7 @@ def build_flujo(
             "division": ("STRING", division),
             "cedis": ("STRING", cedis),
             "tipo_venta": ("STRING", tipo_venta),
+            "sociedad": ("STRING", sociedad),
         },
     )
 
@@ -146,6 +162,7 @@ def build_flujo(
     por_cedis: dict = defaultdict(_nuevo)
     por_division: dict = defaultdict(_nuevo)
     por_tipo_venta: dict = defaultdict(_nuevo)
+    por_sociedad: dict = defaultdict(_nuevo)
     nombre_division: dict = {}
     # Cantidad por unidad de manejo (punto 2 del docstring): la clave lleva
     # división Y unidad, para que la tabla pueda distinguir cajas de huevo de
@@ -183,6 +200,7 @@ def build_flujo(
         _acumular(por_cedis, (fila["cedis"], fase), fila)
         _acumular(por_division, (fila["division_code"], fase), fila)
         _acumular(por_tipo_venta, (fila["tipo_venta"], fase), fila)
+        _acumular(por_sociedad, (fila["sociedad"], fase), fila)
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
         unidad_manejo = _UNIDAD_MANEJO.get(fila["division_code"])
@@ -217,6 +235,7 @@ def build_flujo(
         "por_cedis": _ordenadas(por_cedis, "cedis"),
         "por_division": divisiones,
         "por_tipo_venta": _ordenadas(por_tipo_venta, "tipo_venta"),
+        "por_sociedad": _ordenadas(por_sociedad, "sociedad"),
         "cantidad_por_unidad": [
             {
                 "fase": fase,

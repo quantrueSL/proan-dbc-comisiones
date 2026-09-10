@@ -51,33 +51,57 @@ WITH cedis_resuelto AS (
 --
 -- Con esta llave desaparece la ambigüedad sola: 406 filas, 0 combinaciones con
 -- más de un comisionista. Por eso no hace falta ninguna excepción manual.
+--
+-- NOMBRE CANÓNICO POR ID (2026-09-10): `DBC_dim_comisionista.persona` es texto
+-- suelto de cada hoja de Excel del cliente, y DBC y PAN escriben distinto el
+-- nombre de la MISMA persona (persona_cod idéntico) -- ej. "AGUSTIN JAIMES
+-- MENDOZA" en DBC vs "AGUSTIN JAIMES" en PAN. Agrupar por ese texto (como
+-- hacían los filtros y `por_comisionista`) partía a la persona en dos filas.
+-- `dm_vendors` (maestro de proveedores SAP) trae un `razon_social` único por
+-- LIFNR -- verificado: cubre 31 de los 32 persona_cod de este dataset, y
+-- donde el Excel de PAN colapsaba a dos personas reales en el mismo texto
+-- ("RAUL SALDAÑA" para persona_cod 7395 Y 9401), `dm_vendors` las distingue
+-- bien (LOZANO vs FRANCO). Fallback a `persona` del Excel para el único LIFNR
+-- sin cobertura (55947, segundo código de OROL).
 comisionista_src AS (
-  SELECT sociedad, division, oficina, persona_cod, persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
-  WHERE NULLIF(TRIM(oficina), '') IS NOT NULL
+  SELECT
+    c.sociedad, c.division, c.oficina,
+    LPAD(TRIM(c.persona_cod), 10, '0')      AS comisionista_id,
+    COALESCE(v.razon_social, c.persona)     AS persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista` c
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
+  WHERE NULLIF(TRIM(c.oficina), '') IS NOT NULL
 ),
 -- La asignación va POR SOCIEDAD + OFICINA -- una persona cubre todas las
 -- divisiones de su oficina (los pagos de BSAK lo confirman: el mismo LIFNR
 -- cobra huevo, vuala, croqueta y leche) -- y es lo que da más cobertura: por
 -- oficina cruzan 222 de las 255 combinaciones que trae la facturación, contra
 -- 198 por oficina+división y 136 exigiendo la llave completa.
+-- `s.comisionista_id` va calificado en el HAVING a propósito: sin el
+-- prefijo, BigQuery lo resuelve al alias de arriba (ANY_VALUE, un agregado) y
+-- falla con "Aggregations of aggregations are not allowed".
 comisionista_oficina AS (
-  SELECT sociedad, oficina, ANY_VALUE(persona) AS persona
-  FROM comisionista_src
+  SELECT sociedad, oficina, ANY_VALUE(s.comisionista_id) AS comisionista_id, ANY_VALUE(s.persona) AS persona
+  FROM comisionista_src s
   GROUP BY sociedad, oficina
-  HAVING COUNT(DISTINCT persona_cod) = 1
+  HAVING COUNT(DISTINCT s.comisionista_id) = 1
 ),
 -- Solo baja a división donde la oficina sola no alcanza: son 3 casos, las
 -- oficinas 0123/0171/0180 de OROL, que tiene dos códigos de proveedor para la
 -- misma empresa (15490 en botana, 55947 en croqueta). Con la división, esas 6
 -- combinaciones resuelven todas.
 comisionista_oficina_division AS (
-  SELECT c.sociedad, c.oficina, c.division, ANY_VALUE(c.persona) AS persona
+  SELECT c.sociedad, c.oficina, c.division,
+         ANY_VALUE(c.comisionista_id) AS comisionista_id, ANY_VALUE(c.persona) AS persona
   FROM comisionista_src c
   WHERE NOT EXISTS (SELECT 1 FROM comisionista_oficina o
                     WHERE o.sociedad = c.sociedad AND o.oficina = c.oficina)
   GROUP BY c.sociedad, c.oficina, c.division
-  HAVING COUNT(DISTINCT c.persona_cod) = 1
+  HAVING COUNT(DISTINCT c.comisionista_id) = 1
 ),
 
 base AS (
@@ -92,6 +116,7 @@ base AS (
     -- llave es almacén+oficina, no división+oficina+SET+tipo de venta como la
     -- de tarifa, y sin almacén no se puede mostrar cuál falta.
     t.almacen,
+    COALESCE(co.comisionista_id, cod.comisionista_id)         AS comisionista_id,
     COALESCE(co.persona, cod.persona)                        AS comisionista,
     t.tipo_venta,
     t.set_material                                           AS `set`,
@@ -126,7 +151,7 @@ base AS (
         AND cod.division = t.division
 )
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista, tipo_venta, `set`,
+  fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista, tipo_venta, `set`,
   base_unidad, comision_estado,
   CAST(NULL AS STRING) AS tipo_venta_origen,
   COUNT(*)                    AS num_lineas,
@@ -139,5 +164,5 @@ SELECT
   SUM(monto_cobrado)           AS monto_cobrado,
   COUNTIF(sin_importe)         AS lineas_sin_importe
 FROM base
-GROUP BY fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista, tipo_venta, `set`,
+GROUP BY fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista, tipo_venta, `set`,
          base_unidad, comision_estado;

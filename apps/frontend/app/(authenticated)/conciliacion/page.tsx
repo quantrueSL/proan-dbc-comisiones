@@ -43,7 +43,7 @@ export default async function ConciliacionPage() {
   try {
     response = await getComisionesReconciliation({
       division: null,
-      comisionista: null,
+      comisionista_id: null,
       start_date: desdeISO,
       end_date: hastaISO
     });

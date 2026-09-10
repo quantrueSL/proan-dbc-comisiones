@@ -16,6 +16,7 @@ type SearchParams = {
   division?: string;
   cedis?: string;
   tipo_venta?: string;
+  sociedad?: string;
 };
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -56,6 +57,7 @@ export default async function FlujoProductoPage({ searchParams }: { searchParams
   const division = searchParams.division?.trim() || null;
   const cedis = searchParams.cedis?.trim() || null;
   const tipoVenta = searchParams.tipo_venta?.trim() || null;
+  const sociedad = searchParams.sociedad?.trim() || null;
 
   let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let flujo: FlujoResponse = EMPTY_FLUJO;
@@ -64,7 +66,7 @@ export default async function FlujoProductoPage({ searchParams }: { searchParams
   // Las dos en paralelo: son independientes y el sidecar arranca en frío.
   const [catalogo, movimientos] = await Promise.allSettled([
     getComisionesCatalog(),
-    getFlujoProducto({ division, cedis, tipo_venta: tipoVenta, start_date: desde, end_date: hasta })
+    getFlujoProducto({ division, cedis, tipo_venta: tipoVenta, sociedad, start_date: desde, end_date: hasta })
   ]);
 
   if (catalogo.status === "fulfilled") {
@@ -85,7 +87,7 @@ export default async function FlujoProductoPage({ searchParams }: { searchParams
       initialCatalog={catalog}
       initialError={error}
       initialFlujo={flujo}
-      filtros={{ desde, hasta, division, cedis, tipoVenta }}
+      filtros={{ desde, hasta, division, cedis, tipoVenta, sociedad }}
     />
   );
 }

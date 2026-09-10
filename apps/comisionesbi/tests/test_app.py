@@ -78,7 +78,7 @@ def test_reconciliation_diario_devuelve_el_resultado_del_motor(monkeypatch):
 
     response = client.post(
         "/v1/comisionesbi/reconciliation/diario",
-        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista": "FLORENTINO GONZALEZ GARCIA"},
+        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista_id": "0000001019"},
     )
 
     assert response.status_code == 200
@@ -98,7 +98,7 @@ def test_reconciliation_factura_devuelve_el_resultado_del_motor(monkeypatch):
 
     response = client.post(
         "/v1/comisionesbi/reconciliation/factura",
-        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista": "FLORENTINO GONZALEZ GARCIA"},
+        json={"start_date": "2026-04-25", "end_date": "2026-04-30", "comisionista_id": "0000001019"},
     )
 
     assert response.status_code == 200

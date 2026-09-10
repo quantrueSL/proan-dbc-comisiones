@@ -84,7 +84,7 @@ _TABLA_DIM_PERIODO = "`proan-quantrue.ZZ_PRUEBAS.DBC_dim_periodo_pago`"
 _DETALLE_SQL = f"""
 SELECT
   d.sociedad, p.periodo_inicio AS semana, p.periodo_fin, d.division_code, d.division, d.cedis,
-  d.oficina, d.comisionista, d.tipo_venta, d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa,
+  d.oficina, d.comisionista_id, d.comisionista, d.tipo_venta, d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa,
   ANY_VALUE(d.tarifa)            AS tarifa,
   SUM(d.num_lineas)              AS num_lineas,
   SUM(d.cantidad_venta_total)    AS cantidad_venta_total,
@@ -96,9 +96,9 @@ FROM {_TABLA_DIARIA} d
 JOIN {_TABLA_DIM_PERIODO} p ON p.fecha = d.fecha
 WHERE d.fecha BETWEEN @start AND @end
   AND (@division IS NULL OR d.division_code = @division)
-  AND (@comisionista IS NULL OR d.comisionista = @comisionista)
+  AND (@comisionista_id IS NULL OR d.comisionista_id = @comisionista_id)
 GROUP BY p.periodo_inicio, p.periodo_fin, d.sociedad, d.division_code, d.division, d.cedis, d.oficina,
-         d.comisionista, d.tipo_venta, d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa
+         d.comisionista_id, d.comisionista, d.tipo_venta, d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa
 """
 
 # Pago real (BSAK) por sociedad+comisionista+división+periodo -- ver
@@ -113,11 +113,11 @@ GROUP BY p.periodo_inicio, p.periodo_fin, d.sociedad, d.division_code, d.divisio
 # filtrando por `periodo` (no por un día real dentro de él): un pago de BSAK
 # es un solo importe por periodo completo, no hay un día más fino al que bajar.
 _DETALLE_PAGO_SQL = f"""
-SELECT sociedad, comisionista, division_code, periodo, periodo_fin, pago_real
+SELECT sociedad, comisionista_id, comisionista, division_code, periodo, periodo_fin, pago_real
 FROM {_TABLA_PAGO}
 WHERE periodo BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
-  AND (@comisionista IS NULL OR comisionista = @comisionista)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
 """
 
 # Mismas columnas que `_DETALLE_SQL` pero por día (`fecha`), no por periodo de
@@ -132,14 +132,14 @@ WHERE periodo BETWEEN @start AND @end
 # dos sociedades se mezclan en una sola hoja del Excel.
 _DETALLE_DIARIO_SQL = f"""
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, comisionista, tipo_venta,
+  fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
   matnr, descripcion, unidad_venta, unidad_tarifa, tarifa,
   num_lineas, cantidad_venta_total, monto_total, cantidad_base_total,
   comision_total, lineas_sin_comision
 FROM {_TABLA_DIARIA}
 WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
-  AND (@comisionista IS NULL OR comisionista = @comisionista)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
   AND (@sociedad IS NULL OR sociedad = @sociedad)
 """
 
@@ -152,14 +152,14 @@ WHERE fecha BETWEEN @start AND @end
 _DETALLE_FACTURA_SQL = f"""
 SELECT
   billing_document, item_number, fecha, sociedad, division_code, division, cedis,
-  oficina, comisionista, tipo_venta, matnr, descripcion, unidad_venta,
+  oficina, comisionista_id, comisionista, tipo_venta, matnr, descripcion, unidad_venta,
   cantidad_venta, unidad_tarifa, cantidad_base, tarifa, monto, comision,
   comision_estado, se_cobro, monto_cobrado, cantidad_cobrada,
   comision_cobrada, fecha_cobro
 FROM {_TABLA_FACTURA}
 WHERE fecha BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
-  AND (@comisionista IS NULL OR comisionista = @comisionista)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
   AND (@sociedad IS NULL OR sociedad = @sociedad)
 """
 
@@ -205,7 +205,7 @@ def _nuevo_comisionista() -> dict:
 def build_conciliacion(
     *,
     division: str | None,
-    comisionista: str | None,
+    comisionista_id: str | None,
     start_date: date,
     end_date: date,
 ) -> dict:
@@ -232,7 +232,7 @@ def build_conciliacion(
             "start": ("DATE", start_date),
             "end": ("DATE", end_date),
             "division": ("STRING", division),
-            "comisionista": ("STRING", comisionista),
+            "comisionista_id": ("STRING", comisionista_id),
         },
     )
     filas_pago = run_query(
@@ -242,15 +242,22 @@ def build_conciliacion(
             "start": ("DATE", start_date),
             "end": ("DATE", end_date),
             "division": ("STRING", division),
-            "comisionista": ("STRING", comisionista),
+            "comisionista_id": ("STRING", comisionista_id),
         },
     )
 
     por_comisionista: dict = defaultdict(_nuevo_comisionista)
     nombre_division: dict = {}
+    # Se agrupa por `comisionista_id`, no por el texto -- el mismo persona_cod
+    # llega con grafía distinta desde el Excel de DBC y el de PAN (ver
+    # `v1_comision_dbc_gold_v2.sql`). La sociedad SÍ se queda en la llave: la
+    # misma persona puede tener oficinas en DBC y en PAN con pagos y cálculos
+    # distintos, y eso no debe mezclarse (ver
+    # test_las_dos_sociedades_del_mismo_comisionista_no_se_mezclan).
+    nombre_comisionista: dict = {}
 
     for fila in filas:
-        clave = (fila["sociedad"], fila["comisionista"], fila["division_code"])
+        clave = (fila["sociedad"], fila["comisionista_id"], fila["division_code"])
         c = por_comisionista[clave]
         c["num_lineas"] += fila["num_lineas"] or 0
         c["monto_total"] += fila["monto_total"] or 0.0
@@ -263,20 +270,25 @@ def build_conciliacion(
         c["tiene_calculo"] = True
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
+        if fila["comisionista_id"] and fila["comisionista"]:
+            nombre_comisionista[fila["comisionista_id"]] = fila["comisionista"]
 
     for fila in filas_pago:
-        clave = (fila["sociedad"], fila["comisionista"], fila["division_code"])
+        clave = (fila["sociedad"], fila["comisionista_id"], fila["division_code"])
         c = por_comisionista[clave]
         # `pago_real` sale de una columna NUMERIC en BigQuery (DMBTR de BSAK)
         # y llega como Decimal, no float -- float() explícito para poder
         # sumarlo con el resto de la aritmética del módulo.
         c["pago_real"] += float(fila["pago_real"] or 0.0)
         c["tiene_pago"] = True
+        if fila["comisionista_id"] and fila["comisionista"]:
+            nombre_comisionista[fila["comisionista_id"]] = fila["comisionista"]
 
     filas_comisionista = [
         {
             "sociedad": sociedad,
-            "comisionista": comisionista_,
+            "comisionista_id": comisionista_id_,
+            "comisionista": nombre_comisionista.get(comisionista_id_),
             "division_code": division_code,
             "division": nombre_division.get(division_code),
             "num_lineas": datos["num_lineas"],
@@ -305,7 +317,7 @@ def build_conciliacion(
             "pago_sin_calculo": datos["tiene_pago"] and not datos["tiene_calculo"],
             "calculo_sin_pago": datos["tiene_calculo"] and not datos["tiene_pago"],
         }
-        for (sociedad, comisionista_, division_code), datos in por_comisionista.items()
+        for (sociedad, comisionista_id_, division_code), datos in por_comisionista.items()
     ]
     # Por pagado de mayor a menor (pedido de Silvana, 2026-09-09 -- reemplaza
     # el orden anterior por diferencia absoluta). Sin pago (None) al final,
@@ -335,6 +347,7 @@ def build_conciliacion(
         "pago_semanal": [
             {
                 "sociedad": fila["sociedad"],
+                "comisionista_id": fila["comisionista_id"],
                 "comisionista": fila["comisionista"],
                 "division_code": fila["division_code"],
                 "periodo": _iso(fila["periodo"]),
@@ -350,7 +363,7 @@ def detalle_diario(
     *,
     sociedad: str | None,
     division: str | None,
-    comisionista: str | None,
+    comisionista_id: str | None,
     start_date: date,
     end_date: date,
 ) -> list[dict]:
@@ -372,7 +385,7 @@ def detalle_diario(
             "start": ("DATE", start_date),
             "end": ("DATE", end_date),
             "division": ("STRING", division),
-            "comisionista": ("STRING", comisionista),
+            "comisionista_id": ("STRING", comisionista_id),
             "sociedad": ("STRING", sociedad),
         },
     )
@@ -383,7 +396,7 @@ def detalle_factura(
     *,
     sociedad: str | None,
     division: str | None,
-    comisionista: str | None,
+    comisionista_id: str | None,
     start_date: date,
     end_date: date,
 ) -> list[dict]:
@@ -402,7 +415,7 @@ def detalle_factura(
             "start": ("DATE", start_date),
             "end": ("DATE", end_date),
             "division": ("STRING", division),
-            "comisionista": ("STRING", comisionista),
+            "comisionista_id": ("STRING", comisionista_id),
             "sociedad": ("STRING", sociedad),
         },
     )

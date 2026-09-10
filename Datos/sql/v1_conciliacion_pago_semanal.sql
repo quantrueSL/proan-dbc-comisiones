@@ -231,10 +231,21 @@ pago AS (
 -- cada una, ej. Edgardo Trujillo cubre 5 oficinas en Huevo). El JOIN de
 -- abajo hace fan-out a propósito por `o.lifnr = p.LIFNR`: suma la comisión de
 -- TODAS las oficinas que ese comisionista cubre en esa división, no solo una.
+-- Nombre canónico por `dm_vendors` (2026-09-10, ver `v1_comision_dbc_gold_v2.sql`
+-- para el porqué y las cifras de cobertura): el LIFNR ya es la llave, esto solo
+-- corrige el texto que se enseña, que hoy discrepa entre la hoja de DBC y la de
+-- PAN para la misma persona.
 cod AS (
-  SELECT sociedad, LPAD(TRIM(persona_cod), 10, '0') AS lifnr, oficina, division, persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
-  WHERE NULLIF(TRIM(persona_cod), '') IS NOT NULL AND NULLIF(TRIM(oficina), '') IS NOT NULL
+  SELECT
+    c.sociedad, LPAD(TRIM(c.persona_cod), 10, '0') AS lifnr, c.oficina, c.division,
+    COALESCE(v.razon_social, c.persona) AS persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista` c
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
+  WHERE NULLIF(TRIM(c.persona_cod), '') IS NOT NULL AND NULLIF(TRIM(c.oficina), '') IS NOT NULL
 ),
 -- `cod.lifnr` va calificado en el HAVING a propósito: sin el prefijo, BigQuery
 -- resuelve `lifnr` al alias de abajo (ANY_VALUE) y falla por agregar un agregado.
@@ -246,6 +257,7 @@ oficina_lifnr AS (
 )
 SELECT
   p.sociedad,
+  p.LIFNR                                                  AS comisionista_id,
   ANY_VALUE(o.persona)                                     AS comisionista,
   p.division                                               AS division_code,
   p.desde                                                  AS periodo,

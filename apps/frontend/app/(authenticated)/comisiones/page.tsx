@@ -26,7 +26,7 @@ export default async function ComisionesPage() {
     getComisionesReport({
       division: null,
       cedis: null,
-      comisionista: null,
+      comisionista_id: null,
       start_date: DESDE,
       end_date: hoy
     })

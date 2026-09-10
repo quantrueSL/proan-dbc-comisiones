@@ -13,6 +13,7 @@ def _fila(
     sociedad="DBC",
     semana=date(2026, 8, 29),
     periodo_fin=date(2026, 9, 4),
+    comisionista_id=None,
     comisionista="EDGARDO TRUJILLO",
     division="IA",
     cedis="Leon 1",
@@ -30,6 +31,11 @@ def _fila(
     comision=1750.0,
     sin_comision=0,
 ):
+    # Sin `comisionista_id` explícito, se usa el texto como llave -- válido
+    # salvo en el test que prueba justo el caso real (mismo persona_cod, texto
+    # distinto entre DBC y PAN), que lo pasa a mano.
+    if comisionista_id is None:
+        comisionista_id = comisionista
     return {
         "sociedad": sociedad,
         "semana": semana,
@@ -38,6 +44,7 @@ def _fila(
         "division": {"IA": "Alimento", "H": "Huevo", "BO": "Botana"}.get(division, division),
         "cedis": cedis,
         "oficina": oficina,
+        "comisionista_id": comisionista_id,
         "comisionista": comisionista,
         "tipo_venta": tipo,
         "matnr": matnr,
@@ -57,14 +64,18 @@ def _fila(
 def _fila_pago(
     *,
     sociedad="DBC",
+    comisionista_id=None,
     comisionista="EDGARDO TRUJILLO",
     division="IA",
     periodo=date(2026, 8, 29),
     periodo_fin=date(2026, 9, 4),
     pago_real=1750.0,
 ):
+    if comisionista_id is None:
+        comisionista_id = comisionista
     return {
         "sociedad": sociedad,
+        "comisionista_id": comisionista_id,
         "comisionista": comisionista,
         "division_code": division,
         "periodo": periodo,
@@ -105,7 +116,7 @@ def cliente(monkeypatch):
 def _informe(**extra):
     parametros = {
         "division": None,
-        "comisionista": None,
+        "comisionista_id": None,
         "start_date": date(2026, 8, 1),
         "end_date": date(2026, 8, 31),
     }
@@ -300,6 +311,27 @@ def test_las_dos_sociedades_del_mismo_comisionista_no_se_mezclan(cliente):
     assert por_sociedad["PAN"]["pago_real"] == 9200.0
 
 
+def test_mismo_id_con_grafia_distinta_por_sociedad_sigue_separado_por_sociedad(cliente):
+    # El mismo persona_cod (4040, Genaro) llega con texto idéntico o distinto
+    # según la hoja de Excel -- lo que NO debe cambiar es que DBC y PAN quedan
+    # en filas separadas (ver test_las_dos_sociedades_del_mismo_comisionista_no_se_mezclan):
+    # la llave real es (sociedad, comisionista_id, division_code), no el texto.
+    cliente(
+        [
+            _fila(sociedad="DBC", comisionista_id="0000004040", comisionista="GENARO QUIROZ PEREZ",
+                  division="H", comision=500.0),
+            _fila(sociedad="PAN", comisionista_id="0000004040", comisionista="GENARO QUIROZ PEREZ",
+                  division="H", comision=9000.0),
+        ]
+    )
+
+    por_sociedad = {f["sociedad"]: f for f in _informe()["por_comisionista"]}
+
+    assert len(por_sociedad) == 2
+    assert por_sociedad["DBC"]["comision_total"] == 500.0
+    assert por_sociedad["PAN"]["comision_total"] == 9000.0
+
+
 def test_ordena_por_pagado_de_mayor_a_menor(cliente):
     # Pedido de Silvana (2026-09-09): a quién más se le pagó primero, no la
     # diferencia. Los importes de abajo se eligen para que el orden por pago
@@ -413,13 +445,13 @@ def test_el_detalle_trae_la_aritmetica_completa_del_producto(cliente):
 def test_los_filtros_viajan_como_parametros_y_no_pegados_al_sql(cliente):
     falso = cliente([_fila()])
 
-    _informe(division="IA", comisionista="EDGARDO TRUJILLO")
+    _informe(division="IA", comisionista_id="0000012345")
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
     assert valores["division"] == "IA"
-    assert valores["comisionista"] == "EDGARDO TRUJILLO"
-    assert "EDGARDO TRUJILLO" not in falso.llamadas[0][0]
+    assert valores["comisionista_id"] == "0000012345"
+    assert "0000012345" not in falso.llamadas[0][0]
 
 
 def test_un_rango_sin_datos_devuelve_estructura_vacia_pero_con_cobertura(cliente):
@@ -455,7 +487,7 @@ def test_detalle_diario_trae_una_fila_por_dia_sin_agregar_por_periodo(cliente):
     )
 
     filas = conciliacion_engine.detalle_diario(
-        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista_id="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     assert [f["fecha"] for f in filas] == ["2026-04-25", "2026-04-30", "2026-05-01"]
@@ -465,14 +497,14 @@ def test_detalle_diario_pasa_los_filtros_como_parametros(cliente):
     falso = cliente([_fila_diaria()])
 
     conciliacion_engine.detalle_diario(
-        sociedad="DBC", division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad="DBC", division="IA", comisionista_id="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
     assert valores["sociedad"] == "DBC"
     assert valores["division"] == "IA"
-    assert valores["comisionista"] == "EDGARDO TRUJILLO"
+    assert valores["comisionista_id"] == "EDGARDO TRUJILLO"
 
 
 # ─── Detalle de factura (trazabilidad máxima, con cobro) ──────────────────
@@ -500,7 +532,7 @@ def test_detalle_factura_trae_billing_document_e_item_number(cliente):
     cliente([_fila_factura(billing_document="2071163278", item_number="1")])
 
     filas = conciliacion_engine.detalle_factura(
-        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista_id="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     assert filas[0]["billing_document"] == "2071163278"
@@ -518,7 +550,7 @@ def test_detalle_factura_trae_cobro_por_linea(cliente):
     )
 
     filas = conciliacion_engine.detalle_factura(
-        sociedad=None, division=None, comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad=None, division=None, comisionista_id="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     cobrada = next(f for f in filas if f["se_cobro"])
@@ -534,11 +566,11 @@ def test_detalle_factura_pasa_los_filtros_como_parametros(cliente):
     falso = cliente([_fila_factura()])
 
     conciliacion_engine.detalle_factura(
-        sociedad="DBC", division="IA", comisionista="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
+        sociedad="DBC", division="IA", comisionista_id="EDGARDO TRUJILLO", start_date=date(2026, 4, 25), end_date=date(2026, 5, 1)
     )
 
     _, config = falso.llamadas[0]
     valores = {p.name: p.value for p in config.query_parameters}
     assert valores["sociedad"] == "DBC"
     assert valores["division"] == "IA"
-    assert valores["comisionista"] == "EDGARDO TRUJILLO"
+    assert valores["comisionista_id"] == "EDGARDO TRUJILLO"

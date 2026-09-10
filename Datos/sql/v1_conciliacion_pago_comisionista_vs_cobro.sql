@@ -89,11 +89,21 @@ pago AS (
 -- 2026-09-08: la fuente pasó a `DBC_dim_comisionista` con `sociedad='DBC'`.
 -- Con eso el conflicto de Celaya (0012/0083, Agustín vs. Genaro) desaparece
 -- solo: era la fila de PAN colándose por cruzar sin sociedad.
+-- Nombre canónico por `dm_vendors` (2026-09-10, ver `v1_comision_dbc_gold_v2.sql`
+-- para el porqué): el LIFNR ya identifica a la persona, esto solo corrige el
+-- texto que se enseña (el Excel del cliente discrepa entre DBC y PAN).
 cod AS (
-  SELECT LPAD(TRIM(persona_cod), 10, '0') AS lifnr, oficina, division, persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
-  WHERE sociedad = 'DBC'
-    AND NULLIF(TRIM(persona_cod), '') IS NOT NULL AND NULLIF(TRIM(oficina), '') IS NOT NULL
+  SELECT
+    LPAD(TRIM(c.persona_cod), 10, '0') AS lifnr, c.oficina, c.division,
+    COALESCE(v.razon_social, c.persona) AS persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista` c
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
+  WHERE c.sociedad = 'DBC'
+    AND NULLIF(TRIM(c.persona_cod), '') IS NOT NULL AND NULLIF(TRIM(c.oficina), '') IS NOT NULL
 ),
 -- `cod.lifnr` va calificado en el HAVING a propósito: sin el prefijo, BigQuery
 -- resuelve `lifnr` al alias de arriba (ANY_VALUE) y falla por agregar un agregado.

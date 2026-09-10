@@ -10,6 +10,7 @@ import type { ComisionDesgloseRow } from "@/types/comisiones";
 
 const hoja = (extra: Partial<ComisionDesgloseRow>): ComisionDesgloseRow => ({
   sociedad: "DBC",
+  comisionista_id: "0000004276",
   comisionista: "ELIAS BARBA",
   division_code: "H",
   division: "Huevo",
@@ -24,6 +25,7 @@ const hoja = (extra: Partial<ComisionDesgloseRow>): ComisionDesgloseRow => ({
   comision: 100_000,
   comision_con_cobro: 10_000,
   monto_calculable: 1_000_000,
+  monto_cobrado: 250_000,
   ...extra
 });
 
@@ -32,7 +34,7 @@ const hoja = (extra: Partial<ComisionDesgloseRow>): ComisionDesgloseRow => ({
 const FILAS: ComisionDesgloseRow[] = [
   hoja({}),
   hoja({ division_code: "BO", division: "Botana", base_unidad: "caja", set: "BOVUALA", cantidad_base: 500, comision: 40_000 }),
-  hoja({ comisionista: "JAIME ROJAS", cedis: "Queretaro", oficina: "0021", set: "HPORTALES", comision: 70_000 })
+  hoja({ comisionista_id: "0000006001", comisionista: "JAIME ROJAS", cedis: "Queretaro", oficina: "0021", set: "HPORTALES", comision: 70_000 })
 ];
 
 function pintar(filas = FILAS, niveles = NIVELES_POR_COMISIONISTA, extra = {}) {
@@ -83,6 +85,12 @@ describe("la cascada", () => {
     expect(texto(pintar([FILAS[0], FILAS[1]]))).toMatch(/\$140,000/);
   });
 
+  it("muestra el monto cobrado a la derecha de facturado, sumado igual que el resto", () => {
+    // Pedido de Silvana (2026-09-09). ELIAS BARBA suma sus dos divisiones:
+    // 250,000 + 250,000 = 500,000, aunque estén cerradas.
+    expect(texto(pintar([FILAS[0], FILAS[1]]))).toMatch(/\$500,000/);
+  });
+
   it("dice qué parte del facturado llegó a tener tarifa", () => {
     // Sin esto, un nodo con comisión baja no se distingue de uno bloqueado.
     const html = pintar([hoja({ monto: 1_000_000, monto_calculable: 250_000 })]);
@@ -109,7 +117,9 @@ describe("las jerarquías", () => {
   });
 
   it("por división baja hasta el comisionista pasando por el CEDIS", () => {
-    expect(NIVELES_POR_DIVISION.map((n) => n.clave(FILAS[0]))).toEqual(["H", "Leon 1", "ELIAS BARBA"]);
+    // La clave del nivel comisionista es el id, no el texto -- ver
+    // NIVEL_COMISIONISTA en comisiones-cascada.tsx.
+    expect(NIVELES_POR_DIVISION.map((n) => n.clave(FILAS[0]))).toEqual(["H", "Leon 1", "0000004276"]);
   });
 
   it("escribe la jerarquía a partir de los niveles, no a mano", () => {

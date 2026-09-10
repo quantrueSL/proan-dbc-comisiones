@@ -73,7 +73,7 @@ describe("cómo se llama al backend", () => {
     const filtros = {
       division: "H",
       cedis: "Leon 1",
-      comisionista: null,
+      comisionista_id: null,
       start_date: "2026-01-01",
       end_date: "2026-01-31"
     };
@@ -128,7 +128,7 @@ describe("cómo se llama al backend", () => {
 
     await getComisionesReconciliation({
       division: null,
-      comisionista: null,
+      comisionista_id: null,
       start_date: "2026-08-01",
       end_date: "2026-08-31"
     });
@@ -151,7 +151,7 @@ describe("errores", () => {
     responde(501, { detail: "Falta explorar FBL1N / sap_bsik_open_items." });
 
     await expect(
-      getComisionesReconciliation({ division: null, comisionista: null, start_date: "2026-08-01", end_date: "2026-08-31" })
+      getComisionesReconciliation({ division: null, comisionista_id: null, start_date: "2026-08-01", end_date: "2026-08-31" })
     ).rejects.toThrow("Falta explorar FBL1N / sap_bsik_open_items.");
   });
 

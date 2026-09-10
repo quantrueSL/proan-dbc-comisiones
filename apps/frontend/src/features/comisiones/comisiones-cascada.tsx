@@ -268,6 +268,7 @@ export function ComisionesCascada({
             <Cantidad totales={nodo.totales} />
           </td>
           <td className="n">{pesos(nodo.totales.monto)}</td>
+          <td className="n">{pesos(nodo.totales.monto_cobrado)}</td>
           <td className="n">
             {nodo.totales.monto
               ? `${decimal.format((nodo.totales.monto_calculable / nodo.totales.monto) * 100)}%`
@@ -293,6 +294,7 @@ export function ComisionesCascada({
             {columnaCedis ? <th>CEDIS</th> : null}
             <th className="n">Cantidad</th>
             <th className="n">Facturado</th>
+            <th className="n">Cobrado</th>
             <th className="n">Con tarifa</th>
             <th className="n">Comisión sobre facturación</th>
             <th className="n">Comisión sobre cobro</th>
@@ -317,7 +319,9 @@ export function ComisionesCascada({
 
 const NIVEL_COMISIONISTA: NivelCascada = {
   nombre: "Comisionista",
-  clave: (f) => f.comisionista,
+  // La llave es el id, no el texto: el mismo persona_cod llega con grafía
+  // distinta desde el Excel de DBC y el de PAN (ver `ComisionDesgloseRow`).
+  clave: (f) => f.comisionista_id,
   etiqueta: (f) => f.comisionista ?? "",
   vacio: "Sin comisionista asignado"
 };

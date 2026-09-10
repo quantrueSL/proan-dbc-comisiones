@@ -31,6 +31,9 @@ export type FlujoFilters = {
   division: string | null;
   cedis: string | null;
   tipo_venta?: string | null;
+  /** `DBC` o `PAN` (2026-09-10). "Vendido" es siempre DBC -- ver
+   *  `FlujoPorSociedadRow`. */
+  sociedad?: string | null;
   /** ISO `YYYY-MM-DD`: la tabla de origen es diaria. */
   start_date: string;
   end_date: string;
@@ -81,6 +84,13 @@ export type FlujoPorDivisionRow = FlujoTotales & {
 export type FlujoPorTipoVentaRow = FlujoTotales & { tipo_venta: string | null; fase: string };
 
 /**
+ * `DBC` o `PAN` (2026-09-10). "Vendido" sale siempre como `DBC` -- VBAP/VBAK
+ * no traen sociedad, así que esa fase no lleva PAN (ver flujo_engine.py).
+ * PAN aquí es solo huevo, mismo alcance que en Comisiones -- no "todo PAN".
+ */
+export type FlujoPorSociedadRow = FlujoTotales & { sociedad: string | null; fase: string };
+
+/**
  * Lo que la pantalla deja fuera: los cuatro almacenes centrales que no pasan
  * por ningún CEDIS. Viene calculado del backend y no escrito a mano, para que
  * la nota de la pantalla no envejezca mintiendo.
@@ -95,6 +105,7 @@ export type FlujoResponse = {
   por_cedis: FlujoPorCedisRow[];
   por_division: FlujoPorDivisionRow[];
   por_tipo_venta: FlujoPorTipoVentaRow[];
+  por_sociedad: FlujoPorSociedadRow[];
   cantidad_por_unidad: FlujoCantidadUnidadRow[];
 };
 
@@ -111,6 +122,7 @@ export const EMPTY_FLUJO: FlujoResponse = {
   por_cedis: [],
   por_division: [],
   por_tipo_venta: [],
+  por_sociedad: [],
   cantidad_por_unidad: []
 };
 
@@ -128,7 +140,7 @@ export type ReportFilters = {
   sociedad?: string | null;
   division: string | null;
   cedis: string | null;
-  comisionista: string | null;
+  comisionista_id: string | null;
   start_date: string;
   end_date: string;
 };
@@ -149,7 +161,11 @@ export type ComisionTotales = {
   monto_cobrado: number;
 };
 
-export type ComisionPorComisionista = ComisionTotales & { comisionista: string | null };
+export type ComisionPorComisionista = ComisionTotales & {
+  /** Llave real -- ver `ComisionDesgloseRow.comisionista_id`. */
+  comisionista_id: string | null;
+  comisionista: string | null;
+};
 export type ComisionPorSociedad = ComisionTotales & { sociedad: string | null };
 export type ComisionPorDivision = ComisionTotales & {
   division_code: string | null;
@@ -173,6 +189,10 @@ export type ComisionPorFecha = ComisionTotales & { fecha: string };
  */
 export type ComisionDesgloseRow = ComisionTotales & {
   sociedad: string | null;
+  /** LIFNR normalizado (10 dígitos) -- la llave real de agrupado/filtro.
+   *  `comisionista` es solo la etiqueta: el mismo persona_cod puede llegar con
+   *  grafía distinta desde el Excel de DBC y el de PAN. */
+  comisionista_id: string | null;
   comisionista: string | null;
   division_code: string | null;
   division: string | null;
@@ -279,7 +299,7 @@ export type ConciliacionFilters = {
    *  sociedades, y sin este filtro se mezclan en una sola hoja. */
   sociedad?: string | null;
   division: string | null;
-  comisionista: string | null;
+  comisionista_id: string | null;
   /** ISO `YYYY-MM-DD`. La tabla de origen agrupa por PERIODO DE PAGO, no
    *  semana a secas: normalmente sábado-viernes (7 días), pero se corta antes
    *  si cruza de mes (supuesto pendiente de confirmar con el cliente — ver
@@ -294,6 +314,8 @@ export type ConciliacionPorComisionista = {
   /** `DBC` o `PAN`. La misma persona puede tener oficinas y pago distintos en
    *  cada una (ver `DBC_dim_comisionista`) -- cada sociedad es su propia fila. */
   sociedad: string | null;
+  /** LIFNR normalizado -- ver `ComisionDesgloseRow.comisionista_id`. */
+  comisionista_id: string | null;
   comisionista: string | null;
   division_code: string | null;
   division: string | null;
@@ -335,6 +357,7 @@ export type ConciliacionDetalleRow = {
   division: string | null;
   cedis: string | null;
   oficina: string | null;
+  comisionista_id: string | null;
   comisionista: string | null;
   tipo_venta: string | null;
   matnr: string;
@@ -359,6 +382,7 @@ export type ConciliacionDetalleRow = {
  *  Pagado al lado de Calculado en cada periodo, no solo el total del rango. */
 export type ConciliacionPagoPeriodoRow = {
   sociedad: string | null;
+  comisionista_id: string | null;
   comisionista: string | null;
   division_code: string | null;
   periodo: string;
@@ -400,6 +424,7 @@ export type ConciliacionFacturaRow = {
   division: string | null;
   cedis: string | null;
   oficina: string | null;
+  comisionista_id: string | null;
   comisionista: string | null;
   tipo_venta: string | null;
   matnr: string;

@@ -37,23 +37,36 @@ WITH cedis_resuelto AS (
 -- Comisionista por oficina -- misma cadena que `DBC_gold_comision_diaria_v2`
 -- (2026-09-08): sale de `DBC_dim_comisionista`, cruzando por la sociedad de la
 -- factura (`t.bukrs`) -- ver ese archivo para el porqué.
--- Copiada tal cual de ese archivo, ver ahí el detalle y las mediciones.
+-- Copiada tal cual de ese archivo, ver ahí el detalle y las mediciones,
+-- incluido el nombre canónico por `dm_vendors` (2026-09-10, ver ese archivo).
 comisionista_src AS (
-  SELECT sociedad, division, oficina, persona_cod, persona
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
-  WHERE NULLIF(TRIM(oficina), '') IS NOT NULL
+  SELECT
+    c.sociedad, c.division, c.oficina,
+    LPAD(TRIM(c.persona_cod), 10, '0')      AS comisionista_id,
+    COALESCE(v.razon_social, c.persona)     AS persona
+  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista` c
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
+  WHERE NULLIF(TRIM(c.oficina), '') IS NOT NULL
 ),
+-- `s.comisionista_id` va calificado en el HAVING a propósito: sin el
+-- prefijo, BigQuery lo resuelve al alias de arriba (ANY_VALUE, un agregado) y
+-- falla con "Aggregations of aggregations are not allowed".
 comisionista_oficina AS (
-  SELECT sociedad, oficina, ANY_VALUE(persona) AS persona
-  FROM comisionista_src
-  GROUP BY sociedad, oficina HAVING COUNT(DISTINCT persona_cod) = 1
+  SELECT sociedad, oficina, ANY_VALUE(s.comisionista_id) AS comisionista_id, ANY_VALUE(s.persona) AS persona
+  FROM comisionista_src s
+  GROUP BY sociedad, oficina HAVING COUNT(DISTINCT s.comisionista_id) = 1
 ),
 comisionista_oficina_division AS (
-  SELECT c.sociedad, c.oficina, c.division, ANY_VALUE(c.persona) AS persona
+  SELECT c.sociedad, c.oficina, c.division,
+         ANY_VALUE(c.comisionista_id) AS comisionista_id, ANY_VALUE(c.persona) AS persona
   FROM comisionista_src c
   WHERE NOT EXISTS (SELECT 1 FROM comisionista_oficina o
                     WHERE o.sociedad = c.sociedad AND o.oficina = c.oficina)
-  GROUP BY c.sociedad, c.oficina, c.division HAVING COUNT(DISTINCT c.persona_cod) = 1
+  GROUP BY c.sociedad, c.oficina, c.division HAVING COUNT(DISTINCT c.comisionista_id) = 1
 ),
 -- Unidad y cantidad de manejo por material -- `stockkeeping_units` (no
 -- `invoiced_quantity`/`sales_unit` crudos, que vienen mezclados CS/PAQ/PZA/
@@ -82,6 +95,7 @@ SELECT
   ba.business_area_name                                     AS division,
   cr.cedis,
   t.oficina_ventas                                          AS oficina,
+  COALESCE(co.comisionista_id, cod.comisionista_id)         AS comisionista_id,
   COALESCE(co.persona, cod.persona)                         AS comisionista,
   t.tipo_venta,
   t.matnr,

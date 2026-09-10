@@ -33,7 +33,7 @@ AS
 SELECT
   p.periodo_inicio AS semana,
   ANY_VALUE(p.periodo_fin) AS periodo_fin,
-  d.sociedad, d.division_code, d.division, d.cedis, d.oficina, d.comisionista, d.tipo_venta,
+  d.sociedad, d.division_code, d.division, d.cedis, d.oficina, d.comisionista_id, d.comisionista, d.tipo_venta,
   d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa,
   -- Una sola tarifa por grupo: ya viene fija por división+oficina+SET+canal.
   -- Verificado 2026-09-02 (MIN vs MAX antes de colapsar): 0 grupos con más de
@@ -48,5 +48,5 @@ SELECT
   SUM(d.lineas_sin_comision)     AS lineas_sin_comision
 FROM `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario` d
 JOIN `proan-quantrue.ZZ_PRUEBAS.DBC_dim_periodo_pago` p ON p.fecha = d.fecha
-GROUP BY semana, d.sociedad, d.division_code, d.division, d.cedis, d.oficina, d.comisionista,
+GROUP BY semana, d.sociedad, d.division_code, d.division, d.cedis, d.oficina, d.comisionista_id, d.comisionista,
          d.tipo_venta, d.matnr, d.descripcion, d.unidad_venta, d.unidad_tarifa;

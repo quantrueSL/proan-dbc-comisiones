@@ -58,7 +58,7 @@ type Filtros = {
   division: string;
   sociedad: string;
   cedis: string;
-  comisionista: string;
+  comisionistaId: string;
   desde: string;
   hasta: string;
 };
@@ -164,7 +164,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [division, setDivision] = useState("");
   const [cedis, setCedis] = useState("");
-  const [comisionista, setComisionista] = useState("");
+  const [comisionistaId, setComisionistaId] = useState("");
   const [sociedad, setSociedad] = useState("");
   const [desde, setDesde] = useState(rangoInicial.desde);
   const [hasta, setHasta] = useState(rangoInicial.hasta);
@@ -183,14 +183,14 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
    * para que el panel lateral lo refleje.
    */
   async function load(cambios: Partial<Filtros> = {}) {
-    const f: Filtros = { division, cedis, comisionista, sociedad, desde, hasta, ...cambios };
+    const f: Filtros = { division, cedis, comisionistaId, sociedad, desde, hasta, ...cambios };
     setLoading(true);
     setError(null);
     try {
       const body: ReportFilters = {
         division: f.division || null,
         cedis: f.cedis || null,
-        comisionista: f.comisionista || null,
+        comisionista_id: f.comisionistaId || null,
         sociedad: f.sociedad || null,
         start_date: f.desde,
         end_date: f.hasta
@@ -212,7 +212,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
     }
   }
 
-  const activeFilterCount = [division, cedis, comisionista, sociedad].filter(Boolean).length;
+  const activeFilterCount = [division, cedis, comisionistaId, sociedad].filter(Boolean).length;
   // Pedir hasta hoy cuando los datos acaban el 23 de agosto no es un error, pero
   // deja creer que el último tramo no vendió nada. Se dice, en vez de que cada
   // uno lo descubra por su cuenta.
@@ -264,7 +264,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
   // muchos sin venta en el periodo): los que salen en la liquidación de ESTE
   // periodo. El grupo sin nombre no cuenta, porque no se le puede pagar.
   const comisionistas = (report?.por_comisionista ?? []).filter(
-    (f) => f.comisionista && f.comision > 0
+    (f) => f.comisionista_id && f.comision > 0
   ).length;
 
   /** Los cuatro pasos, con el corte de unidad entre el segundo y el tercero. */
@@ -454,14 +454,13 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
         </label>
         <label>
           Comisionista
-          <select onChange={(e) => setComisionista(e.target.value)} value={comisionista}>
+          <select onChange={(e) => setComisionistaId(e.target.value)} value={comisionistaId}>
             <option value="">Todos</option>
             {(report?.por_comisionista ?? [])
-              .map((f) => f.comisionista)
-              .filter((n): n is string => Boolean(n))
-              .map((n) => (
-                <option key={n} value={n}>
-                  {n}
+              .filter((f): f is typeof f & { comisionista_id: string } => Boolean(f.comisionista_id))
+              .map((f) => (
+                <option key={f.comisionista_id} value={f.comisionista_id}>
+                  {f.comisionista ?? f.comisionista_id}
                 </option>
               ))}
           </select>
@@ -486,7 +485,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
             onClick={() => {
               setDivision("");
               setCedis("");
-              setComisionista("");
+              setComisionistaId("");
               setDesde(rangoInicial.desde);
               setHasta(rangoInicial.hasta);
             }}

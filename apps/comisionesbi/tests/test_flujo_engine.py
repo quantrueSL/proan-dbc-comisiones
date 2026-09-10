@@ -31,9 +31,11 @@ def _fila(
     lineas=1,
     central=False,
     en_operacion=True,
+    sociedad="DBC",
 ):
     return {
         "fase": fase,
+        "sociedad": sociedad,
         "fecha": fecha,
         "division_code": division_code,
         "division": division,
@@ -197,6 +199,7 @@ def test_los_filtros_viajan_como_parametros(cliente):
         "division": ("STRING", "H"),
         "cedis": ("STRING", "Leon 1"),
         "tipo_venta": ("STRING", None),
+        "sociedad": ("STRING", None),
     }
 
 
@@ -246,6 +249,32 @@ def test_agrupa_por_tipo_de_venta(cliente):
 
     assert _flujo()["por_tipo_venta"][0]["tipo_venta"] == "VTA EN RUTA"
     assert _flujo()["por_tipo_venta"][0]["monto_total"] == 140.0
+
+
+def test_agrupa_por_sociedad(cliente):
+    # DBC y PAN (2026-09-10): facturado/cobrado ya traen las dos, y la pantalla
+    # necesita poder mostrar por qué el total no es el mismo que "vendido"
+    # (que siempre es DBC).
+    cliente(
+        [
+            _fila("facturado", date(2026, 7, 1), "Leon 1", 100.0, sociedad="DBC"),
+            _fila("facturado", date(2026, 7, 2), None, 2000.0, sociedad="PAN"),
+        ]
+    )
+
+    por_sociedad = {f["sociedad"]: f["monto_total"] for f in _flujo()["por_sociedad"]}
+
+    assert por_sociedad == {"DBC": 100.0, "PAN": 2000.0}
+
+
+def test_la_sociedad_tambien_es_filtrable(cliente):
+    falso = cliente([])
+
+    _flujo(sociedad="PAN")
+
+    _, job_config = next((sql, cfg) for sql, cfg in falso.llamadas if "GROUP BY fase" not in sql)
+    parametros = {p.name: p.value for p in job_config.query_parameters}
+    assert parametros["sociedad"] == "PAN"
 
 
 def test_los_grupos_sin_valor_van_al_final(cliente):

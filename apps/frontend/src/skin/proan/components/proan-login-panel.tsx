@@ -39,7 +39,7 @@ export function ProanLoginPanel() {
         {firebaseConfig ? <GoogleLoginButton config={firebaseConfig} /> : null}
 
         <details className="login-dev-access" open={!firebaseConfig}>
-          <summary>Acceso para desarrolladores</summary>
+          <summary>Acceso con Usuario y Contraseña</summary>
           <LoginForm />
         </details>
       </section>
