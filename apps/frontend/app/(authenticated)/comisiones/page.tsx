@@ -1,18 +1,13 @@
 import { requireSession } from "@/lib/auth/session";
 import { getComisionesCatalog, getComisionesReport } from "@/lib/comisionesbi";
+import { rangoPorDefectoCompartido } from "@/lib/rango-por-defecto";
 import { ComisionesWorkspace } from "@/features/comisiones/comisiones-workspace";
 import { EMPTY_CATALOG, type ComisionesCatalog, type ReportResponse } from "@/types/comisiones";
-
-// El rango por defecto es todo 2026, que es lo que hay cargado. Un mes suelto
-// —lo que pedía antes— deja la pantalla casi vacía y parece que no calcula.
-// Flujo de producto usa el mismo rango a propósito (ver su page.tsx): cambiar
-// de pantalla con un periodo distinto en cada una confunde más de lo que ayuda.
-const DESDE = "2026-01-01";
 
 export default async function ComisionesPage() {
   requireSession();
 
-  const hoy = new Date().toISOString().slice(0, 10);
+  const { desde: DESDE, hasta: hoy } = rangoPorDefectoCompartido();
 
   let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let report: ReportResponse | null = null;

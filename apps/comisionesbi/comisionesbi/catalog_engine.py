@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 from comisionesbi.db import BigQueryError, run_query
@@ -29,9 +30,17 @@ log = logging.getLogger(__name__)
 # business_area_code (NO sales_division -- ese es el nombre del campo en las
 # tablas de origen tipo sap_2lis_13_vditm_billing_document_item, no en esta
 # tabla de dimensión), y business_area_name es la descripción.
+#
+# dm_business_area es el catálogo de TODO el grupo PROAN, no solo lo que opera
+# DBC/PAN -- sin el WHERE trae 80+ filas (CERDO, ARRENDAMIENTO, hasta nombres
+# de oficina como "M001 MINI MALECON"). Confirmado 2026-09-22: el desplegable
+# de división debe ofrecer solo las 5 que el cliente confirmó en operación
+# (25/08/2026, mismo criterio que `division_en_operacion` en
+# DBC_gold_flujo_producto_diario.sql).
 _DIVISIONES_SQL = """
 SELECT business_area_code, business_area_name
 FROM `proan-quantrue.D20_DIMENSION.dm_business_area`
+WHERE business_area_code IN ('H', 'BO', 'IA', 'A', 'L')
 """
 
 _CEDIS_SQL = """
@@ -86,12 +95,17 @@ def _cache_ttl_seconds() -> int:
 
 
 def _build_catalog() -> dict:
-    return {
-        "divisiones": divisiones(),
-        "cedis": cedis(),
-        # TODO: agregar "sets" (marca/línea de producto) cuando llegue el
-        # export de GS03. Ver sección 5 del borrador técnico.
-    }
+    # Dos jobs de BigQuery independientes -- en paralelo en vez de en serie,
+    # el cliente es seguro para llamadas concurrentes.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        divisiones_future = executor.submit(divisiones)
+        cedis_future = executor.submit(cedis)
+        return {
+            "divisiones": divisiones_future.result(),
+            "cedis": cedis_future.result(),
+            # TODO: agregar "sets" (marca/línea de producto) cuando llegue el
+            # export de GS03. Ver sección 5 del borrador técnico.
+        }
 
 
 def catalog() -> dict:

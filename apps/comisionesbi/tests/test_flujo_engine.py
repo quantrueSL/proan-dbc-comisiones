@@ -76,6 +76,21 @@ def cliente(monkeypatch):
     return _instalar
 
 
+@pytest.fixture(autouse=True)
+def _cache_desactivada(monkeypatch):
+    """`build_flujo` cachea por combinación de filtros, y `cobertura()` por su
+    cuenta -- casi todos los tests de aquí llaman con los mismos parámetros por
+    defecto (`_flujo`), así que sin esto el segundo test heredaría el resultado
+    del primero. Los tests de cada caché la reactivan explícitamente."""
+    monkeypatch.setenv("FLUJO_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS", "0")
+    flujo_engine.invalidate_flujo_cache()
+    flujo_engine.invalidate_cobertura_cache()
+    yield
+    flujo_engine.invalidate_flujo_cache()
+    flujo_engine.invalidate_cobertura_cache()
+
+
 def _flujo(**extra):
     parametros = {
         "division": None,
@@ -343,6 +358,213 @@ def test_un_fallo_de_bigquery_se_traduce(monkeypatch, caplog):
             _flujo()
 
     assert any(registro.exc_info for registro in caplog.records)
+
+
+# ─── Caché del informe ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def reloj(monkeypatch):
+    """Reloj monotónico fijo y avanzable, para no dormir en los tests del TTL."""
+    actual = [1000.0]
+    monkeypatch.setattr(flujo_engine, "_now", lambda: actual[0])
+    return actual
+
+
+def _activar_cache(monkeypatch, segundos="14400"):
+    monkeypatch.setenv("FLUJO_CACHE_TTL_SECONDS", segundos)
+
+
+def test_la_segunda_peticion_con_los_mismos_filtros_no_vuelve_a_consultar(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+
+    primero = _flujo()
+    segundo = _flujo()
+
+    # La caché de cobertura está desactivada (autouse), así que hay 2 llamadas
+    # por informe construido: GROUP BY fase y el detalle. El segundo `_flujo()`
+    # es un hit de la caché de informe -> no reconstruye nada -> 2 en total.
+    assert len(falso.llamadas) == 2
+    assert segundo == primero
+
+
+def test_filtros_distintos_son_entradas_de_cache_distintas(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+
+    _flujo(division="H")
+    _flujo(division="BO")
+
+    assert len(falso.llamadas) == 4
+
+
+def test_al_vencer_el_ttl_vuelve_a_consultar(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch, "3600")
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+
+    _flujo()
+    reloj[0] += 3599
+    _flujo()
+    assert len(falso.llamadas) == 2
+
+    reloj[0] += 2  # ya pasó la hora
+    _flujo()
+    assert len(falso.llamadas) == 4
+
+
+def test_ttl_cero_desactiva_la_cache(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch, "0")
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+
+    _flujo()
+    _flujo()
+
+    assert len(falso.llamadas) == 4
+
+
+def test_ttl_ilegible_cae_al_valor_por_defecto(monkeypatch):
+    monkeypatch.setenv("FLUJO_CACHE_TTL_SECONDS", "cuatro-horas")
+    assert flujo_engine._flujo_cache_ttl_seconds() == 4 * 3600
+
+    monkeypatch.delenv("FLUJO_CACHE_TTL_SECONDS")
+    assert flujo_engine._flujo_cache_ttl_seconds() == 4 * 3600
+
+    monkeypatch.setenv("FLUJO_CACHE_TTL_SECONDS", "-5")
+    assert flujo_engine._flujo_cache_ttl_seconds() == 0
+
+
+def test_si_bigquery_falla_se_sirve_la_copia_caducada(cliente, monkeypatch, reloj, caplog):
+    _activar_cache(monkeypatch, "3600")
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+    bueno = _flujo()
+
+    reloj[0] += 4000  # caducada
+
+    class _ClienteCaido:
+        def query(self, sql, job_config=None):
+            raise ServiceUnavailable("caído")
+
+    monkeypatch.setattr(db, "get_bq_client", lambda: _ClienteCaido())
+
+    with caplog.at_level(logging.WARNING):
+        assert _flujo() == bueno
+
+    assert "copia caducada" in caplog.text
+
+
+def test_invalidate_flujo_cache_fuerza_la_relectura(cliente, monkeypatch, reloj):
+    _activar_cache(monkeypatch)
+    falso = cliente([_fila("facturado", date(2026, 7, 1), "Leon 1", 100.0)])
+
+    _flujo()
+    flujo_engine.invalidate_flujo_cache()
+    _flujo()
+
+    assert len(falso.llamadas) == 4
+
+
+# ─── Caché de cobertura ────────────────────────────────────────────────────
+# `cobertura()` no depende de los filtros del informe: mismo patrón de caché
+# que `catalog_engine.catalog()` y que `comisiones_engine.cobertura()`.
+
+
+class _ClienteCobertura:
+    """Cuenta cuántas veces se lanza la consulta de cobertura (`GROUP BY fase`)."""
+
+    def __init__(self):
+        self.consultas = 0
+
+    def query(self, sql, job_config=None):
+        self.consultas += 1
+        resultado = MagicMock()
+        resultado.result.return_value = COBERTURA
+        return resultado
+
+
+def _activar_cache_cobertura(monkeypatch, segundos="3600"):
+    monkeypatch.setenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS", segundos)
+
+
+def test_cobertura_la_segunda_peticion_no_vuelve_a_consultar(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    primero = flujo_engine.cobertura()
+    segundo = flujo_engine.cobertura()
+
+    assert cliente.consultas == 1
+    assert segundo == primero
+
+
+def test_cobertura_al_vencer_el_ttl_vuelve_a_consultar(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch, "3600")
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    flujo_engine.cobertura()
+    reloj[0] += 3599
+    flujo_engine.cobertura()
+    assert cliente.consultas == 1
+
+    reloj[0] += 2  # ya pasó la hora
+    flujo_engine.cobertura()
+    assert cliente.consultas == 2
+
+
+def test_cobertura_ttl_cero_desactiva_la_cache(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch, "0")
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    flujo_engine.cobertura()
+    flujo_engine.cobertura()
+
+    assert cliente.consultas == 2
+
+
+def test_cobertura_ttl_ilegible_cae_al_valor_por_defecto(monkeypatch):
+    monkeypatch.setenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS", "una-hora")
+    assert flujo_engine._cobertura_cache_ttl_seconds() == 3600
+
+    monkeypatch.delenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS")
+    assert flujo_engine._cobertura_cache_ttl_seconds() == 3600
+
+    monkeypatch.setenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS", "-5")
+    assert flujo_engine._cobertura_cache_ttl_seconds() == 0
+
+
+def test_cobertura_si_bigquery_falla_se_sirve_la_copia_caducada(monkeypatch, reloj, caplog):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+    buena = flujo_engine.cobertura()
+
+    reloj[0] += 4000  # caducada
+
+    class _ClienteCaido:
+        def query(self, sql, job_config=None):
+            raise ServiceUnavailable("caído")
+
+    monkeypatch.setattr(db, "get_bq_client", lambda: _ClienteCaido())
+
+    with caplog.at_level(logging.WARNING):
+        assert flujo_engine.cobertura() == buena
+
+    assert "copia caducada" in caplog.text
+
+
+def test_cobertura_invalidate_fuerza_la_relectura(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    flujo_engine.cobertura()
+    flujo_engine.invalidate_cobertura_cache()
+    flujo_engine.cobertura()
+
+    assert cliente.consultas == 2
 
 
 # ─── El alcance de la pantalla ────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { requireSession } from "@/lib/auth/session";
 import { getComisionesCatalog, getFlujoProducto } from "@/lib/comisionesbi";
+import { rangoPorDefectoCompartido } from "@/lib/rango-por-defecto";
 import { FlujoProductoWorkspace } from "@/features/flujo-producto/flujo-producto-workspace";
 import {
   EMPTY_CATALOG,
@@ -27,31 +28,14 @@ function fecha(valor: string | undefined, porDefecto: string): string {
   return valor && ISO_DATE.test(valor) ? valor : porDefecto;
 }
 
-/**
- * Por defecto, todo 2026 (desde donde arrancan los datos) hasta hoy — el mismo
- * rango que Comisiones (`app/(authenticated)/comisiones/page.tsx`), a
- * propósito: cambiar de pantalla con un periodo distinto en cada una confunde
- * más de lo que ayuda. Antes era "mes pasado + el corriente", pero un rango
- * corto tiene el problema contrario al de Comisiones (que ya lo documentaba):
- * si una fase va retrasada — a "vendido" le ha pasado más de una vez, ver
- * data/notas/hallazgos.md — un mes suelto puede no traer nada de esa fase y
- * parecer un hueco de datos en vez de una serie completa con un tramo reciente
- * flojo. Con todo el año, ese tramo se ve en su proporción real. La fecha de
- * corte real de cada fase la devuelve `cobertura`; aquí no se escribe
- * ninguna, que envejecen mal.
- */
-function rangoPorDefecto(): { desde: string; hasta: string } {
-  const hoy = new Date();
-  return {
-    desde: "2026-01-01",
-    hasta: hoy.toISOString().slice(0, 10)
-  };
-}
-
 export default async function FlujoProductoPage({ searchParams }: { searchParams: SearchParams }) {
   requireSession();
 
-  const porDefecto = rangoPorDefecto();
+  // El rango por defecto vive en `@/lib/rango-por-defecto`, compartido con
+  // Comisiones (`app/(authenticated)/comisiones/page.tsx`) -- ver ese módulo
+  // para el porqué de los 6 meses. La fecha de corte real de cada fase la
+  // devuelve `cobertura`; aquí no se escribe ninguna, que envejecen mal.
+  const porDefecto = rangoPorDefectoCompartido();
   const desde = fecha(searchParams.desde, porDefecto.desde);
   const hasta = fecha(searchParams.hasta, porDefecto.hasta);
   const division = searchParams.division?.trim() || null;

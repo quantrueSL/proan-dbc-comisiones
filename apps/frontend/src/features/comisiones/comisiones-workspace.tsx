@@ -421,7 +421,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
           <select onChange={(e) => setDivision(e.target.value)} value={division}>
             <option value="">Todas</option>
             {initialCatalog.divisiones.map((row, index) => (
-              <option key={index} value={divisionLabel(row)}>
+              <option key={index} value={String(row.business_area_code ?? "")}>
                 {divisionLabel(row)}
               </option>
             ))}
@@ -486,6 +486,7 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
               setDivision("");
               setCedis("");
               setComisionistaId("");
+              setSociedad("");
               setDesde(rangoInicial.desde);
               setHasta(rangoInicial.hasta);
             }}
@@ -529,14 +530,29 @@ export function ComisionesWorkspace({ initialCatalog, initialError, initialRepor
                   </p>
                   <p>
                     <b>No es que no se facturara</b>: es que el dato todavía no está. Viene de la
-                    ingesta de SAP, que es compartida con el resto del grupo y ajena a esta
-                    herramienta.
+                    ingesta de SAP, y no se ha actualizado aún.
                   </p>
                   <p>
                     Mientras dure, no leas la caída del final como una bajada de ventas ni de
                     comisión. El mismo aviso está en la pantalla de{" "}
                     <Link href="/flujo-producto">flujo de producto</Link>, donde se ve el efecto
                     sobre la serie diaria.
+                  </p>
+                </AvisoBoton>
+              ) : null}
+              {/* Mismo patrón que `excluido_almacen_central` en flujo de producto:
+                  no cuenta como "bloqueado" ni desaparece en silencio. */}
+              {report?.excluido_oficina_0130 && report.excluido_oficina_0130.monto > 0 ? (
+                <AvisoBoton tono="dato" titulo="La oficina 0130 queda fuera de este cálculo">
+                  <p>
+                    La oficina <b>0130 no genera comisión</b> -- no es que le falte
+                    tarifa, es que la respuesta correcta es &quot;ninguna&quot;.
+                  </p>
+                  <p>
+                    Son <b>{pesos(report.excluido_oficina_0130.monto)}</b> facturados en el
+                    periodo — el {report.excluido_oficina_0130.pct_del_total.toFixed(1)}% de lo
+                    facturado en el rango. La cifra se calcula sobre los datos del periodo que
+                    estés viendo, no está escrita a mano.
                   </p>
                 </AvisoBoton>
               ) : null}

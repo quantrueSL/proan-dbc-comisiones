@@ -5,7 +5,7 @@
 -- Basado en Datos/Comisiones_DBC_Borrador_Tecnico.md, secciones 2, 3, 4, 9 y 11.
 --
 -- QUÉ SÍ incluye v1 (las 3 capas ya resueltas y validadas — sección 4):
---   - Vendido    (sap_VBAK + sap_VBAP) -- SOLO DBC, ver sección 2 más abajo
+--   - Vendido    (sap_VBAK + sap_VBAP) -- DBC + PAN (huevo, alcance_pan), ver sección 2
 --   - Facturado  (sap_2lis_13_vditm_billing_document_item) -- DBC + PAN (huevo, alcance_pan)
 --   - Cobrado    (sap_bsad_cleared_items desde el 2026-09-07, antes sap_pago;
 --                 UN RENGLÓN POR FACTURA, heredando CEDIS/oficina/división/canal/
@@ -18,7 +18,15 @@
 -- esta vista deje de contradecir a Comisiones (que ya sumaba DBC+PAN desde el
 -- 2026-09-08). Ver la sección 2 (más abajo, CTE `alcance_pan`) para el criterio
 -- exacto -- es el MISMO que `v1_comision_dbc_completo_cobro.sql`, no uno nuevo.
--- "Vendido" se queda solo-DBC (VBAP/VBAK no traen sociedad, ver esa sección).
+--
+-- 2026-09-22: SE AGREGA PAN a vendido también -- se había quedado fuera por un
+-- filtro de plantas desactualizado, no por límite de la fuente (VBAP SÍ tiene
+-- huevo de PAN: planta PANF, 8,26M líneas desde 2024-08-01, ver sección 2).
+-- Mismo criterio `alcance_pan` que ya usan facturado/cobrado -- probado contra
+-- el filtro ingenuo (solo planta+división, sin cruzar la tarifa oficial): ese
+-- sobrestimaba vendido 3,6x ($8.481,6 M vs. $2.326,2 M) y rompía el embudo
+-- (vendido > 4x facturado). Con `alcance_pan`, queda vendido > facturado >
+-- cobrado, como debe ser.
 --
 -- QUÉ NO incluye v1 (a propósito, para no mezclar cifras sin validar con las
 -- que sí lo están):
@@ -45,10 +53,13 @@
 -- confirmado como campo real por la consulta de referencia del senior) y
 -- `BUKRS_company_code` (`sap_bsad_cleared_items`, verificado 2026-09-07) son el
 -- filtro maestro de facturado/cobrado -- DBC entra completo, PAN solo por
--- `alcance_pan` (sección 2). En sap_VBAK/VBAP NO existe ese campo (lo más
--- parecido es `BUKRS_VF` en VBAK, semántica sin confirmar, no se usó), así que
--- "vendido" sigue dependiendo de la lista de plantas de la sección 2 (solo
--- DBC) -- lista ya corregida contra datos reales (V3): faltaban H7DU y H7TX.
+-- `alcance_pan` (sección 2). VBAK sí tiene un campo de sociedad (`BUKRS_VF` /
+-- `VKORG`, confirmados 2026-09-22: DBC=568.539 filas, PAN=1.115.765 -- la nota
+-- vieja que decía "semántica sin confirmar" estaba mal, nunca se probó) pero no
+-- hace falta para "vendido": PAN solo vende por una planta (`PANF`), así que la
+-- lista `plantas_dbc` (sección 2) más el filtro `alcance_pan` para PANF ya
+-- separan sociedad sin ambigüedad. Lista `plantas_dbc` corregida contra datos
+-- reales (V3): faltaban H7DU y H7TX.
 --
 -- Confirmado por consulta de referencia del senior + INFORMATION_SCHEMA
 -- (facturado, 64 columnas): `material_number`, `sales_unit` (unidad de
@@ -517,7 +528,10 @@ pago_factura_v1 AS (
 -- Vendido ---------------------------------------------------------------
 SELECT
   'vendido' AS fase,
-  'DBC' AS sociedad,                        -- VBAP/VBAK no traen company_code -- ver el porqué en el comentario de la sección 2, arriba
+  -- PAN solo vende huevo por la planta PANF (2026-09-22, ver sección 2) -- con
+  -- una sola planta de PAN y ninguna en `plantas_dbc`, WERKS ya basta para
+  -- etiquetar sociedad sin tocar BUKRS_VF/VKORG.
+  IF(p.WERKS = 'PANF', 'PAN', 'DBC') AS sociedad,
   CAST(k.ERDAT AS DATE) AS fecha,           -- confirmado vía INFORMATION_SCHEMA: ERDAT existe en ambas (VBAK y VBAP); se toma de la cabecera (k) por ser la fecha de creación del pedido
   CAST(p.VBELN AS STRING) AS documento,
   CAST(p.POSNR AS STRING) AS linea,
@@ -576,7 +590,18 @@ LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
 LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = k.VKBUR
-WHERE p.WERKS IN (SELECT planta FROM plantas_dbc)
+WHERE (
+    p.WERKS IN (SELECT planta FROM plantas_dbc)
+    OR (
+      -- Mismo alcance que `factura_totales_v1`: PAN solo cuenta si es huevo Y
+      -- el combo planta+almacén+oficina está en la tarifa oficial -- sin el
+      -- EXISTS, "vendido" de PAN sale 3,6x más grande (ver encabezado).
+      p.WERKS = 'PANF'
+      AND p.SPART = 'H'
+      AND EXISTS (SELECT 1 FROM alcance_pan a
+                  WHERE a.WERKS = p.WERKS AND a.LGORT = p.LGORT AND a.VKBUR = k.VKBUR)
+    )
+  )
   AND (p.ABGRU IS NULL OR p.ABGRU = '')    -- excluye líneas rechazadas/anuladas (sección 4.1)
   AND CAST(k.ERDAT AS DATE) >= '2026-01-01'
 

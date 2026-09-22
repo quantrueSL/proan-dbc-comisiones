@@ -134,6 +134,13 @@ base AS (
       WHEN 'SIN_CEDIS'  THEN 'sin CEDIS/tipo de venta'
       WHEN 'SIN_TARIFA' THEN 'sin tarifa para esa llave'
     END AS comision_estado,
+    -- 2026-09-22: el cliente confirmó que la oficina 0130 no genera comisión
+    -- (nunca tiene tarifa, en ninguna división) -- mismo tratamiento que
+    -- `almacen_central` en flujo de producto: no cuenta como "bloqueado" (no
+    -- es que le falte el dato, es que la respuesta correcta es "ninguna"), y
+    -- comisiones_engine.py la saca de los totales y la reporta aparte, no la
+    -- descarta en silencio.
+    t.oficina_ventas = '0130'                                AS oficina_excluida,
     CAST(t.importe_mxn AS FLOAT64)                           AS monto,
     t.comision_mxn                                           AS comision,
     t.comision_cobrada,
@@ -152,7 +159,7 @@ base AS (
 )
 SELECT
   fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista, tipo_venta, `set`,
-  base_unidad, comision_estado,
+  base_unidad, comision_estado, oficina_excluida,
   CAST(NULL AS STRING) AS tipo_venta_origen,
   COUNT(*)                    AS num_lineas,
   SUM(monto)                  AS monto_total,
@@ -165,4 +172,4 @@ SELECT
   COUNTIF(sin_importe)         AS lineas_sin_importe
 FROM base
 GROUP BY fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista, tipo_venta, `set`,
-         base_unidad, comision_estado;
+         base_unidad, comision_estado, oficina_excluida;

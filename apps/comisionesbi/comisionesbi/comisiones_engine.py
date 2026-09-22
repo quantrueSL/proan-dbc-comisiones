@@ -66,6 +66,7 @@ import os
 import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import NamedTuple
 
@@ -80,7 +81,7 @@ _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
 _DETALLE_SQL = f"""
 SELECT
   fecha, sociedad, division_code, division, cedis, oficina, almacen, comisionista_id, comisionista,
-  tipo_venta, `set`, base_unidad, comision_estado,
+  tipo_venta, `set`, base_unidad, comision_estado, oficina_excluida,
   num_lineas, monto_total, cantidad_base_total,
   comision_total, comision_min_total, comision_max_total,
   comision_cobrada, monto_cobrado, lineas_sin_importe
@@ -106,11 +107,73 @@ def _iso(valor) -> str | None:
     return valor.isoformat() if hasattr(valor, "isoformat") else valor
 
 
-def cobertura() -> dict:
+def _cobertura_query() -> dict:
     filas = run_query(_COBERTURA_SQL, "la cobertura de comisión")
     if not filas:
         return {}
     return {"desde": _iso(filas[0]["desde"]), "hasta": _iso(filas[0]["hasta"])}
+
+
+# ─── Caché en memoria de la cobertura ─────────────────────────────────────
+# `cobertura()` no depende de los filtros del informe (mismo comentario en
+# `_COBERTURA_SQL`): es SIEMPRE la misma consulta. Antes de esto vivía "dentro"
+# de la caché del informe (`_report_cache`), así que cada combinación nueva de
+# filtros la repetía aunque el resultado fuera idéntico. Mismo patrón que
+# `catalog_engine.catalog()`: una sola entrada, TTL alto porque es una
+# propiedad del dataset que cambia a lo sumo una vez al día.
+_COBERTURA_CACHE_TTL_POR_DEFECTO = 3600
+
+_cobertura_cache_lock = threading.Lock()
+
+
+class _CoberturaCacheEntry(NamedTuple):
+    expires_at: float
+    cobertura: dict
+
+
+_cobertura_cache: _CoberturaCacheEntry | None = None
+
+
+def _cobertura_cache_ttl_seconds() -> int:
+    """TTL de la caché. `0` (o negativo) la desactiva; valor ilegible → defecto."""
+    try:
+        ttl = int(os.getenv("COBERTURA_CACHE_TTL_SECONDS", ""))
+    except ValueError:
+        return _COBERTURA_CACHE_TTL_POR_DEFECTO
+    return max(ttl, 0)
+
+
+def cobertura() -> dict:
+    global _cobertura_cache
+
+    ttl = _cobertura_cache_ttl_seconds()
+    if ttl == 0:
+        return _cobertura_query()
+
+    with _cobertura_cache_lock:
+        if _cobertura_cache is not None and _cobertura_cache.expires_at > _now():
+            return _cobertura_cache.cobertura
+
+        try:
+            resultado = _cobertura_query()
+        except BigQueryError:
+            if _cobertura_cache is None:
+                raise
+            log.warning(
+                "Cobertura no recargable desde BigQuery: se sirve la copia caducada",
+                exc_info=True,
+            )
+            return _cobertura_cache.cobertura
+
+        _cobertura_cache = _CoberturaCacheEntry(expires_at=_now() + ttl, cobertura=resultado)
+        return resultado
+
+
+def invalidate_cobertura_cache() -> None:
+    """Fuerza la relectura en la siguiente llamada. Para operativa y pruebas."""
+    global _cobertura_cache
+    with _cobertura_cache_lock:
+        _cobertura_cache = None
 
 
 def _nuevo() -> dict:
@@ -131,15 +194,46 @@ def _nuevo() -> dict:
     }
 
 
-def _acumular(destino: dict, clave, fila: dict) -> None:
+class _CamposFila(NamedTuple):
+    """Los 6 valores escalares de una fila que alimentan CUALQUIER acumulador
+    (`_nuevo()`), ya extraídos del diccionario de BigQuery.
+
+    2026-09-22, medido con perfil (`cProfile`) sobre las ~74 mil filas que trae
+    hoy el rango por defecto (6 meses, sin filtros): el loop principal de
+    `_build_report` llama `_acumular` 8 veces por fila (una por cada
+    agrupación -- comisionista, división, CEDIS...), y antes de esto cada
+    llamada releía los mismos `fila["monto_total"]`, `fila["comision_total"]`...
+    desde cero: 8 lecturas de diccionario donde bastaba con 1. Extraer una vez
+    por fila y pasar la tupla cortó el tiempo de agregación a la mitad."""
+
+    num_lineas: int
+    monto: float
+    comision: float
+    comision_cobrada: float
+    monto_cobrado: float
+    calculada: bool
+
+
+def _campos(fila: dict) -> _CamposFila:
+    return _CamposFila(
+        num_lineas=fila["num_lineas"] or 0,
+        monto=fila["monto_total"] or 0.0,
+        comision=fila["comision_total"] or 0.0,
+        comision_cobrada=fila["comision_cobrada"] or 0.0,
+        monto_cobrado=fila["monto_cobrado"] or 0.0,
+        calculada=fila["comision_estado"] == CALCULADA,
+    )
+
+
+def _acumular(destino: dict, clave, campos: _CamposFila) -> None:
     a = destino[clave]
-    a["num_lineas"] += fila["num_lineas"] or 0
-    a["monto"] += fila["monto_total"] or 0.0
-    a["comision"] += fila["comision_total"] or 0.0
-    a["comision_con_cobro"] += fila["comision_cobrada"] or 0.0
-    a["monto_cobrado"] += fila["monto_cobrado"] or 0.0
-    if fila["comision_estado"] == CALCULADA:
-        a["monto_calculable"] += fila["monto_total"] or 0.0
+    a["num_lineas"] += campos.num_lineas
+    a["monto"] += campos.monto
+    a["comision"] += campos.comision
+    a["comision_con_cobro"] += campos.comision_cobrada
+    a["monto_cobrado"] += campos.monto_cobrado
+    if campos.calculada:
+        a["monto_calculable"] += campos.monto
 
 
 def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
@@ -210,7 +304,7 @@ def _desglose(filas: list[dict], dimensiones: tuple[str, ...]) -> list[dict]:
     acumulado: dict = defaultdict(lambda: {**_nuevo(), "cantidad_base": 0.0})
     for fila in filas:
         clave = tuple(fila[dimension] for dimension in dimensiones)
-        _acumular(acumulado, clave, fila)
+        _acumular(acumulado, clave, _campos(fila))
         acumulado[clave]["cantidad_base"] += fila["cantidad_base_total"] or 0.0
 
     # Por comisión descendente y sin comparar las claves entre sí: llevan nulos
@@ -267,21 +361,39 @@ def _build_report(
     start_date: date,
     end_date: date,
 ) -> dict:
-    """Una sola consulta y las agregaciones en memoria, igual que en el flujo:
-    la tabla gold entera son ~12 MB, así que traer el trozo filtrado y agrupar
-    aquí sale más barato que lanzar una consulta por agrupación."""
-    filas = run_query(
-        _DETALLE_SQL,
-        "el informe de comisión",
-        {
-            "start": ("DATE", start_date),
-            "end": ("DATE", end_date),
-            "division": ("STRING", division),
-            "cedis": ("STRING", cedis),
-            "comisionista_id": ("STRING", comisionista_id),
-            "sociedad": ("STRING", sociedad),
-        },
-    )
+    """Una sola consulta de detalle y las agregaciones en memoria, igual que en
+    el flujo: la tabla gold entera son ~12 MB, así que traer el trozo filtrado
+    y agrupar aquí sale más barato que lanzar una consulta por agrupación.
+
+    `cobertura()` tiene su propia caché (no depende de los filtros de este
+    informe), así que normalmente devuelve al instante. El detalle se lanza en
+    un hilo aparte para que, en el caso raro de que también le toque ir a
+    BigQuery, corra en paralelo con el detalle en vez de encolarse detrás."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        filas_future = executor.submit(
+            run_query,
+            _DETALLE_SQL,
+            "el informe de comisión",
+            {
+                "start": ("DATE", start_date),
+                "end": ("DATE", end_date),
+                "division": ("STRING", division),
+                "cedis": ("STRING", cedis),
+                "comisionista_id": ("STRING", comisionista_id),
+                "sociedad": ("STRING", sociedad),
+            },
+        )
+        cobertura_resultado = cobertura()
+        filas_todas = filas_future.result()
+
+    # La oficina 0130 no genera comisión (confirmado por el cliente,
+    # 2026-09-22) -- mismo tratamiento que `almacen_central` en flujo_engine:
+    # se saca de TODO el análisis (totales, cascada, bloqueado) en vez de
+    # contarla como "sin tarifa para esa llave" (no es que le falte el dato,
+    # es que la respuesta correcta es "ninguna"). No se descarta en
+    # silencio: se reporta aparte en `excluido_oficina_0130`.
+    filas = [f for f in filas_todas if not f.get("oficina_excluida")]
+    filas_excluidas = [f for f in filas_todas if f.get("oficina_excluida")]
 
     por_comisionista: dict = defaultdict(_nuevo)
     por_division: dict = defaultdict(_nuevo)
@@ -313,14 +425,23 @@ def _build_report(
     lineas_sin_importe = 0
 
     for fila in filas:
-        _acumular(por_comisionista, fila["comisionista_id"], fila)
-        _acumular(por_division, fila["division_code"], fila)
-        _acumular(por_cedis, fila["cedis"], fila)
-        _acumular(por_fecha, _iso(fila["fecha"]), fila)
-        _acumular(por_set, fila["set"], fila)
-        _acumular(por_tipo_venta, fila["tipo_venta"], fila)
-        _acumular(por_sociedad, fila["sociedad"], fila)
-        _acumular({None: total}, None, fila)
+        # Extraído una sola vez y reutilizado en las 7 agrupaciones de abajo
+        # más el total -- ver el docstring de `_CamposFila`.
+        campos = _campos(fila)
+        _acumular(por_comisionista, fila["comisionista_id"], campos)
+        _acumular(por_division, fila["division_code"], campos)
+        _acumular(por_cedis, fila["cedis"], campos)
+        _acumular(por_fecha, _iso(fila["fecha"]), campos)
+        _acumular(por_set, fila["set"], campos)
+        _acumular(por_tipo_venta, fila["tipo_venta"], campos)
+        _acumular(por_sociedad, fila["sociedad"], campos)
+        total["num_lineas"] += campos.num_lineas
+        total["monto"] += campos.monto
+        total["comision"] += campos.comision
+        total["comision_con_cobro"] += campos.comision_cobrada
+        total["monto_cobrado"] += campos.monto_cobrado
+        if campos.calculada:
+            total["monto_calculable"] += campos.monto
         lineas_sin_importe += fila["lineas_sin_importe"] or 0
 
         if fila["division_code"] and fila["division"]:
@@ -351,9 +472,26 @@ def _build_report(
     for entrada in comisionistas:
         entrada["comisionista"] = nombre_comisionista.get(entrada["comisionista_id"])
 
+    # Total de lo excluido (oficina 0130) -- solo monto y líneas, no hace falta
+    # desglosarlo más: es una sola oficina, no una dimensión para explorar.
+    excluido = _nuevo()
+    for fila in filas_excluidas:
+        campos = _campos(fila)
+        excluido["num_lineas"] += campos.num_lineas
+        excluido["monto"] += campos.monto
+
     monto = total["monto"]
+    monto_con_excluido = monto + excluido["monto"]
     return {
-        "cobertura": cobertura(),
+        "cobertura": cobertura_resultado,
+        # Lo que se saca del análisis, para que la pantalla pueda decir cuánto
+        # es en vez de que desaparezca sin dejar rastro (mismo patrón que
+        # `excluido_almacen_central` en flujo_engine.build_flujo).
+        "excluido_oficina_0130": {
+            "num_lineas": excluido["num_lineas"],
+            "monto": excluido["monto"],
+            "pct_del_total": (excluido["monto"] / monto_con_excluido * 100) if monto_con_excluido else 0.0,
+        },
         "totales": {
             **total,
             # El dato que evita leer el total como si fuera completo.

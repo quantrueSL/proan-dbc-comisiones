@@ -23,13 +23,22 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { FiltersSidebar } from "@/components/filters-sidebar";
 import type {
+  ComisionesCatalog,
   ConciliacionDetalleRow,
   ConciliacionDiarioRow,
   ConciliacionFacturaRow,
   ConciliacionFilters,
   ConciliacionPorComisionista,
-  ConciliacionResponse
+  ConciliacionResponse,
+  DivisionRow
 } from "@/types/comisiones";
+
+// Mismo helper que Comisiones (comisiones-workspace.tsx): el nombre de
+// dm_business_area, con un respaldo legible si algún día llega sin nombre.
+function divisionLabel(row: DivisionRow): string {
+  const candidate = row.business_area_name;
+  return candidate === null || candidate === undefined ? JSON.stringify(row) : String(candidate);
+}
 
 type Filtros = { division: string; comisionistaId: string; desde: string; hasta: string };
 // `sociedad` es parte de la selección, no solo de la fila: la misma persona
@@ -67,6 +76,7 @@ type GrupoComisionista = {
 };
 
 type Props = {
+  initialCatalog: ComisionesCatalog;
   initialError: string | null;
   initialResponse: ConciliacionResponse | null;
   rangoInicial: { desde: string; hasta: string };
@@ -425,7 +435,7 @@ function descargarBlob(nombreArchivo: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-export function ConciliacionWorkspace({ initialError, initialResponse, rangoInicial }: Props) {
+export function ConciliacionWorkspace({ initialCatalog, initialError, initialResponse, rangoInicial }: Props) {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [division, setDivision] = useState("");
   const [comisionistaId, setComisionistaId] = useState("");
@@ -827,11 +837,11 @@ export function ConciliacionWorkspace({ initialError, initialResponse, rangoInic
           División
           <select onChange={(e) => setDivision(e.target.value)} value={division}>
             <option value="">Todas</option>
-            <option value="H">Huevo</option>
-            <option value="BO">Botana</option>
-            <option value="IA">Alimento (croqueta)</option>
-            <option value="A">Abarrotes</option>
-            <option value="L">Leche</option>
+            {initialCatalog.divisiones.map((row, index) => (
+              <option key={index} value={String(row.business_area_code ?? "")}>
+                {divisionLabel(row)}
+              </option>
+            ))}
           </select>
         </label>
         <label>

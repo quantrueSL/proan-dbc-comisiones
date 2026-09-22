@@ -33,19 +33,31 @@ está bloqueado por el código BWART pendiente del cliente.
 
 `sociedad` (2026-09-10): DBC o PAN, mismo alcance que Comisiones (PAN solo
 huevo, solo combinaciones con tarifa oficial -- ver `v1_flujo_producto_dbc.sql`
-sección 2 para el porqué). "Vendido" es siempre 'DBC' -- VBAP/VBAK no traen
-sociedad, así que esa fase no lleva PAN (limitación de la fuente, no un
-pendiente de este módulo). Se agregó porque Comisiones ya sumaba DBC+PAN
+sección 2 para el porqué). Se agregó porque Comisiones ya sumaba DBC+PAN
 ($2,832.8 M) y esta pantalla se había quedado en solo-DBC ($770.7 M): los dos
 totales parecían contradecirse sin serlo.
+
+2026-09-22: "vendido" también trae PAN. Se creía limitación de la fuente
+(VBAP/VBAK sin sociedad) pero era un filtro de plantas desactualizado -- PAN sí
+vende huevo por su planta (PANF), y con el mismo criterio `alcance_pan` de
+facturado/cobrado (no uno más laxo, que sobrestimaba vendido 3,6x). Ver el
+encabezado de `v1_flujo_producto_dbc.sql` para la comparación con números.
 """
 
 from __future__ import annotations
 
+import logging
+import os
+import threading
+import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from typing import NamedTuple
 
-from comisionesbi.db import run_query
+from comisionesbi.db import BigQueryError, run_query
+
+log = logging.getLogger(__name__)
 
 _TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_flujo_producto_diario`"
 
@@ -84,8 +96,7 @@ def _iso(valor) -> str | None:
     return valor.isoformat() if hasattr(valor, "isoformat") else valor
 
 
-def cobertura() -> dict[str, dict]:
-    """Rango de fechas con datos de cada fase. Ver punto 3 del docstring."""
+def _cobertura_query() -> dict[str, dict]:
     filas = run_query(_COBERTURA_SQL, "la cobertura del flujo de producto")
     return {
         fila["fase"]: {"desde": _iso(fila["desde"]), "hasta": _iso(fila["hasta"])}
@@ -93,16 +104,103 @@ def cobertura() -> dict[str, dict]:
     }
 
 
-def _acumular(destino: dict, clave, fila: dict) -> None:
+# ─── Caché en memoria de la cobertura ─────────────────────────────────────
+# Mismo patrón y mismo motivo que `comisiones_engine.cobertura()`: no depende
+# de los filtros del informe (siempre la misma consulta), así que va aparte
+# con su propio TTL en vez de recalcularse en cada combinación de filtros
+# nueva -- antes vivía "dentro" de `build_flujo` y se repetía en cada llamada.
+_COBERTURA_CACHE_TTL_POR_DEFECTO = 3600
+
+_cobertura_cache_lock = threading.Lock()
+
+
+class _CoberturaCacheEntry(NamedTuple):
+    expires_at: float
+    cobertura: dict
+
+
+_cobertura_cache: _CoberturaCacheEntry | None = None
+
+
+def _now() -> float:
+    """Reloj monotónico — inmune a saltos de hora, y fijable desde los tests."""
+    return time.monotonic()
+
+
+def _cobertura_cache_ttl_seconds() -> int:
+    """TTL de la caché. `0` (o negativo) la desactiva; valor ilegible → defecto."""
+    try:
+        ttl = int(os.getenv("FLUJO_COBERTURA_CACHE_TTL_SECONDS", ""))
+    except ValueError:
+        return _COBERTURA_CACHE_TTL_POR_DEFECTO
+    return max(ttl, 0)
+
+
+def cobertura() -> dict[str, dict]:
+    """Rango de fechas con datos de cada fase. Ver punto 3 del docstring del módulo."""
+    global _cobertura_cache
+
+    ttl = _cobertura_cache_ttl_seconds()
+    if ttl == 0:
+        return _cobertura_query()
+
+    with _cobertura_cache_lock:
+        if _cobertura_cache is not None and _cobertura_cache.expires_at > _now():
+            return _cobertura_cache.cobertura
+
+        try:
+            resultado = _cobertura_query()
+        except BigQueryError:
+            if _cobertura_cache is None:
+                raise
+            log.warning(
+                "Cobertura de flujo no recargable desde BigQuery: se sirve la copia caducada",
+                exc_info=True,
+            )
+            return _cobertura_cache.cobertura
+
+        _cobertura_cache = _CoberturaCacheEntry(expires_at=_now() + ttl, cobertura=resultado)
+        return resultado
+
+
+def invalidate_cobertura_cache() -> None:
+    """Fuerza la relectura en la siguiente llamada. Para operativa y pruebas."""
+    global _cobertura_cache
+    with _cobertura_cache_lock:
+        _cobertura_cache = None
+
+
+class _CamposFila(NamedTuple):
+    """Los 3 valores escalares de una fila que alimentan cualquier acumulador
+    (`_nuevo()`), ya extraídos del diccionario de BigQuery -- mismo motivo que
+    `comisiones_engine._CamposFila`: el loop principal llama `_acumular` 6
+    veces por fila (una por agrupación: fase, fecha, CEDIS, división, tipo de
+    venta, sociedad), y sin esto cada llamada releería los mismos 3 campos
+    desde cero."""
+
+    num_lineas: int
+    monto_total: float
+    cantidad_cajas_total: float | None
+
+
+def _campos(fila: dict) -> _CamposFila:
+    return _CamposFila(
+        num_lineas=fila["num_lineas"] or 0,
+        monto_total=fila["monto_total"] or 0.0,
+        cantidad_cajas_total=fila["cantidad_cajas_total"],
+    )
+
+
+def _acumular(destino: dict, clave, campos: _CamposFila) -> None:
     acumulado = destino[clave]
-    acumulado["num_lineas"] += fila["num_lineas"] or 0
-    acumulado["monto_total"] += fila["monto_total"] or 0.0
+    acumulado["num_lineas"] += campos.num_lineas
+    acumulado["monto_total"] += campos.monto_total
     # Las cajas ya vienen en las tres fases, pero el None se respeta igual: si
     # una fase no trae el dato se queda en None en vez de 0, para que la interfaz
     # distinga "cero cajas" de "aquí no aplica".
-    if fila["cantidad_cajas_total"] is not None:
+    if campos.cantidad_cajas_total is not None:
         actual = acumulado["cantidad_cajas_total"] or 0.0
-        acumulado["cantidad_cajas_total"] = actual + fila["cantidad_cajas_total"]
+        acumulado["cantidad_cajas_total"] = actual + campos.cantidad_cajas_total
 
 
 def _nuevo() -> dict:
@@ -119,43 +217,50 @@ def _ordenadas(agrupado: dict, clave: str) -> list[dict]:
     ]
 
 
-def build_flujo(
+def _build_flujo(
     *,
     division: str | None,
     cedis: str | None,
-    tipo_venta: str | None = None,
-    sociedad: str | None = None,
+    tipo_venta: str | None,
+    sociedad: str | None,
     start_date: date,
     end_date: date,
 ) -> dict:
-    """Punto de entrada de POST /v1/comisionesbi/flujo.
-
-    Una sola consulta al detalle diario y las agregaciones en memoria: la tabla
-    gold entera son 4,7 MB, así que traer el trozo filtrado y agrupar aquí sale
-    más barato que lanzar una consulta por agrupación.
+    """Una sola consulta al detalle diario y las agregaciones en memoria: la
+    tabla gold entera son 4,7 MB, así que traer el trozo filtrado y agrupar
+    aquí sale más barato que lanzar una consulta por agrupación.
 
     Se devuelven las agrupaciones por CEDIS, división y tipo de venta porque la
     pantalla deja pulsar sobre ellas para filtrar el resto; el nombre de la
     división viaja junto a su código para que la interfaz pueda enseñar "Huevo"
     y filtrar por "H" sin tener que cruzar nada.
 
-    `sociedad` (2026-09-10, DBC o PAN) se agrega junto con las demás porque
-    "vendido" es siempre DBC pero facturado/cobrado ya traen PAN (huevo) --
-    sin este desglose, alguien que compare esta pantalla con Comisiones no
-    tiene forma de ver por qué el total no es idéntico entre fases.
+    `sociedad` (2026-09-10, DBC o PAN, con vendido incluido desde 2026-09-22)
+    se agrega junto con las demás porque sin este desglose, alguien que
+    compare esta pantalla con Comisiones no tiene forma de ver por qué el
+    total no es idéntico entre fases.
+
+    `cobertura()` tiene su propia caché (no depende de los filtros de este
+    informe), así que normalmente devuelve al instante. El detalle se lanza en
+    un hilo aparte para que, en el caso raro de que también le toque ir a
+    BigQuery, corra en paralelo con el detalle en vez de encolarse detrás.
     """
-    filas = run_query(
-        _DETALLE_SQL,
-        "el flujo de producto",
-        {
-            "start": ("DATE", start_date),
-            "end": ("DATE", end_date),
-            "division": ("STRING", division),
-            "cedis": ("STRING", cedis),
-            "tipo_venta": ("STRING", tipo_venta),
-            "sociedad": ("STRING", sociedad),
-        },
-    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        filas_future = executor.submit(
+            run_query,
+            _DETALLE_SQL,
+            "el flujo de producto",
+            {
+                "start": ("DATE", start_date),
+                "end": ("DATE", end_date),
+                "division": ("STRING", division),
+                "cedis": ("STRING", cedis),
+                "tipo_venta": ("STRING", tipo_venta),
+                "sociedad": ("STRING", sociedad),
+            },
+        )
+        cobertura_resultado = cobertura()
+        filas = filas_future.result()
 
     por_fase: dict = defaultdict(_nuevo)
     por_fecha: dict = defaultdict(_nuevo)
@@ -191,16 +296,19 @@ def build_flujo(
         # hay, y un segundo cartel encima del de almacenes centrales sería ruido.
         if fila.get("division_en_operacion") is False:
             continue
+        # Extraído una sola vez y reutilizado en las 6 agrupaciones de abajo
+        # (o en `excluidos`) -- ver el docstring de `_CamposFila`.
+        campos = _campos(fila)
         if fila.get("almacen_central"):
-            _acumular(excluidos, fila["fase"], fila)
+            _acumular(excluidos, fila["fase"], campos)
             continue
         fase = fila["fase"]
-        _acumular(por_fase, fase, fila)
-        _acumular(por_fecha, (_iso(fila["fecha"]), fase), fila)
-        _acumular(por_cedis, (fila["cedis"], fase), fila)
-        _acumular(por_division, (fila["division_code"], fase), fila)
-        _acumular(por_tipo_venta, (fila["tipo_venta"], fase), fila)
-        _acumular(por_sociedad, (fila["sociedad"], fase), fila)
+        _acumular(por_fase, fase, campos)
+        _acumular(por_fecha, (_iso(fila["fecha"]), fase), campos)
+        _acumular(por_cedis, (fila["cedis"], fase), campos)
+        _acumular(por_division, (fila["division_code"], fase), campos)
+        _acumular(por_tipo_venta, (fila["tipo_venta"], fase), campos)
+        _acumular(por_sociedad, (fila["sociedad"], fase), campos)
         if fila["division_code"] and fila["division"]:
             nombre_division[fila["division_code"]] = fila["division"]
         unidad_manejo = _UNIDAD_MANEJO.get(fila["division_code"])
@@ -219,7 +327,7 @@ def build_flujo(
     total = fuera["monto_total"] + dentro
 
     return {
-        "cobertura": cobertura(),
+        "cobertura": cobertura_resultado,
         # Lo que se dejó fuera, para que la pantalla lo pueda decir con su cifra
         # en vez de con un número escrito a mano que envejece. Todo sobre
         # facturado: el importe, las líneas, las cajas y el porcentaje.
@@ -247,3 +355,85 @@ def build_flujo(
             for (fase, division_code, unidad), total in sorted(por_unidad.items())
         ],
     }
+
+
+# ─── Caché en memoria del informe ─────────────────────────────────────────
+# Mismo patrón que `comisiones_engine.build_report()` (ver ese módulo para el
+# porqué de cada detalle: lock durante la consulta, un fallo no se cachea, se
+# sirve copia caducada si BigQuery falla). Antes `build_flujo` no cacheaba
+# nada -- a diferencia de Comisiones, cada visita a la pestaña, de cualquier
+# usuario, disparaba BigQuery + Python desde cero, incluso en producción.
+
+_FLUJO_CACHE_TTL_POR_DEFECTO = 4 * 3600
+
+_flujo_cache_lock = threading.Lock()
+
+
+class _FlujoCacheEntry(NamedTuple):
+    expires_at: float
+    flujo: dict
+
+
+_flujo_cache: dict[tuple, _FlujoCacheEntry] = {}
+
+
+def _flujo_cache_ttl_seconds() -> int:
+    """TTL de la caché. `0` (o negativo) la desactiva; valor ilegible → defecto."""
+    try:
+        ttl = int(os.getenv("FLUJO_CACHE_TTL_SECONDS", ""))
+    except ValueError:
+        return _FLUJO_CACHE_TTL_POR_DEFECTO
+    return max(ttl, 0)
+
+
+def invalidate_flujo_cache() -> None:
+    """Fuerza la relectura en la siguiente llamada. Para operativa y pruebas."""
+    global _flujo_cache
+    with _flujo_cache_lock:
+        _flujo_cache = {}
+
+
+def build_flujo(
+    *,
+    division: str | None,
+    cedis: str | None,
+    tipo_venta: str | None = None,
+    sociedad: str | None = None,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    """Punto de entrada de POST /v1/comisionesbi/flujo. Cacheado con TTL por
+    combinación de filtros -- ver el comentario de arriba."""
+    clave = (division, cedis, tipo_venta, sociedad,
+             start_date.isoformat(), end_date.isoformat())
+
+    ttl = _flujo_cache_ttl_seconds()
+    if ttl == 0:
+        # Desactivada de verdad: no se guarda nada, así que tampoco hay copia
+        # caducada que servir si BigQuery falla.
+        return _build_flujo(
+            division=division, cedis=cedis, tipo_venta=tipo_venta,
+            sociedad=sociedad, start_date=start_date, end_date=end_date,
+        )
+
+    with _flujo_cache_lock:
+        entrada = _flujo_cache.get(clave)
+        if entrada is not None and entrada.expires_at > _now():
+            return entrada.flujo
+
+        try:
+            flujo = _build_flujo(
+                division=division, cedis=cedis, tipo_venta=tipo_venta,
+                sociedad=sociedad, start_date=start_date, end_date=end_date,
+            )
+        except BigQueryError:
+            if entrada is None:
+                raise
+            log.warning(
+                "Flujo de producto no recargable desde BigQuery: se sirve la copia caducada",
+                exc_info=True,
+            )
+            return entrada.flujo
+
+        _flujo_cache[clave] = _FlujoCacheEntry(expires_at=_now() + ttl, flujo=flujo)
+        return flujo

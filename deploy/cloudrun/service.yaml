@@ -101,6 +101,20 @@ spec:
             # viejo. `0` la desactiva (solo para desarrollo).
             - name: REPORT_CACHE_TTL_SECONDS
               value: "14400"
+            # TTL de la caché de cobertura ("hasta cuándo hay datos"): no
+            # depende de los filtros del informe, mismo tipo de ventana que el
+            # catálogo. `0` la desactiva (solo para desarrollo).
+            - name: COBERTURA_CACHE_TTL_SECONDS
+              value: "3600"
+            # TTL de la caché del flujo de producto -- antes no tenía ninguna,
+            # a diferencia de Comisiones. Mismo motivo que REPORT_CACHE_TTL_SECONDS.
+            - name: FLUJO_CACHE_TTL_SECONDS
+              value: "14400"
+            # TTL de la caché de cobertura del flujo de producto (fecha de
+            # corte de cada fase) -- no depende de los filtros, mismo tipo de
+            # ventana que COBERTURA_CACHE_TTL_SECONDS de Comisiones.
+            - name: FLUJO_COBERTURA_CACHE_TTL_SECONDS
+              value: "3600"
             - name: LOG_LEVEL
               value: INFO
           startupProbe:

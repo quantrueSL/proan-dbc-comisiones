@@ -1,7 +1,7 @@
 import { requireSession } from "@/lib/auth/session";
-import { getComisionesReconciliation } from "@/lib/comisionesbi";
+import { getComisionesCatalog, getComisionesReconciliation } from "@/lib/comisionesbi";
 import { ConciliacionWorkspace } from "@/features/conciliacion/conciliacion-workspace";
-import type { ConciliacionResponse } from "@/types/comisiones";
+import { EMPTY_CATALOG, type ComisionesCatalog, type ConciliacionResponse } from "@/types/comisiones";
 
 // Fecha de México, no la del servidor -- el corte de "qué periodo ya se
 // pagó" depende del calendario del cliente, no de en qué zona horaria corre
@@ -35,24 +35,41 @@ function ultimoPeriodoCerrado(hoyISO: string): { desde: string; hasta: string } 
 export default async function ConciliacionPage() {
   requireSession();
 
+  let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let response: ConciliacionResponse | null = null;
   let error: string | null = null;
 
   const { desde: desdeISO, hasta: hastaISO } = ultimoPeriodoCerrado(fechaMexicoISO());
 
-  try {
-    response = await getComisionesReconciliation({
+  // Las dos en paralelo: son independientes (mismo patrón que Comisiones y
+  // Flujo de producto). El catálogo de división es el MISMO que usan esas dos
+  // pantallas -- antes esta tenía sus 5 opciones escritas a mano en el JSX, y
+  // un cambio de nombre o código allá no se habría reflejado aquí (2026-09-22).
+  const [catalogo, conciliacion] = await Promise.allSettled([
+    getComisionesCatalog(),
+    getComisionesReconciliation({
       division: null,
       comisionista_id: null,
       start_date: desdeISO,
       end_date: hastaISO
-    });
-  } catch (cause) {
-    error = cause instanceof Error ? cause.message : "No se pudo generar la conciliación.";
+    })
+  ]);
+
+  if (catalogo.status === "fulfilled") {
+    catalog = catalogo.value;
+  } else {
+    error = catalogo.reason instanceof Error ? catalogo.reason.message : "No se pudo cargar el catálogo de división.";
+  }
+
+  if (conciliacion.status === "fulfilled") {
+    response = conciliacion.value;
+  } else {
+    error = error ?? (conciliacion.reason instanceof Error ? conciliacion.reason.message : "No se pudo generar la conciliación.");
   }
 
   return (
     <ConciliacionWorkspace
+      initialCatalog={catalog}
       initialError={error}
       initialResponse={response}
       rangoInicial={{ desde: desdeISO, hasta: hastaISO }}

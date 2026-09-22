@@ -31,7 +31,7 @@ export type FlujoFilters = {
   division: string | null;
   cedis: string | null;
   tipo_venta?: string | null;
-  /** `DBC` o `PAN` (2026-09-10). "Vendido" es siempre DBC -- ver
+  /** `DBC` o `PAN` (2026-09-10, con vendido incluido desde 2026-09-22) -- ver
    *  `FlujoPorSociedadRow`. */
   sociedad?: string | null;
   /** ISO `YYYY-MM-DD`: la tabla de origen es diaria. */
@@ -243,6 +243,10 @@ export type ComisionBloqueoDesgloseRow = {
 
 export type ReportResponse = {
   cobertura: { desde?: string; hasta?: string };
+  /** Oficina 0130: el cliente confirmó (2026-09-22) que no genera comisión --
+   *  se saca de `totales`/`desglose`/`bloqueado` (no es "sin tarifa") y se
+   *  reporta aparte, mismo patrón que `excluido_almacen_central` en flujo. */
+  excluido_oficina_0130: { num_lineas: number; monto: number; pct_del_total: number };
   totales: ComisionTotales & { pct_calculable: number; lineas_sin_importe: number };
   por_comisionista: ComisionPorComisionista[];
   por_sociedad: ComisionPorSociedad[];
@@ -261,6 +265,7 @@ export type ReportResponse = {
 
 export const EMPTY_REPORT: ReportResponse = {
   cobertura: {},
+  excluido_oficina_0130: { num_lineas: 0, monto: 0, pct_del_total: 0 },
   totales: {
     num_lineas: 0,
     monto: 0,

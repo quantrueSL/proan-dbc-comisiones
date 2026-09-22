@@ -53,8 +53,7 @@ type Filtros = {
   division: string | null;
   cedis: string | null;
   tipoVenta: string | null;
-  /** `DBC` o `PAN` (2026-09-10). "Vendido" es siempre DBC -- filtrar por PAN
-   *  en esa fase da vacío, no es un bug. */
+  /** `DBC` o `PAN` (2026-09-10, con vendido incluido desde 2026-09-22). */
   sociedad: string | null;
 };
 
@@ -234,6 +233,7 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
     if (filtros.division) params.set("division", filtros.division);
     if (filtros.cedis) params.set("cedis", filtros.cedis);
     if (filtros.tipoVenta) params.set("tipo_venta", filtros.tipoVenta);
+    if (filtros.sociedad) params.set("sociedad", filtros.sociedad);
     router.push(`/flujo-producto?${params.toString()}`);
   }
 
@@ -313,7 +313,7 @@ export function FlujoProductoWorkspace({ initialCatalog, initialFlujo, initialEr
         </div>
         <p className="flujo-pista">
           La división, el CEDIS y el tipo de venta se filtran pulsando sobre las barras. PAN solo
-          aparece en facturado y cobrado (huevo) -- vendido es siempre DBC.
+          aparece en huevo, en las tres fases.
         </p>
       </FiltersSidebar>
 

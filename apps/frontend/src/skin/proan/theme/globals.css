@@ -7955,7 +7955,13 @@ body.proan-report-assistant-open .proan-content-scroll {
   min-width: 0;
 }
 
-.operational-summary-title p {
+/* Hijo DIRECTO a propósito (no ".operational-summary-title p" a secas): el
+   modal de aviso (`AvisoBoton`/`Modal` en components/aviso.tsx) no usa portal
+   de React, así que cuando está abierto sus <p> quedan anidados varios
+   niveles dentro de este mismo contenedor -- un selector descendiente los
+   atrapaba y ponía en mayúsculas el cuerpo del aviso, que no tiene nada que
+   ver con esta etiqueta pequeña. */
+.operational-summary-title > p {
   margin: 0 0 4px;
   color: #3d3d7c;
   font-size: 8.5px;
@@ -10890,7 +10896,7 @@ body.proan-report-assistant-open .proan-content-scroll {
 /* Modales de tabla */
 .flujo-modal { width: min(1040px, 94vw); max-height: 86vh; display: flex; flex-direction: column; }
 .flujo-modal header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #efece7; padding: 18px 22px; }
-.flujo-modal header span { display: block; color: #8b8880; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.flujo-modal header span { display: block; color: #8b8880; font-size: 11px; }
 .flujo-modal header h2 { margin: 4px 0 0; font-size: 19px; }
 .flujo-modal header button { border: 0; background: transparent; color: #6f7278; cursor: pointer; font-size: 28px; line-height: 1; }
 .flujo-modal-cuerpo { overflow: auto; padding: 0 6px 6px; }

@@ -90,14 +90,19 @@ def cliente(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _cache_desactivada(monkeypatch):
-    """`build_report` cachea por combinación de filtros -- casi todos los
-    tests de aquí llaman con los mismos parámetros por defecto (`_informe`),
-    así que sin esto el segundo test heredaría el resultado del primero. Los
-    tests de la caché en sí la reactivan explícitamente."""
+    """`build_report` cachea por combinación de filtros, y `cobertura()` por su
+    cuenta -- casi todos los tests de aquí llaman con los mismos parámetros por
+    defecto (`_informe`), así que sin esto el segundo test heredaría el
+    resultado del primero. Los tests de cada caché la reactivan explícitamente
+    (`_activar_cache` solo toca `REPORT_CACHE_TTL_SECONDS`, así que la de
+    cobertura sigue desactivada ahí salvo que el test la active también)."""
     monkeypatch.setenv("REPORT_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setenv("COBERTURA_CACHE_TTL_SECONDS", "0")
     comisiones_engine.invalidate_report_cache()
+    comisiones_engine.invalidate_cobertura_cache()
     yield
     comisiones_engine.invalidate_report_cache()
+    comisiones_engine.invalidate_cobertura_cache()
 
 
 def _informe(**extra):
@@ -562,8 +567,10 @@ def test_la_segunda_peticion_con_los_mismos_filtros_no_vuelve_a_consultar(client
     primero = _informe()
     segundo = _informe()
 
-    # cobertura() no cachea, así que hay 2 llamadas por informe: MIN(fecha) y
-    # el detalle. Dos informes cacheados -> 2 llamadas en total, no 4.
+    # La caché de cobertura está desactivada en este test (autouse), así que
+    # hay 2 llamadas por informe construido: MIN(fecha) y el detalle. El
+    # segundo `_informe()` es un hit de la caché de informe -> no reconstruye
+    # nada -> 2 llamadas en total, no 4.
     assert len(falso.llamadas) == 2
     assert segundo == primero
 
@@ -644,6 +651,114 @@ def test_invalidate_report_cache_fuerza_la_relectura(cliente, monkeypatch, reloj
     _informe()
 
     assert len(falso.llamadas) == 4
+
+
+# ─── Caché de cobertura ────────────────────────────────────────────────────
+# `cobertura()` no depende de los filtros del informe: mismo patrón de caché
+# que `catalog_engine.catalog()` (ver ese módulo para el porqué de cada
+# detalle -- lock durante la consulta, un fallo no se cachea, se sirve copia
+# caducada si BigQuery falla), pero con una sola consulta en vez de dos.
+
+
+class _ClienteCobertura:
+    """Cuenta cuántas veces se lanza `_COBERTURA_SQL`."""
+
+    def __init__(self):
+        self.consultas = 0
+
+    def query(self, sql, job_config=None):
+        self.consultas += 1
+        resultado = MagicMock()
+        resultado.result.return_value = [{"desde": date(2026, 1, 1), "hasta": date(2026, 8, 23)}]
+        return resultado
+
+
+def _activar_cache_cobertura(monkeypatch, segundos="3600"):
+    monkeypatch.setenv("COBERTURA_CACHE_TTL_SECONDS", segundos)
+
+
+def test_cobertura_la_segunda_peticion_no_vuelve_a_consultar(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    primero = comisiones_engine.cobertura()
+    segundo = comisiones_engine.cobertura()
+
+    assert cliente.consultas == 1
+    assert segundo == primero
+
+
+def test_cobertura_al_vencer_el_ttl_vuelve_a_consultar(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch, "3600")
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    comisiones_engine.cobertura()
+    reloj[0] += 3599
+    comisiones_engine.cobertura()
+    assert cliente.consultas == 1
+
+    reloj[0] += 2  # ya pasó la hora
+    comisiones_engine.cobertura()
+    assert cliente.consultas == 2
+
+
+def test_cobertura_ttl_cero_desactiva_la_cache(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch, "0")
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    comisiones_engine.cobertura()
+    comisiones_engine.cobertura()
+
+    assert cliente.consultas == 2
+
+
+def test_cobertura_ttl_ilegible_cae_al_valor_por_defecto(monkeypatch):
+    monkeypatch.setenv("COBERTURA_CACHE_TTL_SECONDS", "una-hora")
+    assert comisiones_engine._cobertura_cache_ttl_seconds() == 3600
+
+    monkeypatch.delenv("COBERTURA_CACHE_TTL_SECONDS")
+    assert comisiones_engine._cobertura_cache_ttl_seconds() == 3600
+
+    # Un negativo se trata como desactivada, no como caché eterna.
+    monkeypatch.setenv("COBERTURA_CACHE_TTL_SECONDS", "-5")
+    assert comisiones_engine._cobertura_cache_ttl_seconds() == 0
+
+
+def test_cobertura_si_bigquery_falla_se_sirve_la_copia_caducada(monkeypatch, reloj, caplog):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+    buena = comisiones_engine.cobertura()
+
+    reloj[0] += 4000  # caducada
+
+    class _ClienteCaido:
+        def query(self, sql, job_config=None):
+            from google.api_core.exceptions import ServiceUnavailable
+
+            raise ServiceUnavailable("caído")
+
+    monkeypatch.setattr(db, "get_bq_client", lambda: _ClienteCaido())
+
+    with caplog.at_level(logging.WARNING):
+        assert comisiones_engine.cobertura() == buena
+
+    assert "copia caducada" in caplog.text
+
+
+def test_cobertura_invalidate_fuerza_la_relectura(monkeypatch, reloj):
+    _activar_cache_cobertura(monkeypatch)
+    cliente = _ClienteCobertura()
+    monkeypatch.setattr(db, "get_bq_client", lambda: cliente)
+
+    comisiones_engine.cobertura()
+    comisiones_engine.invalidate_cobertura_cache()
+    comisiones_engine.cobertura()
+
+    assert cliente.consultas == 2
 
 
 def test_separa_la_comision_por_sociedad(cliente):

@@ -137,7 +137,13 @@ def run_query(sql: str, nombre: str, parametros: dict | None = None) -> list[dic
 
     try:
         rows = client.query(sql, job_config=job_config).result()
-        return [dict(row.items()) for row in rows]
+        # NO `dict(row.items())`: `Row.items()`/`Row.values()` de la librería
+        # de BigQuery le hacen `copy.deepcopy()` a CADA valor de CADA fila --
+        # medido 2026-09-22, ~3.6 s para 74 mil filas de puro deepcopy
+        # innecesario (son strings/fechas/floats, no hace falta copiarlos).
+        # `Row.__getitem__` no copia nada, así que leer por campo es ~3x más
+        # rápido con el mismo resultado.
+        return [{campo: row[campo] for campo in row.keys()} for row in rows]
     except (GoogleAPIError, GoogleAuthError) as exc:
         log.exception("Fallo consultando %s en BigQuery", nombre)
         raise BigQueryQueryError(f"No se pudo consultar {nombre}.") from exc
