@@ -38,7 +38,7 @@
 -- de tipo de venta), $3,3 M en botana, $0,5 M en alimento. Leche y Abarrotes
 -- no cambian (su tarifa no distingue tipo de venta/canal, nada que resolver).
 -- =============================================================================
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` AS
+CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro_test` AS
 
 WITH
 

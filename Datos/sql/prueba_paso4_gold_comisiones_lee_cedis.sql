@@ -19,7 +19,7 @@
 -- tipo_venta_origen no se rastrea (tarifa directa por SET+canal).
 -- =============================================================================
 
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`
+CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2_test`
 PARTITION BY fecha
 CLUSTER BY division_code, cedis, comision_estado
 AS

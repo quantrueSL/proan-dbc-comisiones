@@ -18,7 +18,7 @@
 -- excepción a propósito).
 -- =============================================================================
 
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`
+CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea_test`
 PARTITION BY fecha
 CLUSTER BY division_code, comisionista
 AS

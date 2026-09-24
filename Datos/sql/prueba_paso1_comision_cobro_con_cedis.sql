@@ -38,7 +38,7 @@
 -- de tipo de venta), $3,3 M en botana, $0,5 M en alimento. Leche y Abarrotes
 -- no cambian (su tarifa no distingue tipo de venta/canal, nada que resolver).
 -- =============================================================================
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` AS
+CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro_test` AS
 
 WITH
 
@@ -48,120 +48,6 @@ sets AS (
     ANY_VALUE(SETNAME) AS SETNAME
   FROM `proan-quantrue.D00_SANDBOX.sap_setleaf_comisiones`
   GROUP BY matnr_clean
-),
-
--- ==========================================================================
--- 2026-09-24: CEDIS SE RESUELVE AQUÍ, en la silver, y viaja como columna.
--- Antes cada consumidor repetía la cascada por su cuenta y se descuadraban:
--- `v1_conciliacion_factura_linea.sql` la hacía con 3 de los 4 escalones (le
--- faltaba el de nombre) y por eso dejaba 1.275 líneas / $9.613.778 sin CEDIS
--- que el flujo de producto sí resolvía. Resolviéndolo una sola vez aquí, ese
--- archivo pasa a leer la columna y el descuadre no puede volver a aparecer.
---
--- Los cuatro escalones de abajo son copia literal de las vistas dim_cedis_v1 /
--- _almacen_v1 / _nombre_v1 / _oficina_v1 (`v1_flujo_producto_dbc.sql`, secciones
--- 1, 1b, 1c y 1d), traídos inline para que esas cuatro vistas se puedan retirar
--- cuando los tres consumidores dejen de usarlas.
---
--- Verificado contra la tabla viva antes de sustituirla (tabla _test, 2026-09-24):
--- cero llaves duplicadas, las 18 columnas no-cobro idénticas fila por fila (las
--- 4 de cobro se mueven solas porque BSAD cambia a diario), 1.275 líneas y
--- $9.613.778 de ganancia exactos contra lo predicho, y cero retrocesos:
--- ninguna línea pierde un CEDIS que antes tenía.
--- ==========================================================================
-esc_1_almacen_oficina AS (
-  SELECT * EXCEPT (rn)
-  FROM (
-    SELECT almacen, oficina, cedis, sector, tipo_venta,
-           ROW_NUMBER() OVER (PARTITION BY almacen, oficina ORDER BY sector) AS rn
-    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-  )
-  WHERE rn = 1
-),
-
-esc_2_almacen AS (
-  SELECT almacen, ANY_VALUE(cedis) AS cedis
-  FROM (
-    SELECT almacen, cedis
-    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-    GROUP BY almacen, cedis
-  )
-  GROUP BY almacen
-  HAVING COUNT(*) = 1
-),
-
-esc_3_nombre AS (
-  SELECT * EXCEPT (rn)
-  FROM (
-    SELECT
-      IFNULL(l.planta, '') AS planta,
-      l.almacen,
-      COALESCE(c.cedis, l.nombre_cedis) AS cedis,
-      ROW_NUMBER() OVER (
-        PARTITION BY l.almacen
-        ORDER BY IF(l.origen = 'deducido', 0, 1), l.planta DESC, l.nombre_cedis
-      ) AS rn
-    FROM (
-      SELECT planta, almacen, nombre_cedis, origen,
-             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
-      WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
-    ) l
-    LEFT JOIN (
-      SELECT DISTINCT cedis,
-             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-    ) c ON c.clave = l.clave
-  )
-  WHERE rn = 1
-),
-
-esc_4_oficina AS (
-  SELECT * EXCEPT (filas, rn)
-  FROM (
-    SELECT oficina, cedis, tipo_venta, COUNT(*) AS filas,
-           ROW_NUMBER() OVER (
-             PARTITION BY oficina ORDER BY COUNT(*) DESC, cedis, tipo_venta
-           ) AS rn
-    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-    WHERE oficina IN (
-      SELECT oficina
-      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-      GROUP BY oficina
-      HAVING COUNT(DISTINCT almacen) > 1
-    )
-    GROUP BY oficina, cedis, tipo_venta
-  )
-  WHERE rn = 1
-),
-
--- Una fila por almacén+oficina+planta: cada escalón está deduplicado por su
--- propia llave, así que este JOIN no puede multiplicar filas de facturación.
-cedis_asignado AS (
-  SELECT
-    k.almacen, k.oficina, k.planta,
-    COALESCE(e1.cedis, e2.cedis, e3.cedis, e4.cedis) AS cedis,
-    CASE WHEN e1.cedis IS NOT NULL THEN 'almacen+oficina'
-         WHEN e2.cedis IS NOT NULL THEN 'solo almacen'
-         WHEN e3.cedis IS NOT NULL THEN 'lista de nombres'
-         WHEN e4.cedis IS NOT NULL THEN 'solo oficina'
-    END AS cedis_origen
-  FROM (
-    SELECT DISTINCT
-      storage_location AS almacen, sales_office AS oficina, receiving_plant AS planta
-    FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
-    WHERE company_code IN ('DBC','PAN')
-  ) k
-  LEFT JOIN esc_1_almacen_oficina e1
-         ON e1.almacen = k.almacen AND e1.oficina = k.oficina
-  LEFT JOIN esc_2_almacen e2
-         ON e1.cedis IS NULL AND e2.almacen = k.almacen
-  LEFT JOIN esc_3_nombre e3
-         ON e1.cedis IS NULL AND e2.cedis IS NULL AND e3.almacen = k.almacen
-        AND (e3.planta IS NULL OR e3.planta = '' OR e3.planta = k.planta)
-  LEFT JOIN esc_4_oficina e4
-         ON e1.cedis IS NULL AND e2.cedis IS NULL AND e3.cedis IS NULL
-        AND e4.oficina = k.oficina
 ),
 
 -- 2026-09-08: BUG CORREGIDO -- `dim_cedis_almacen_v1` no tiene columna
@@ -190,12 +76,9 @@ cedis AS (
         -- tipo_venta igual que los de DBC. Verificado que `dm_cedis` los cubre
         -- al 100%, así que no abre ningún hueco nuevo.
         WHERE company_code IN ('DBC','PAN')) f
-  -- 2026-09-24: mismos dos escalones, pero inline (esc_1/esc_4 de arriba) en vez
-  -- de las vistas dim_cedis_v1/dim_cedis_oficina_v1, para poder retirarlas. La
-  -- lógica es idéntica: esas vistas son exactamente esas dos CTEs.
-  LEFT JOIN esc_1_almacen_oficina dc
+  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc
          ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-  LEFT JOIN esc_4_oficina dco
+  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
          ON dc.tipo_venta IS NULL AND dco.oficina = f.sales_office
 ),
 
@@ -404,6 +287,110 @@ facturas AS (
     AND f.billing_date BETWEEN '2026-01-01' AND CURRENT_DATE()
     AND f.sales_office  NOT IN ('0001', '0174', '0175', '0181')
     AND f.storage_location NOT IN ('BO28','H793','BO01','H723')
+),
+
+-- ==========================================================================
+-- PRUEBA (paso 1, 2026-09-24): se resuelve CEDIS aquí, en la silver, para que
+-- `v1_conciliacion_factura_linea.sql` deje de repetir la cascada por su cuenta
+-- (hoy la repite con 3 de los 4 escalones -- le falta el de nombre, medido en
+-- 1.275 lineas y $9.613.778). Los cuatro escalones son copia literal de las
+-- vistas dim_cedis_v1 / _almacen_v1 / _nombre_v1 / _oficina_v1 de
+-- v1_flujo_producto_dbc.sql, traídos inline para que esas vistas se puedan
+-- retirar cuando los tres consumidores dejen de usarlas.
+-- ==========================================================================
+esc_1_almacen_oficina AS (
+  SELECT * EXCEPT (rn)
+  FROM (
+    SELECT almacen, oficina, cedis, sector, tipo_venta,
+           ROW_NUMBER() OVER (PARTITION BY almacen, oficina ORDER BY sector) AS rn
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+  )
+  WHERE rn = 1
+),
+
+esc_2_almacen AS (
+  SELECT almacen, ANY_VALUE(cedis) AS cedis
+  FROM (
+    SELECT almacen, cedis
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    GROUP BY almacen, cedis
+  )
+  GROUP BY almacen
+  HAVING COUNT(*) = 1
+),
+
+esc_3_nombre AS (
+  SELECT * EXCEPT (rn)
+  FROM (
+    SELECT
+      IFNULL(l.planta, '') AS planta,
+      l.almacen,
+      COALESCE(c.cedis, l.nombre_cedis) AS cedis,
+      ROW_NUMBER() OVER (
+        PARTITION BY l.almacen
+        ORDER BY IF(l.origen = 'deducido', 0, 1), l.planta DESC, l.nombre_cedis
+      ) AS rn
+    FROM (
+      SELECT planta, almacen, nombre_cedis, origen,
+             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
+      WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
+    ) l
+    LEFT JOIN (
+      SELECT DISTINCT cedis,
+             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    ) c ON c.clave = l.clave
+  )
+  WHERE rn = 1
+),
+
+esc_4_oficina AS (
+  SELECT * EXCEPT (filas, rn)
+  FROM (
+    SELECT oficina, cedis, tipo_venta, COUNT(*) AS filas,
+           ROW_NUMBER() OVER (
+             PARTITION BY oficina ORDER BY COUNT(*) DESC, cedis, tipo_venta
+           ) AS rn
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    WHERE oficina IN (
+      SELECT oficina
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+      GROUP BY oficina
+      HAVING COUNT(DISTINCT almacen) > 1
+    )
+    GROUP BY oficina, cedis, tipo_venta
+  )
+  WHERE rn = 1
+),
+
+-- Una fila por almacén+oficina+planta: cada escalón está deduplicado por su
+-- propia llave, así que este JOIN no puede multiplicar filas de facturación.
+cedis_asignado AS (
+  SELECT
+    k.almacen, k.oficina, k.planta,
+    COALESCE(e1.cedis, e2.cedis, e3.cedis, e4.cedis) AS cedis,
+    CASE WHEN e1.cedis IS NOT NULL THEN 'almacen+oficina'
+         WHEN e2.cedis IS NOT NULL THEN 'solo almacen'
+         WHEN e3.cedis IS NOT NULL THEN 'lista de nombres'
+         WHEN e4.cedis IS NOT NULL THEN 'solo oficina'
+    END AS cedis_origen
+  FROM (
+    SELECT DISTINCT
+      storage_location AS almacen, sales_office AS oficina, receiving_plant AS planta
+    FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
+    WHERE company_code IN ('DBC','PAN')
+  ) k
+  LEFT JOIN esc_1_almacen_oficina e1
+         ON e1.almacen = k.almacen AND e1.oficina = k.oficina
+  LEFT JOIN esc_2_almacen e2
+         ON e1.cedis IS NULL AND e2.almacen = k.almacen
+  LEFT JOIN esc_3_nombre e3
+         ON e1.cedis IS NULL AND e2.cedis IS NULL AND e3.almacen = k.almacen
+        AND (e3.planta IS NULL OR e3.planta = '' OR e3.planta = k.planta)
+  LEFT JOIN esc_4_oficina e4
+         ON e1.cedis IS NULL AND e2.cedis IS NULL AND e3.cedis IS NULL
+        AND e4.oficina = k.oficina
 ),
 
 base AS (
