@@ -211,6 +211,44 @@ alcance_pan AS (
   WHERE BUKRS = 'PAN'
 ),
 
+-- 2026-09-23: la unidad de la comisión ya no se decide con un IN ('H','IA')
+-- suelto aquí -- sale de `dim_base_comision_v1` (`v1_comision_dbc.sql`,
+-- sección 3), que es donde vive la confirmación del cliente por división
+-- (H y IA: "es por kg", 25 y 26/08/2026) para no enterrar esa regla de
+-- negocio en un CASE sin rastro de quién la confirmó.
+--
+-- Y el kg en sí ya no sale de `net_weight` de facturación -- confirmado el
+-- 2026-09-23 contra el maestro de unidades del senior (`sap_MARM_20260921`,
+-- que SÍ se mantiene, a diferencia de `sap_material_master_20250223` que
+-- quedó congelado en feb 2025 con el mismo dato) que para 36 materiales de
+-- huevo `net_weight` repite la cantidad facturada en vez del peso real --
+-- $4.082 M de facturación con el número equivocado, 16,5% de las líneas de H.
+-- `MEINH='KG'` da el kg de UNA unidad base del material vía UMREZ/UMREN
+-- (funciona igual si la unidad base YA es kg: ese renglón trae UMREZ=UMREN=1).
+--
+-- `billing_quantity`, no `stockkeeping_units`, para multiplicar por ese
+-- factor: `stockkeeping_units` se había validado (sección 8 del borrador
+-- técnico) bajo el supuesto de que la comisión se pagaba por caja en las 5
+-- divisiones -- supuesto que ya no es cierto (H/IA son por kg, confirmado por
+-- el cliente). Medido mes a mes 2026 en H: `billing_quantity` da el mismo
+-- número que `stockkeeping_units` casi exacto (ratio 0.999-1.000 todos los
+-- meses, e idéntico en los 36 materiales del bug), mientras que
+-- `invoiced_quantity` diverge 1,4%-11,8% por venir en la unidad de venta
+-- nativa sin convertir. Con `billing_quantity` no hace falta defender por
+-- qué se usa una columna llamada "stockkeeping" para algo que ya no es caja.
+--
+-- FALLBACK a `net_weight`: ~51 materiales (43 de IA, 8 de H) no tienen
+-- NINGUNA fila KG en el maestro -- ni siquiera con el bug, el dato no existe.
+-- El cliente dijo "por kg" sin excepciones para H/IA, así que se asume que
+-- también lo son y es un hueco del maestro, no otra unidad -- pendiente de
+-- confirmar con el cliente la lista concreta. Mientras tanto, mejor el
+-- número de siempre que perder la comisión de ventas reales.
+marm_kg AS (
+  SELECT LTRIM(MATNR, '0') AS matnr_clean, SAFE_DIVIDE(UMREN, UMREZ) AS kg_por_unidad_base
+  FROM `proan-quantrue.D10_POSTPROCESSING.sap_MARM_20260921`
+  WHERE MEINH = 'KG'
+),
+
 facturas AS (
   SELECT
     f.billing_document,
@@ -223,12 +261,16 @@ facturas AS (
     f.receiving_plant                             AS werks,
     LTRIM(CAST(f.material_number AS STRING), '0') AS matnr_clean,
     CASE
-      WHEN f.sales_division IN ('H','IA') THEN CAST(f.net_weight AS FLOAT64)
+      WHEN bc.base = 'kg' THEN
+        COALESCE(CAST(f.billing_quantity AS FLOAT64) * m.kg_por_unidad_base,
+                 CAST(f.net_weight AS FLOAT64))
       ELSE CAST(f.billing_quantity AS FLOAT64)
     END AS cantidad,
     f.amount_mxn                                  AS importe_mxn,
     f.currency
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
+  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_base_comision_v1` bc ON bc.division_code = f.sales_division
+  LEFT JOIN marm_kg m ON m.matnr_clean = LTRIM(CAST(f.material_number AS STRING), '0')
   WHERE (
       f.company_code = 'DBC'
       -- PAN entra SOLO en huevo y SOLO donde su propia tarifa existe. Ver el
