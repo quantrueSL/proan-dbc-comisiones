@@ -69,12 +69,67 @@ sets AS (
 -- $9.613.778 de ganancia exactos contra lo predicho, y cero retrocesos:
 -- ninguna línea pierde un CEDIS que antes tenía.
 -- ==========================================================================
+-- DESEMPATE DE LAS LLAVES AMBIGUAS DE dm_cedis (2026-09-24).
+-- `dm_cedis` da DOS cedis distintos para la misma llave almacén+oficina en
+-- exactamente 2 casos, y los dos son el mismo sitio: BO11/0122 y H717/0122,
+-- "Celaya Agustin" contra "Celaya Genaro". El `ROW_NUMBER ... ORDER BY sector`
+-- de abajo no los separa (ambas filas comparten sector), así que ganaba una
+-- arbitrariamente -- y salía Agustin en TODO, incluidas las líneas cuyo
+-- comisionista es Genaro.
+--
+-- Esos nombres de CEDIS son nombres de comisionista, así que se desempata con
+-- la llave que ya está validada: la asignación de `DBC_dim_comisionista`, que
+-- se cruza por LIFNR y se contrastó contra el pago real de BSAK (ver
+-- v1_comision_dbc_gold_v2.sql). Las 5 filas de la oficina 0122 en esa tabla
+-- dicen GENARO QUIROZ PEREZ (4040) -- DBC y PAN, divisiones H/BO/IA/L --, y
+-- ninguna dice Agustin. Las listas de almacén-oficina del cliente coinciden
+-- ("CELAYA (Genaro)" en A, H y L).
+--
+-- Es autolimitado por construcción: solo mira llaves con más de un cedis, y
+-- solo decide si queda UNA candidata tras cruzar con el comisionista. Si
+-- mañana `dm_cedis` deja de ser ambigua, este CTE no hace nada.
+-- Lo correcto de verdad sería corregir `dm_cedis`, que es maestro del grupo y
+-- no es nuestro -- esto es el parche del lado del consumidor mientras tanto.
+cedis_desempate_comisionista AS (
+  SELECT almacen, oficina, MIN(cedis) AS cedis
+  FROM (
+    SELECT DISTINCT k.almacen, k.oficina, k.cedis
+    FROM (
+      SELECT DISTINCT c.almacen, c.oficina, c.cedis
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis` c
+      WHERE (c.almacen, c.oficina) IN (
+        SELECT (almacen, oficina) FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+        GROUP BY almacen, oficina HAVING COUNT(DISTINCT cedis) > 1)
+    ) k
+    JOIN (
+      SELECT DISTINCT oficina, persona
+      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+      WHERE persona IS NOT NULL AND persona != ''
+    ) p ON p.oficina = k.oficina
+    -- el nombre del CEDIS contiene un nombre/apellido del comisionista
+    WHERE EXISTS (
+      SELECT 1
+      FROM UNNEST(SPLIT(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(p.persona, NFKD), r'[^a-z ]', ''), ' ')) tok
+      WHERE LENGTH(tok) >= 4
+        AND STRPOS(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(k.cedis, NFKD), r'[^a-z ]', ''), tok) > 0
+    )
+  )
+  GROUP BY almacen, oficina
+  HAVING COUNT(*) = 1
+),
+
 esc_1_almacen_oficina AS (
   SELECT * EXCEPT (rn)
   FROM (
-    SELECT almacen, oficina, cedis, sector, tipo_venta,
-           ROW_NUMBER() OVER (PARTITION BY almacen, oficina ORDER BY sector) AS rn
-    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    SELECT c.almacen, c.oficina, c.cedis, c.sector, c.tipo_venta,
+           ROW_NUMBER() OVER (PARTITION BY c.almacen, c.oficina ORDER BY c.sector) AS rn
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis` c
+    LEFT JOIN cedis_desempate_comisionista d
+           ON d.almacen = c.almacen AND d.oficina = c.oficina
+    -- donde el comisionista resolvió la ambigüedad, solo compiten las filas de
+    -- ESE cedis -- así `tipo_venta` también sale de la fila correcta, no de la
+    -- del otro comisionista.
+    WHERE d.cedis IS NULL OR c.cedis = d.cedis
   )
   WHERE rn = 1
 ),
@@ -710,6 +765,14 @@ factura_totales AS (
                         AND k.VKBUR = f.sales_office))
     )
     AND f.sales_division IN ('H','BO','IA','A','L')
+    -- AQUÍ SÍ VA 'M' A SECAS, a diferencia de `factura_totales_v1` en
+    -- v1_flujo_producto_dbc.sql, que admite M+P+S (2026-09-24). No es un
+    -- descuido: allí esa CTE también decide QUÉ documentos entran en cobrado,
+    -- así que dejar fuera P/S perdía cobros reales. Aquí no -- `pago_factura`
+    -- no filtra contra esta lista, solo se pega por LEFT JOIN a las líneas de
+    -- `facturas`, que ya son M. Una nota de débito no genera comisión, así que
+    -- no tiene línea donde colgarse y su pago no entra por ningún lado.
+    -- Numerador y denominador quedan sobre el mismo universo: solo facturas.
     AND f.document_category = 'M'
     AND f.sales_office NOT IN ('0001', '0174', '0175', '0181')
     AND f.storage_location NOT IN ('BO28','H793','BO01','H723')

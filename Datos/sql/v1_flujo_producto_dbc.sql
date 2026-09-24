@@ -136,20 +136,21 @@
 --    desempate aquí sigue siendo PROVISIONAL (primer sector en orden
 --    alfabético -> hoy siempre cae en "Huevo (H) y Croqueta (IA)") —
 --    ajustar en cuanto el negocio confirme cómo repartir esos 36 casos.
+--
+--    2026-09-24: de esos 36, los que cambian el CEDIS resultante son
+--    exactamente 2 -- BO11/0122 y H717/0122, "Celaya Agustin" vs "Celaya
+--    Genaro" -- y ya no dependen del desempate alfabético: los resuelve
+--    `cedis_desempate_comisionista` con la asignación de comisionista de esa
+--    oficina, que es llave validada contra el pago real de BSAK. Ver el
+--    comentario largo en v1_comision_dbc_completo_cobro.sql. Los otros 34
+--    siguen siendo cosméticos (cambia `sector`, no `cedis`).
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` AS
-SELECT * EXCEPT (rn)
-FROM (
-  SELECT
-    almacen,
-    oficina,
-    cedis,
-    sector,
-    tipo_venta,
-    ROW_NUMBER() OVER (PARTITION BY almacen, oficina ORDER BY sector) AS rn
-  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-)
-WHERE rn = 1;
+--    2026-09-24: ESTE ESCALÓN YA NO ES UNA VISTA SUELTA. El código vive como
+--    CTE `esc_1_almacen_oficina` (y su `cedis_desempate_comisionista`) dentro
+--    de `v1_flujo_producto_dbc`, más abajo. La vista `dim_cedis_v1` se retira:
+--    la usaban esta consulta, comisiones y conciliación, y las tres pasaron a
+--    llevar la cascada inline (pasos 3-6). El comentario de arriba se queda
+--    aquí porque documenta la regla, no el objeto.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1b) Dimensión CEDIS a nivel OFICINA — el fallback del cruce.
@@ -204,31 +205,9 @@ WHERE rn = 1;
 --     Esto se cierra con una decisión de negocio, no con más SQL: 27 pares
 --     planta+almacén+oficina de >= $3 M explican el 97% del hueco restante.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` AS
-WITH oficinas_utiles AS (
-  -- Más de un almacén en el catálogo = la oficina significa un sitio, no es
-  -- el cajón donde cae lo que no tiene oficina propia.
-  SELECT oficina
-  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-  GROUP BY oficina
-  HAVING COUNT(DISTINCT almacen) > 1
-)
-SELECT * EXCEPT (filas, rn)
-FROM (
-  SELECT
-    oficina,
-    cedis,
-    tipo_venta,
-    COUNT(*) AS filas,
-    ROW_NUMBER() OVER (
-      PARTITION BY oficina
-      ORDER BY COUNT(*) DESC, cedis, tipo_venta
-    ) AS rn
-  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-  WHERE oficina IN (SELECT oficina FROM oficinas_utiles)
-  GROUP BY oficina, cedis, tipo_venta
-)
-WHERE rn = 1;
+--     2026-09-24: el código vive ahora como CTE `esc_4_oficina` dentro de
+--     `v1_flujo_producto_dbc`, más abajo. La vista `dim_cedis_oficina_v1` se
+--     retira.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1c) Dimensión CEDIS a nivel ALMACÉN — el segundo escalón del cruce.
@@ -255,15 +234,9 @@ WHERE rn = 1;
 --     No da `tipo_venta`: un mismo almacén sirve varios tipos según la oficina,
 --     así que eso se sigue resolviendo por el par o por la oficina.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` AS
-SELECT almacen, ANY_VALUE(cedis) AS cedis
-FROM (
-  SELECT almacen, cedis
-  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-  GROUP BY almacen, cedis
-)
-GROUP BY almacen
-HAVING COUNT(*) = 1;
+--     2026-09-24: el código vive ahora como CTE `esc_2_almacen` dentro de
+--     `v1_flujo_producto_dbc`, más abajo. La vista `dim_cedis_almacen_v1` se
+--     retira.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 1d) EL MAPEO MANUAL NO ESTÁ AQUÍ, y conviene saber dónde está.
@@ -312,43 +285,12 @@ HAVING COUNT(*) = 1;
 --     que haber corrido antes que este script. Si esa tabla no existe, las
 --     vistas de abajo no se pueden crear.
 -- ─────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` AS
-WITH catalogo AS (
-  SELECT DISTINCT
-    cedis,
-    UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-  FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
-),
-lista AS (
-  SELECT
-    planta, almacen, nombre_cedis, origen,
-    UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-  FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
-  WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
-)
-SELECT * EXCEPT (rn) FROM (
-  SELECT
-    -- El fichero del cliente no trae columna de planta, así que esto llega
-    -- NULL en las 59 filas. Se normaliza a cadena vacía porque el contrato de
-    -- esta vista es "planta vacía = vale para cualquier planta", y `NULL = ''`
-    -- en SQL no es FALSE sino NULL: dejarlo nulo hacía que el JOIN de abajo no
-    -- cruzara NUNCA, y este escalón entero no llegaba a ejecutarse.
-    IFNULL(l.planta, '') AS planta,
-    l.almacen,
-    l.origen,
-    -- La grafía del catálogo si el nombre existe allí; si no, la del cliente.
-    COALESCE(c.cedis, l.nombre_cedis) AS cedis,
-    c.cedis IS NOT NULL AS grafia_del_catalogo,
-    -- Una sola fila por almacén, para que este join no pueda multiplicar
-    -- líneas del flujo. Si algún día hay dos, gana la nuestra.
-    ROW_NUMBER() OVER (
-      PARTITION BY l.almacen
-      ORDER BY IF(l.origen = 'deducido', 0, 1), l.planta DESC, l.nombre_cedis
-    ) AS rn
-  FROM lista l
-  LEFT JOIN catalogo c ON c.clave = l.clave
-)
-WHERE rn = 1;
+--     2026-09-24: el código vive ahora como CTE `esc_3_nombre` dentro de
+--     `v1_flujo_producto_dbc`, más abajo. La vista `dim_cedis_nombre_v1` se
+--     retira. Los dos matices de arriba siguen valiendo dentro del CTE: la
+--     planta NULL se normaliza a cadena vacía ("vale para cualquier planta" --
+--     si se deja nula el JOIN no cruza nunca y el escalón no se ejecuta), y se
+--     deja una sola fila por almacén para que el join no multiplique líneas.
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 2) v1: flujo de producto DBC+PAN — vendido + facturado + cobrado, un
@@ -385,7 +327,124 @@ WHERE rn = 1;
 -- 'DBC' siempre.
 -- ─────────────────────────────────────────────────────────────────────────
 CREATE OR REPLACE VIEW `proan-quantrue.ZZ_PRUEBAS.v1_flujo_producto_dbc` AS
-WITH plantas_dbc AS (
+WITH
+
+-- 2026-09-24 (paso 6): los cuatro escalones de CEDIS pasan de ser vistas
+-- sueltas (dim_cedis_v1 / _almacen_v1 / _nombre_v1 / _oficina_v1) a CTEs de
+-- esta misma vista. Copia literal de sus definiciones -- mismos desempates,
+-- misma exclusión de oficinas cajón de sastre, misma normalización de nombre.
+-- Comisiones y conciliación ya habían dejado de usarlas (pasos 3-5); con esto
+-- las cuatro se pueden retirar. La documentación de cada escalón sigue en las
+-- secciones 1, 1b, 1c y 1d de más arriba.
+--
+-- Validado contra la vista viva antes de sustituirla (vista _test, 2026-09-24):
+-- cero filas aparecidas de la nada en las tres fases; salen exactamente las
+-- 14.385 líneas de facturado (N/O/P/S) y los 10 documentos de cobrado (N) que
+-- se esperaban; de las 18 columnas solo cambian `cedis` y `tipo_venta`, y solo
+-- en Celaya (77.077 líneas de facturado, 4.271 documentos de cobrado); Δmonto
+-- $0,00 en las dos fases; ninguna llave duplicada nueva. El ruido de `monto` y
+-- `cantidad_cajas` (máx 3,5e-10) es inherente al SUM en FLOAT64 -- comprobado
+-- comparando la vista viva CONTRA SÍ MISMA, que da el mismo ruido.
+
+cedis_desempate_comisionista AS (
+  SELECT almacen, oficina, MIN(cedis) AS cedis
+  FROM (
+    SELECT DISTINCT k.almacen, k.oficina, k.cedis
+    FROM (
+      SELECT DISTINCT c.almacen, c.oficina, c.cedis
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis` c
+      WHERE (c.almacen, c.oficina) IN (
+        SELECT (almacen, oficina) FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+        GROUP BY almacen, oficina HAVING COUNT(DISTINCT cedis) > 1)
+    ) k
+    JOIN (
+      SELECT DISTINCT oficina, persona
+      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+      WHERE persona IS NOT NULL AND persona != ''
+    ) p ON p.oficina = k.oficina
+    WHERE EXISTS (
+      SELECT 1
+      FROM UNNEST(SPLIT(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(p.persona, NFKD), r'[^a-z ]', ''), ' ')) tok
+      WHERE LENGTH(tok) >= 4
+        AND STRPOS(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(k.cedis, NFKD), r'[^a-z ]', ''), tok) > 0
+    )
+  )
+  GROUP BY almacen, oficina
+  HAVING COUNT(*) = 1
+),
+
+esc_1_almacen_oficina AS (
+  SELECT * EXCEPT (rn)
+  FROM (
+    SELECT c.almacen, c.oficina, c.cedis, c.sector, c.tipo_venta,
+           ROW_NUMBER() OVER (PARTITION BY c.almacen, c.oficina ORDER BY c.sector) AS rn
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis` c
+    LEFT JOIN cedis_desempate_comisionista d
+           ON d.almacen = c.almacen AND d.oficina = c.oficina
+    WHERE d.cedis IS NULL OR c.cedis = d.cedis
+  )
+  WHERE rn = 1
+),
+
+esc_2_almacen AS (
+  SELECT almacen, ANY_VALUE(cedis) AS cedis
+  FROM (
+    SELECT almacen, cedis
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    GROUP BY almacen, cedis
+  )
+  GROUP BY almacen
+  HAVING COUNT(*) = 1
+),
+
+esc_3_nombre AS (
+  SELECT * EXCEPT (rn)
+  FROM (
+    SELECT
+      IFNULL(l.planta, '') AS planta,
+      l.almacen,
+      l.origen,
+      COALESCE(c.cedis, l.nombre_cedis) AS cedis,
+      c.cedis IS NOT NULL AS grafia_del_catalogo,
+      ROW_NUMBER() OVER (
+        PARTITION BY l.almacen
+        ORDER BY IF(l.origen = 'deducido', 0, 1), l.planta DESC, l.nombre_cedis
+      ) AS rn
+    FROM (
+      SELECT planta, almacen, nombre_cedis, origen,
+             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
+      WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
+    ) l
+    LEFT JOIN (
+      SELECT DISTINCT cedis,
+             UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(cedis, NFKD), r'[^a-z0-9]', '')) AS clave
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    ) c ON c.clave = l.clave
+  )
+  WHERE rn = 1
+),
+
+esc_4_oficina AS (
+  SELECT * EXCEPT (filas, rn)
+  FROM (
+    SELECT oficina, cedis, tipo_venta, COUNT(*) AS filas,
+           ROW_NUMBER() OVER (
+             PARTITION BY oficina ORDER BY COUNT(*) DESC, cedis, tipo_venta
+           ) AS rn
+    FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+    WHERE oficina IN (
+      SELECT oficina
+      FROM `proan-quantrue.D20_DIMENSION.dm_cedis`
+      GROUP BY oficina
+      HAVING COUNT(DISTINCT almacen) > 1
+    )
+    GROUP BY oficina, cedis, tipo_venta
+  )
+  WHERE rn = 1
+),
+
+plantas_dbc AS (
   -- Lista corregida contra V3 de v1_verificaciones.sql (DISTINCT receiving_plant
   -- WHERE company_code='DBC'): la original (sección 2 del borrador) no traía
   -- H7DU ni H7TX -- con la lista vieja, esas dos plantas quedaban excluidas de
@@ -477,14 +536,18 @@ factura_totales_v1 AS (
                         AND k.LGORT = storage_location
                         AND k.VKBUR = sales_office))
     )
-    -- 2026-09-23: mismo filtro que ya trae `factura_totales` en
-    -- v1_comision_dbc_completo_cobro.sql -- sin document_category='M' se
-    -- sumaban también cancelaciones/notas de crédito (N/O/...) de facturas que
-    -- nunca aparecen en el numerador. Verificado contra BigQuery: ningún
-    -- billing_document mezcla más de un document_category (0 de 637.871 en
-    -- 2026), así que esto no cambia ninguna cifra ya calculada -- es blindaje
-    -- para el día que ese supuesto deje de cumplirse, no una corrección.
-    AND document_category = 'M'
+    -- CATEGORÍAS QUE SE COBRAN (2026-09-24, regla de negocio confirmada).
+    -- Este CTE hace DOS cosas: es el denominador del prorrateo y es la lista
+    -- de qué documentos puede encontrar `pago_factura_v1` (ver su WHERE ...
+    -- IN). Por eso el filtro tiene que ser el de COBRO, no el de facturación:
+    -- si se deja solo 'M' desaparecen cobros reales (medido: el 2026-09-23 se
+    -- puso 'M' a secas y se perdieron 112 facturas / $1.286.141,12).
+    -- Medido contra las compensaciones de BSAD 2026:
+    --   M $4.300,3 M · P (nota de débito) $774.352 · S $507.530
+    --   N 10 documentos / $6.047 (ruido) · O nunca aparece.
+    -- P y S son deuda real que el cliente compensa igual que una factura; N
+    -- es cancelación y no se cobra.
+    AND document_category IN ('M', 'P', 'S')
   GROUP BY billing_document
 ),
 
@@ -585,17 +648,17 @@ SELECT
 FROM `proan-quantrue.D30_INTEGRATION.sap_VBAP` p
 JOIN `proan-quantrue.D30_INTEGRATION.sap_VBAK` k ON k.VBELN = p.VBELN
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = p.SPART
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = p.LGORT AND dc.oficina = k.VKBUR
+LEFT JOIN esc_1_almacen_oficina dc ON dc.almacen = p.LGORT AND dc.oficina = k.VKBUR
 -- Cada escalón entra solo donde falló el anterior, y la condición va en el ON y
 -- no en un CASE posterior: así una línea que ya cruzó no toca las dimensiones
 -- de repuesto ni por casualidad.
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+LEFT JOIN esc_2_almacen dal
        ON dc.cedis IS NULL AND dal.almacen = p.LGORT
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+LEFT JOIN esc_3_nombre dma
        ON dc.cedis IS NULL AND dal.cedis IS NULL
       AND dma.almacen = p.LGORT
       AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = p.WERKS)
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+LEFT JOIN esc_4_oficina dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = k.VKBUR
 WHERE (
@@ -650,14 +713,14 @@ SELECT
   TRUE AS monto_confiable
 FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = f.sales_division
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+LEFT JOIN esc_1_almacen_oficina dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
+LEFT JOIN esc_2_almacen dal
        ON dc.cedis IS NULL AND dal.almacen = f.storage_location
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+LEFT JOIN esc_3_nombre dma
        ON dc.cedis IS NULL AND dal.cedis IS NULL
       AND dma.almacen = f.storage_location
       AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = f.receiving_plant)
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+LEFT JOIN esc_4_oficina dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = f.sales_office
 -- 2026-09-10: se agrega PAN (mismo criterio que `alcance_pan`/`facturas` de
@@ -674,6 +737,30 @@ WHERE (
                       AND k.VKBUR = f.sales_office))
   )
   AND CAST(f.billing_date AS DATE) BETWEEN '2026-01-01' AND CURRENT_DATE()  -- excluye años inválidos (2201/2202 — sección 2, pendiente #4)
+  -- SOLO FACTURA REAL (2026-09-24). Esta rama nunca filtró categoría, así que
+  -- venía mezclando cancelaciones y notas con facturas. Lo escrito ya estaba
+  -- en v1_flujo_producto_dbc_prototipo_v2.sql, pero ese prototipo no se
+  -- desplegó nunca y la vista viva se quedó sin el filtro.
+  --
+  -- POR QUÉ 'M' A SECAS Y NO RESTAR LAS CANCELACIONES: parece que una factura
+  -- cancelada debería restar, pero SAP ya hizo esa resta borrando la factura.
+  -- Medido en 2026, emparejando cada N contra su M por pedido+posición:
+  --   13.053 pares -> la M NO EXISTE en ninguna fecha ni alcance  (N: -$126,6 M)
+  --      207 pares -> la N anula exactamente a su M, neto 0       (M: +$3,60 M)
+  --      109 pares -> cancelación parcial                         (M: +$6,30 M / N: -$4,82 M)
+  -- O sea que el 96% de las N restaban un importe que nunca se sumó: doble
+  -- resta de $126,6 M. Dejar solo 'M' la elimina; a cambio, los 207 pares que
+  -- sí sobrevivieron completos pasan a contarse como válidos (+$3,6 M, 0,08%).
+  -- Afinar eso exigiría una autorreferencia a la propia CTE para excluir las M
+  -- con N presente -- no compensa por 0,08%.
+  --
+  -- Las notas de crédito/débito (O -$11,2 M, P +$0,78 M, S +$0,55 M) tampoco
+  -- entran: no son facturas. Si el cliente pide "facturación neta de
+  -- devoluciones", va como medida aparte, no mezclada aquí.
+  --
+  -- Mismo filtro que `facturas` en v1_comision_dbc_completo_cobro.sql:403 --
+  -- facturado tiene que dar lo mismo en las dos pestañas.
+  AND f.document_category = 'M'
 
 UNION ALL
 
@@ -746,14 +833,14 @@ FROM pago_factura_v1 g
 LEFT JOIN factura_totales_v1 t ON t.billing_document = g.billing_document
 LEFT JOIN factura_sitio_v1 f ON f.billing_document = g.billing_document
 LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba ON ba.business_area_code = f.sales_division
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_v1` dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_almacen_v1` dal
+LEFT JOIN esc_1_almacen_oficina dc ON dc.almacen = f.storage_location AND dc.oficina = f.sales_office
+LEFT JOIN esc_2_almacen dal
        ON dc.cedis IS NULL AND dal.almacen = f.storage_location
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_nombre_v1` dma
+LEFT JOIN esc_3_nombre dma
        ON dc.cedis IS NULL AND dal.cedis IS NULL
       AND dma.almacen = f.storage_location
       AND (dma.planta IS NULL OR dma.planta = '' OR dma.planta = f.receiving_plant)
-LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_cedis_oficina_v1` dco
+LEFT JOIN esc_4_oficina dco
        ON dc.cedis IS NULL AND dal.cedis IS NULL AND dma.cedis IS NULL
       AND dco.oficina = f.sales_office;
 
