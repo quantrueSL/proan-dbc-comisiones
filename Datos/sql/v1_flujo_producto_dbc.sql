@@ -477,6 +477,14 @@ factura_totales_v1 AS (
                         AND k.LGORT = storage_location
                         AND k.VKBUR = sales_office))
     )
+    -- 2026-09-23: mismo filtro que ya trae `factura_totales` en
+    -- v1_comision_dbc_completo_cobro.sql -- sin document_category='M' se
+    -- sumaban también cancelaciones/notas de crédito (N/O/...) de facturas que
+    -- nunca aparecen en el numerador. Verificado contra BigQuery: ningún
+    -- billing_document mezcla más de un document_category (0 de 637.871 en
+    -- 2026), así que esto no cambia ninguna cifra ya calculada -- es blindaje
+    -- para el día que ese supuesto deje de cumplirse, no una corrección.
+    AND document_category = 'M'
   GROUP BY billing_document
 ),
 

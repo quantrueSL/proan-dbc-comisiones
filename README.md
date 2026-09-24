@@ -25,16 +25,19 @@ LOGIN.md            decisiones de login y roles (provisional)
 ```
 
 - **Backend**: endpoints `/v1/comisionesbi/{catalog,flujo,report,reconciliation}`.
-  `catalog` (división + CEDIS) y `flujo` funcionan de verdad, este último sobre
-  la tabla gold diaria; `report` y `reconciliation` devuelven 501 explícito —
-  ver por qué en `apps/comisionesbi/comisionesbi/{comisiones,conciliacion}_engine.py`.
+  Los cuatro funcionan con datos reales, cada uno sobre su propia tabla gold en
+  BigQuery — ver `apps/comisionesbi/comisionesbi/{catalog,flujo,comisiones,conciliacion}_engine.py`.
 - **Frontend**: login Google (Firebase) + usuario/contraseña (`.htpasswd`),
   igual que Hidrocarburos — ver [`LOGIN.md`](./LOGIN.md). Cuatro entradas de
-  navegación: `/manual` (manual de usuario, abre la barra), `/flujo-producto`
-  (la pantalla del módulo 0, con datos reales) y `/comisiones` y
-  `/conciliacion` (estas dos ya llaman de verdad a su endpoint, pero como el
-  motor está bloqueado devuelven 501 y la pantalla cae a una vista previa con
-  datos de ejemplo, claramente marcada como tal).
+  navegación: `/manual` (manual de usuario, abre la barra), `/flujo-producto`,
+  `/comisiones` y `/conciliacion`, las tres últimas con datos reales.
+
+> **Nota (2026-09-23):** la sección "Estado actual" de abajo es una foto fechada
+> en agosto de 2026 — en ese momento comisiones y conciliación seguían
+> bloqueados. Ya no es así: los tres módulos están implementados y en uso. Se
+> deja tal cual como registro histórico de cómo se destrabaron los bloqueantes;
+> para el estado y el flujo de datos vigente hoy, ver el artifact de linaje de
+> datos generado el 2026-09-23 y las notas de sesión en memoria del proyecto.
 
 ## Estado actual (agosto 2026)
 
