@@ -1,4 +1,19 @@
 -- =============================================================================
+-- MIGRACIÓN DE UN SOLO USO -- particionar dbc_comisiones_calculadas_cobro.
+-- -----------------------------------------------------------------------------
+-- Copia EXACTA de v1_comision_dbc_completo_cobro.sql, generada el 2026-09-24,
+-- con un único cambio: crea la tabla con el sufijo `_part` en vez de sustituir
+-- la de producción. Así en ningún momento hay cero copias.
+--
+-- Existe porque `CREATE OR REPLACE TABLE` no puede cambiar el particionado de
+-- una tabla que ya existe. Secuencia completa en el chat del 2026-09-24:
+--   1. correr este archivo
+--   2. comparar totales contra la tabla viva
+--   3. DROP de la vieja + ALTER ... RENAME de esta
+-- Después de eso, este archivo SOBRA: borrar. El bueno es el original.
+-- =============================================================================
+
+-- =============================================================================
 -- Comisiones DBC + cobro. Base: v1_comision_dbc_completo.sql, sin tocarlo.
 -- Agrega se_cobro/monto_cobrado/cantidad_cobrada/comision_cobrada, mismo
 -- prorrateo que v1_flujo_producto_dbc_prototipo_v2.sql (pagado / con_impuestos).
@@ -62,7 +77,7 @@
 --     DROP TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`;
 -- No afecta a la aplicación: los tres engines leen las tablas `DBC_gold_*`, no
 -- esta. Lo mismo aplicará al migrarla a `D50_AGGREGATE`.
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`
+CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro_part`
 PARTITION BY billing_date
 CLUSTER BY division, cedis, status
 AS

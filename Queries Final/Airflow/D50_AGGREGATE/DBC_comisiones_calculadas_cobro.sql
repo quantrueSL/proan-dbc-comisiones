@@ -1,71 +1,37 @@
 -- =============================================================================
--- Comisiones DBC + cobro. Base: v1_comision_dbc_completo.sql, sin tocarlo.
--- Agrega se_cobro/monto_cobrado/cantidad_cobrada/comision_cobrada, mismo
--- prorrateo que v1_flujo_producto_dbc_prototipo_v2.sql (pagado / con_impuestos).
--- `comision_mxn` sigue siendo tarifa × facturado (comisión devengada, sin
--- tocar) -- `comision_cobrada` es tarifa × lo efectivamente cobrado.
+-- INCREMENTAL · DBC_comisiones_calculadas_cobro
+-- -----------------------------------------------------------------------------
+-- Lógica de negocio completa en ../../Historico/D50_AGGREGATE/DBC_comisiones_calculadas_cobro.sql
+-- -- este archivo SOLO añade el patrón de refresco diario.
 --
--- 2026-09-07: fuente del cobro cambiada de sap_pago (~17% del facturado) a
--- sap_bsad_cleared_items (~87%, validado a nivel de monto).
+-- ALCANCE: últimos 12 meses completos de `billing_date`. Mismo valor de
+-- `ventana_desde` que en los otros seis archivos de esta rama: si una gold usa
+-- ventana más corta que su silver, conserva filas que la silver ya no tiene.
 --
--- 2026-09-08: SE INTEGRA LA SOCIEDAD PAN EN HUEVO. Antes solo entraba DBC, y
--- eso dejaba fuera la mayor parte de la comisión de huevo (PAN paga $66,2 M
--- contra $37,1 M de DBC en 2026 hasta el 8 de julio). El criterio del filtro
--- salió de la tabla de tarifa oficial de SAP -- ver el comentario de
--- `alcance_pan`, que es donde está documentada la decisión y su medición.
--- Efecto: la comisión devengada total pasa de $45,3 M a $107,6 M, y la
--- columna `bukrs` distingue una sociedad de la otra en toda la cadena.
+-- ORDEN EN EL DAG: Primera de la cadena, junto con DBC_silver_flujo_producto. Necesita que
+-- scripts/tablas_cliente.py --cargar haya corrido antes (dimensiones de D20).
 --
--- 2026-09-08: BUG CORREGIDO en la tarifa de huevo -- MED MAYOREO y MAYOREO
--- son tarifas DISTINTAS en SAP (columnas separadas _MMAY / _MAY, "1/2
--- mayoreo" y "mayoreo" en el Excel del cliente), pero el CASE de más abajo
--- metía las dos en la misma rama apuntando siempre a _MAYOREO. MED MAYOREO
--- salía "sin tarifa" cada vez que _MAY estaba vacía, aunque _MMAY tuviera una
--- tarifa real -- confirmado en las 16 llaves bloqueadas de HSANJUAN/HPORTALES:
--- 100% con _MAY vacía y _MMAY con valor. $61,1 M que antes caían en "sin
--- tarifa para esa llave" ahora sí calculan.
+-- `factura_totales` NO lleva ventana a proposito: es el denominador del
+-- prorrateo del cobro y se cruza por `billing_document`, no por fecha. Si se
+-- le recortara la fecha, una factura de la ventana cuyo total incluye lineas
+-- fuera de ella prorratearia mal.
 --
--- 2026-09-08: REDISEÑO -- el tipo de venta (y con él la tarifa) ya no sale de
--- `dim_cedis_v1`/`dim_cedis_oficina_v1`, sale de la propia tabla de tarifa
--- (CTE `resuelto`, más abajo). Esto reemplaza y generaliza el fix anterior de
--- MED MAYOREO/MAYOREO -- ahora aplica a las 5 categorías de huevo y también a
--- botana/alimento, con el mismo principio: si dm_cedis apunta a una columna
--- con valor, se respeta; si no, se toma la única columna de esa tarifa que sí
--- tiene valor. Medido corriendo la query completa antes/después del cambio:
--- $110,4 M que antes caían en "sin tarifa para esa llave" ahora calculan --
--- $106,6 M en huevo (donde SIN_TARIFA queda en $0 -- el hueco que queda,
--- $5,5 M, es genuino: ninguna de las 5 columnas tiene valor, no un problema
--- de tipo de venta), $3,3 M en botana, $0,5 M en alimento. Leche y Abarrotes
--- no cambian (su tarifa no distingue tipo de venta/canal, nada que resolver).
+-- Este INSERT es POSICIONAL. El orden es:
+--   billing_document, item_number, billing_date, bukrs, division, oficina_ventas,
+--   almacen, planta, cedis, cedis_origen, matnr, set_material, tipo_venta, canal,
+--   cantidad, importe_mxn, tarifa, status, comision_mxn, se_cobro, monto_cobrado,
+--   cantidad_cobrada, comision_cobrada, fecha_cobro
+-- y tiene que coincidir con el esquema que crea el gemelo. Si falla con
+-- "Inserted row has wrong column count", la tabla tiene un esquema viejo: hay
+-- que recrearla con la versión completa.
 -- =============================================================================
--- PARTICIÓN Y CLUSTER (2026-09-24). Esta tabla era la única del pipeline sin
--- particionar, y eso bloqueaba el refresco incremental: el `DELETE FROM ...
--- WHERE billing_date >= ventana_desde` del gemelo de Airflow escanearía la
--- tabla entera en vez de tocar solo las particiones de la ventana.
---
--- `billing_date` y no `fecha_cobro`: el grano de la tabla es la línea de
--- factura, y el cobro es un atributo que se le pega después. Particionar por la
--- fecha de cobro dejaría sin partición las líneas no cobradas (NULL) y movería
--- filas de partición cada vez que llega un pago.
---
--- Diario, no mensual, por coherencia con las otras seis tablas del pipeline
--- (todas `PARTITION BY fecha`). Con la ventana de 12 meses son ~365 particiones
--- por refresco, muy por debajo del límite de BigQuery.
---
--- SIN `require_partition_filter`: las gold que salen de aquí agregan la tabla
--- completa sin filtrar por fecha, y exigir el filtro las rompería.
---
--- OJO AL CORRERLO LA PRIMERA VEZ: `CREATE OR REPLACE TABLE` NO puede cambiar el
--- particionado de una tabla que ya existe -- falla con "partitioning spec is
--- interval(type:day,field:billing_date) ... and existing spec is none". Hay que
--- borrarla antes, una sola vez:
---     DROP TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`;
--- No afecta a la aplicación: los tres engines leen las tablas `DBC_gold_*`, no
--- esta. Lo mismo aplicará al migrarla a `D50_AGGREGATE`.
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`
-PARTITION BY billing_date
-CLUSTER BY division, cedis, status
-AS
+
+DECLARE ventana_desde DATE DEFAULT DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH), MONTH);
+
+DELETE FROM `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`
+WHERE billing_date >= ventana_desde;
+
+INSERT INTO `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`
 
 WITH
 
@@ -130,7 +96,7 @@ cedis_desempate_comisionista AS (
     ) k
     JOIN (
       SELECT DISTINCT oficina, persona
-      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+      FROM `proan-quantrue.D20_DIMENSION.dm_DBC_comisionista`
       WHERE persona IS NOT NULL AND persona != ''
     ) p ON p.oficina = k.oficina
     -- el nombre del CEDIS contiene un nombre/apellido del comisionista
@@ -186,7 +152,7 @@ esc_3_nombre AS (
     FROM (
       SELECT planta, almacen, nombre_cedis, origen,
              UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
+      FROM `proan-quantrue.D20_DIMENSION.dm_DBC_almacen_nombre`
       WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
     ) l
     LEFT JOIN (
@@ -500,7 +466,7 @@ facturas AS (
     f.amount_mxn                                  AS importe_mxn,
     f.currency
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
-  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_base_comision_v1` bc ON bc.division_code = f.sales_division
+  LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_DBC_base_comision_v1` bc ON bc.division_code = f.sales_division
   LEFT JOIN marm_kg m ON m.matnr_clean = LTRIM(CAST(f.material_number AS STRING), '0')
   WHERE (
       f.company_code = 'DBC'
@@ -515,7 +481,8 @@ facturas AS (
     )
     AND f.sales_division IN ('H','BO','IA','A','L')
     AND f.document_category = 'M'
-    AND f.billing_date BETWEEN '2026-01-01' AND CURRENT_DATE()
+    AND f.billing_date >= ventana_desde   -- <- alcance incremental
+    AND f.billing_date <= CURRENT_DATE()
     AND f.sales_office  NOT IN ('0001', '0174', '0175', '0181')
     AND f.storage_location NOT IN ('BO28','H793','BO01','H723')
 ),
@@ -898,3 +865,8 @@ LEFT JOIN pago_factura p     ON p.billing_document   = t.billing_document
 -- partitioned by field"). Tampoco hacía falta -- el orden físico lo da ahora
 -- el `CLUSTER BY`, y ninguna consulta de aguas abajo dependía de él.
 ;
+
+ASSERT (
+  SELECT COUNT(*) FROM `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`
+  WHERE billing_date >= ventana_desde
+) > 0 AS 'DBC_comisiones_calculadas_cobro: la ventana quedó vacía tras el refresco';

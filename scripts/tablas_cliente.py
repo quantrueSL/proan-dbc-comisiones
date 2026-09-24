@@ -61,6 +61,29 @@ DESTINO = os.path.join(RAIZ, "data", "tablas_cliente")
 
 PROYECTO, DATASET, REGION = "proan-quantrue", "ZZ_PRUEBAS", "us-west4"
 
+# A DÓNDE VA CADA TABLA EN BIGQUERY (2026-09-24, migración a datasets definitivos).
+#
+# Una tabla puede tener VARIOS destinos, y durante la migración las dos que
+# siguen vivas los tienen: escriben a la vez en su sitio nuevo de
+# `D20_DIMENSION` y en el viejo de `ZZ_PRUEBAS`. Es a propósito -- el pipeline
+# que corre hoy todavía lee los nombres viejos, así que hasta que se haga el
+# corte y se repunten los SQL, apagar la escritura vieja lo dejaría con datos
+# congelados sin que nadie se entere.
+#
+# EN CUANTO EL CORTE ESTÉ HECHO: quitar de esta tabla las entradas
+# ("ZZ_PRUEBAS", "DBC_dim_*") de las dos primeras. Escribir en dos sitios es un
+# estado de transición, no el destino.
+#
+# Las otras cuatro no aparecen aquí y por eso caen al valor por defecto
+# (`ZZ_PRUEBAS`, mismo nombre): no las lee nada vivo, pero la limpieza de
+# huérfanas sigue pausada y no se decide desde este archivo.
+DESTINOS_BQ = {
+    "DBC_dim_comisionista":   [("D20_DIMENSION", "dm_DBC_comisionista"),
+                               ("ZZ_PRUEBAS",    "DBC_dim_comisionista")],
+    "DBC_dim_almacen_nombre": [("D20_DIMENSION", "dm_DBC_almacen_nombre"),
+                               ("ZZ_PRUEBAS",    "DBC_dim_almacen_nombre")],
+}
+
 # Divisiones que el cliente confirmó en operación (correo del 24/08/2026). Las
 # demás están configuradas en SAP pero las llevan otros departamentos.
 EN_OPERACION = {"H", "BO", "IA", "A", "L"}
@@ -536,7 +559,6 @@ def carga(nombre, ruta_csv):
         credentials=service_account.Credentials.from_service_account_file(
             os.path.join(RAIZ, "config", "bq_credentials.json")),
         project=PROYECTO, location=REGION)
-    destino = f"{PROYECTO}.{DATASET}.{nombre}"
     with open(ruta_csv, encoding="utf-8") as fh:
         cabecera = next(csv.reader(fh))
     esquema = [
@@ -550,10 +572,15 @@ def carga(nombre, ruta_csv):
     config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.CSV, skip_leading_rows=1, schema=esquema,
         write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE)
-    with open(ruta_csv, "rb") as fh:
-        cliente.load_table_from_file(fh, destino, job_config=config).result()
     tipos = ", ".join(f"{c.name}:{c.field_type[0]}" for c in esquema[:4])
-    print(f"   cargada {destino} ({tipos}…)")
+    # Se reabre el CSV en cada destino a propósito: `load_table_from_file` deja
+    # el descriptor al final, así que reutilizarlo cargaría 0 filas en el
+    # segundo destino sin dar ningún error.
+    for dataset, tabla in DESTINOS_BQ.get(nombre, [(DATASET, nombre)]):
+        destino = f"{PROYECTO}.{dataset}.{tabla}"
+        with open(ruta_csv, "rb") as fh:
+            cliente.load_table_from_file(fh, destino, job_config=config).result()
+        print(f"   cargada {destino} ({tipos}…)")
 
 
 def main() -> int:

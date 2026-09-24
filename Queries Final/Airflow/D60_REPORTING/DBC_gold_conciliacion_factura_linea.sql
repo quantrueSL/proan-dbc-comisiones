@@ -1,0 +1,152 @@
+-- =============================================================================
+-- INCREMENTAL · DBC_gold_conciliacion_factura_linea
+-- -----------------------------------------------------------------------------
+-- Lógica de negocio completa en ../../Historico/D60_REPORTING/DBC_gold_conciliacion_factura_linea.sql
+-- -- este archivo SOLO añade el patrón de refresco diario.
+--
+-- ALCANCE: últimos 12 meses completos de `fecha`. Mismo valor de
+-- `ventana_desde` que en los otros seis archivos de esta rama: si una gold usa
+-- ventana más corta que su silver, conserva filas que la silver ya no tiene.
+--
+-- ORDEN EN EL DAG: Despues de DBC_comisiones_calculadas_cobro, y ANTES de
+-- DBC_gold_conciliacion_producto_diario, que sale de esta.
+--
+-- Este INSERT es POSICIONAL. El orden es:
+--   billing_document, item_number, fecha, sociedad, division_code, division,
+--   cedis, oficina, comisionista_id, comisionista, tipo_venta, matnr, descripcion,
+--   unidad_venta, cantidad_venta, unidad_tarifa, cantidad_base, tarifa, monto,
+--   comision, comision_estado, se_cobro, monto_cobrado, cantidad_cobrada,
+--   comision_cobrada, fecha_cobro
+-- y tiene que coincidir con el esquema que crea el gemelo. Si falla con
+-- "Inserted row has wrong column count", la tabla tiene un esquema viejo: hay
+-- que recrearla con la versión completa.
+-- =============================================================================
+
+DECLARE ventana_desde DATE DEFAULT DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH), MONTH);
+
+DELETE FROM `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
+WHERE fecha >= ventana_desde;
+
+INSERT INTO `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
+-- 2026-09-24: CEDIS YA NO SE RESUELVE AQUÍ. Antes este archivo repetía la
+-- cascada por su cuenta y lo hacía con 3 de los 4 escalones -- le faltaba el de
+-- nombre de almacén, y por eso dejaba 1.275 líneas / $9.613.778 sin CEDIS que
+-- el flujo de producto sí resolvía. Ahora `v1_comision_dbc_completo_cobro.sql`
+-- lo resuelve una sola vez y lo deja como columna en la silver; aquí solo se
+-- lee `t.cedis`. Con eso el descuadre no puede volver a aparecer, y de paso se
+-- ahorra un self-join de 4,1 M de filas.
+WITH
+-- Comisionista por oficina -- misma cadena que `DBC_gold_comision_diaria_v2`
+-- (2026-09-08): sale de `DBC_dim_comisionista`, cruzando por la sociedad de la
+-- factura (`t.bukrs`) -- ver ese archivo para el porqué.
+-- Copiada tal cual de ese archivo, ver ahí el detalle y las mediciones,
+-- incluido el nombre canónico por `dm_vendors` (2026-09-10, ver ese archivo).
+comisionista_src AS (
+  SELECT
+    c.sociedad, c.division, c.oficina,
+    LPAD(TRIM(c.persona_cod), 10, '0')      AS comisionista_id,
+    COALESCE(v.razon_social, c.persona)     AS persona
+  FROM `proan-quantrue.D20_DIMENSION.dm_DBC_comisionista` c
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
+  WHERE NULLIF(TRIM(c.oficina), '') IS NOT NULL
+),
+-- `s.comisionista_id` va calificado en el HAVING a propósito: sin el
+-- prefijo, BigQuery lo resuelve al alias de arriba (ANY_VALUE, un agregado) y
+-- falla con "Aggregations of aggregations are not allowed".
+comisionista_oficina AS (
+  SELECT sociedad, oficina, ANY_VALUE(s.comisionista_id) AS comisionista_id, ANY_VALUE(s.persona) AS persona
+  FROM comisionista_src s
+  GROUP BY sociedad, oficina HAVING COUNT(DISTINCT s.comisionista_id) = 1
+),
+comisionista_oficina_division AS (
+  SELECT c.sociedad, c.oficina, c.division,
+         ANY_VALUE(c.comisionista_id) AS comisionista_id, ANY_VALUE(c.persona) AS persona
+  FROM comisionista_src c
+  WHERE NOT EXISTS (SELECT 1 FROM comisionista_oficina o
+                    WHERE o.sociedad = c.sociedad AND o.oficina = c.oficina)
+  GROUP BY c.sociedad, c.oficina, c.division HAVING COUNT(DISTINCT c.comisionista_id) = 1
+),
+-- Unidad y cantidad de manejo por material -- `stockkeeping_units` (no
+-- `invoiced_quantity`/`sales_unit` crudos, que vienen mezclados CS/PAQ/PZA/
+-- SAC/KG dentro de una misma división). Confirmado 2026-09-07 con la
+-- distribución real por división (monto DBC 2026): H 99.97% CS -> caja;
+-- IA ~100% SAC -> saco; BO 99.4% PAQ -> paquete; A y L 100% PZA -> pieza.
+venta_nativa AS (
+  SELECT
+    billing_document, item_number,
+    CAST(stockkeeping_units AS FLOAT64) AS cantidad_venta
+  FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
+),
+-- Descripción de producto en español. Verificado 2026-09-02: 0 duplicados por
+-- material dentro de SPRAS='S', 100% de cobertura contra lo facturado 2026.
+descripcion AS (
+  SELECT LTRIM(MATNR, '0') AS matnr_clean, MAKTX AS descripcion
+  FROM `proan-quantrue.D00_SANDBOX.proan_MAKT_Materials_20260831`
+  WHERE SPRAS = 'S'
+)
+SELECT
+  t.billing_document,
+  t.item_number,
+  t.billing_date                                            AS fecha,
+  t.bukrs                                                   AS sociedad,
+  t.division                                                AS division_code,
+  ba.business_area_name                                     AS division,
+  t.cedis,
+  t.oficina_ventas                                          AS oficina,
+  COALESCE(co.comisionista_id, cod.comisionista_id)         AS comisionista_id,
+  COALESCE(co.persona, cod.persona)                         AS comisionista,
+  t.tipo_venta,
+  t.matnr,
+  d.descripcion,
+  CASE t.division
+    WHEN 'H'  THEN 'caja'
+    WHEN 'IA' THEN 'saco'
+    WHEN 'BO' THEN 'paquete'
+    WHEN 'A'  THEN 'pieza'
+    WHEN 'L'  THEN 'pieza'
+  END                                                        AS unidad_venta,
+  v.cantidad_venta,
+  CASE t.division
+    WHEN 'H'  THEN 'kg'
+    WHEN 'IA' THEN 'kg'
+    WHEN 'A'  THEN 'pieza'
+    WHEN 'L'  THEN 'pieza'
+    WHEN 'BO' THEN 'paquete'
+  END                                                        AS unidad_tarifa,
+  t.cantidad                                                AS cantidad_base,
+  t.tarifa,
+  CAST(t.importe_mxn AS FLOAT64)                            AS monto,
+  t.comision_mxn                                            AS comision,
+  CASE t.status
+    WHEN 'OK'         THEN 'calculada'
+    WHEN 'SIN_SET'    THEN 'material sin SET'
+    WHEN 'SIN_CEDIS'  THEN 'sin CEDIS/tipo de venta'
+    WHEN 'SIN_TARIFA' THEN 'sin tarifa para esa llave'
+  END AS comision_estado,
+  t.se_cobro,
+  t.monto_cobrado,
+  t.cantidad_cobrada,
+  t.comision_cobrada,
+  t.fecha_cobro
+FROM `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro` t
+LEFT JOIN venta_nativa v
+       ON v.billing_document = t.billing_document AND v.item_number = t.item_number
+LEFT JOIN descripcion d
+       ON d.matnr_clean = t.matnr
+LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_business_area` ba
+       ON ba.business_area_code = t.division
+LEFT JOIN comisionista_oficina co
+       ON co.sociedad = t.bukrs AND co.oficina = t.oficina_ventas
+LEFT JOIN comisionista_oficina_division cod
+       ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
+      AND cod.division = t.division
+WHERE t.billing_date >= ventana_desde;   -- <- alcance incremental
+
+ASSERT (
+  SELECT COUNT(*) FROM `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
+  WHERE fecha >= ventana_desde
+) > 0 AS 'DBC_gold_conciliacion_factura_linea: la ventana quedó vacía tras el refresco';

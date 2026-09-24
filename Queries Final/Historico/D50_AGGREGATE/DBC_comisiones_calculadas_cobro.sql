@@ -59,10 +59,10 @@
 -- particionado de una tabla que ya existe -- falla con "partitioning spec is
 -- interval(type:day,field:billing_date) ... and existing spec is none". Hay que
 -- borrarla antes, una sola vez:
---     DROP TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`;
+--     DROP TABLE `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`;
 -- No afecta a la aplicación: los tres engines leen las tablas `DBC_gold_*`, no
 -- esta. Lo mismo aplicará al migrarla a `D50_AGGREGATE`.
-CREATE OR REPLACE TABLE `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro`
+CREATE OR REPLACE TABLE `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`
 PARTITION BY billing_date
 CLUSTER BY division, cedis, status
 AS
@@ -130,7 +130,7 @@ cedis_desempate_comisionista AS (
     ) k
     JOIN (
       SELECT DISTINCT oficina, persona
-      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_comisionista`
+      FROM `proan-quantrue.D20_DIMENSION.dm_DBC_comisionista`
       WHERE persona IS NOT NULL AND persona != ''
     ) p ON p.oficina = k.oficina
     -- el nombre del CEDIS contiene un nombre/apellido del comisionista
@@ -186,7 +186,7 @@ esc_3_nombre AS (
     FROM (
       SELECT planta, almacen, nombre_cedis, origen,
              UPPER(REGEXP_REPLACE(NORMALIZE_AND_CASEFOLD(nombre_cedis, NFKD), r'[^a-z0-9]', '')) AS clave
-      FROM `proan-quantrue.ZZ_PRUEBAS.DBC_dim_almacen_nombre`
+      FROM `proan-quantrue.D20_DIMENSION.dm_DBC_almacen_nombre`
       WHERE nombre_cedis IS NOT NULL AND nombre_cedis != ''
     ) l
     LEFT JOIN (
@@ -500,7 +500,7 @@ facturas AS (
     f.amount_mxn                                  AS importe_mxn,
     f.currency
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` f
-  LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dim_base_comision_v1` bc ON bc.division_code = f.sales_division
+  LEFT JOIN `proan-quantrue.D20_DIMENSION.dm_DBC_base_comision_v1` bc ON bc.division_code = f.sales_division
   LEFT JOIN marm_kg m ON m.matnr_clean = LTRIM(CAST(f.material_number AS STRING), '0')
   WHERE (
       f.company_code = 'DBC'
