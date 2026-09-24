@@ -389,12 +389,35 @@ alcance_pan AS (
 -- (H y IA: "es por kg", 25 y 26/08/2026) para no enterrar esa regla de
 -- negocio en un CASE sin rastro de quién la confirmó.
 --
--- Y el kg en sí ya no sale de `net_weight` de facturación -- confirmado el
--- 2026-09-23 contra el maestro de unidades del senior (`sap_MARM_20260921`,
--- que SÍ se mantiene, a diferencia de `sap_material_master_20250223` que
--- quedó congelado en feb 2025 con el mismo dato) que para 36 materiales de
--- huevo `net_weight` repite la cantidad facturada en vez del peso real --
--- $4.082 M de facturación con el número equivocado, 16,5% de las líneas de H.
+-- DE DÓNDE SALE EL KG (regla corregida el 2026-09-24 -- invierte la preferencia
+-- que tenía el 2026-09-23, que daba MARM siempre y `net_weight` solo de
+-- fallback). Ahora:
+--   - si `net_weight` != `billing_quantity`  -> gana `net_weight`
+--   - si son iguales (o es nulo/cero)        -> gana MARM, y si no hay MARM,
+--                                               `net_weight` como último recurso
+--
+-- POR QUÉ. Son dos cosas distintas, no una buena y una mala:
+--   - `net_weight` repite literalmente la cantidad facturada en parte de las
+--     líneas de huevo (confirmado el 2026-09-23 contra `sap_MARM_20260921`, el
+--     maestro del senior): ahí no es un peso, es un eco -- 219.255 líneas /
+--     $451 M en 2026. Para ESAS, MARM es lo único que hay.
+--   - Pero donde sí difieren, MARM resulta ser el peso NOMINAL de catálogo y
+--     `net_weight` el realmente pesado. Medido por material sobre las 2.442.288
+--     líneas donde difieren: MARM da siempre un número redondo y el real nunca
+--     lo es -- material 12011 MARM=18 kg/caja contra 22,23 reales; 12752 9
+--     contra 11,18; 12333 y 12036 20 contra 22,2. El 98,7% de esas líneas caen
+--     en el mismo sesgo (`net_weight` entre 1,05 y 2 veces MARM), o sea es
+--     estructural, no ruido. La caja "de 18 kg" es una denominación comercial.
+--
+-- Cobrar comisión sobre el nominal cuando existe el peso real subestimaba el kg
+-- de huevo un 13,3% (91,6 M kg -> 103,8 M kg en 2026). IA no se mueve: no tiene
+-- cobertura en MARM y ya caía a `net_weight`.
+--
+-- OJO, PENDIENTE DE NEGOCIO: esto asume que la comisión se paga sobre el peso
+-- real embarcado. Si la tarifa del cliente se calibró contra el peso nominal de
+-- la caja, lo correcto sería lo contrario. No hay nada en la tarifa de SAP que
+-- lo diga -- preguntar.
+--
 -- `MEINH='KG'` da el kg de UNA unidad base del material vía UMREZ/UMREN
 -- (funciona igual si la unidad base YA es kg: ese renglón trae UMREZ=UMREN=1).
 --
@@ -434,8 +457,17 @@ facturas AS (
     LTRIM(CAST(f.material_number AS STRING), '0') AS matnr_clean,
     CASE
       WHEN bc.base = 'kg' THEN
-        COALESCE(CAST(f.billing_quantity AS FLOAT64) * m.kg_por_unidad_base,
-                 CAST(f.net_weight AS FLOAT64))
+        CASE
+          -- net_weight es una medición real -> manda (ver el bloque de arriba)
+          WHEN f.net_weight IS NOT NULL
+               AND CAST(f.net_weight AS FLOAT64) != 0
+               AND CAST(f.net_weight AS FLOAT64) != CAST(f.billing_quantity AS FLOAT64)
+            THEN CAST(f.net_weight AS FLOAT64)
+          -- net_weight es un eco de la cantidad (o no hay) -> nominal de MARM,
+          -- y si el material tampoco está en MARM, net_weight como último recurso
+          ELSE COALESCE(CAST(f.billing_quantity AS FLOAT64) * m.kg_por_unidad_base,
+                        CAST(f.net_weight AS FLOAT64))
+        END
       ELSE CAST(f.billing_quantity AS FLOAT64)
     END AS cantidad,
     f.amount_mxn                                  AS importe_mxn,
