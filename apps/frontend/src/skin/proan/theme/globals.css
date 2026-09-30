@@ -6872,6 +6872,19 @@ body.proan-report-assistant-open .proan-content-scroll {
 .conciliacion-tabla-fija td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conciliacion-tabla-fija th { white-space: normal; line-height: 1.25; }
 .conciliacion-tabla-fija td.conciliacion-col-ancha { white-space: normal; overflow-wrap: anywhere; }
+/* Encabezados clicables de la tabla de comisionistas (2026-09-30). El botón
+   hereda tipografía/color del `<th>` (los navegadores no lo hacen solos) y se
+   estira a todo el ancho para que el área de clic sea el encabezado entero,
+   no solo el texto. La flecha reserva su propio espacio aun vacía (line-height
+   fijo) para que el texto no se corra al aparecer/desaparecer. */
+.conciliacion-th-ordenable {
+  display: flex; align-items: center; justify-content: flex-end; gap: 3px;
+  width: 100%; border: 0; background: transparent; padding: 0;
+  color: inherit; font: inherit; text-align: inherit; cursor: pointer;
+}
+.conciliacion-tabla-fija th:first-child .conciliacion-th-ordenable { justify-content: flex-start; }
+.conciliacion-th-ordenable:hover, .conciliacion-th-ordenable:focus { color: #3d3d7c; outline: none; }
+.conciliacion-th-flecha { display: inline-block; width: 9px; font-size: 9px; line-height: 1; }
 /* Pago vs. calculado (2026-09-08). Mismo rojo que .financial-metric-subtitle.is-negative:
    un solo color de "esto va corto" en toda la app, no uno nuevo por pantalla.
    Dos selectores a propósito (2026-09-09): la clase sola alcanza para el

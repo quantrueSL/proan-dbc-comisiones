@@ -107,7 +107,7 @@ el paso 0 es precondición también de la rama de flujo, no solo de la de comisi
 |---|---|
 | `D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item` | viva, al día |
 | `D30_INTEGRATION.sap_bsad_cleared_items` | viva, al día |
-| `D00_SANDBOX.RT_BSAK` + `proan_BSAK_20260708` | viva; la consulta une las dos. Hueco real del 9 al 31 de julio de 2026 |
+| `D00_SANDBOX.RT_BSAK` + `proan_BSAK_20260708` | viva; la consulta une las dos. Hueco real del 9 al 31 de julio de 2026. El pago se mide con `QSSHB` (base sin IVA/retenciones), no `DMBTR` (neto, = base × 1.0533) |
 | `D00_SANDBOX.proan_MAKT_Materials_*` | serie diaria → leer con `MAX(_TABLE_SUFFIX)` |
 | `D10_POSTPROCESSING.sap_MARM_*` | serie diaria → leer con `MAX(_TABLE_SUFFIX)` |
 | `D00_SANDBOX.sap_setleaf_comisiones` | tabla única sin sufijo, nada que parametrizar |

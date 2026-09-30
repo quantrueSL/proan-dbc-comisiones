@@ -9,7 +9,7 @@ total contra lo que le pagaron. Ese último paso YA NO hay que hacerlo a mano
 esa misma fila es su justificación -- no hay una explicación aparte de la
 diferencia, es la venta que la sustenta. Fuente: `DBC_gold_conciliacion_pago_semanal`
 (`Datos/sql/v1_conciliacion_pago_semanal.sql` -- ahí está el porqué de cada
-decisión: identificación por texto de BSAK, fecha de venta en vez de cobro,
+decisión: identificación por texto de BSAK, fecha de cobro en vez de venta,
 sociedad en la llave). SIGUE SIN SER LA FUENTE ESTRUCTURADA que se buscó en su
 momento (`Datos/Comisiones_DBC_Borrador_Tecnico.md`, sección 16.3) -- es texto
 libre, con sus límites (ver el archivo SQL).
@@ -34,10 +34,11 @@ perseguir cobro": cuando se pueda calcular comisión sobre lo cobrado, sale de
 esta tabla.
 
 PENDIENTE, a propósito, no resuelto aquí:
-  - La fecha que alinea pago vs. calculado es de VENTA, no de cobro -- se
-    probaron las dos, dieron parecido, y venta no depende del rezago de
-    `sap_bsad_cleared_items` en meses recientes. PENDIENTE DE CONFIRMAR con el
-    cliente cuál usan de verdad (ver la cabecera de `v1_conciliacion_pago_semanal.sql`).
+  - La fecha que alinea pago vs. calculado es la de COBRO (2026-09-30): la
+    `fecha` de la tabla diaria ya es fecha de cobro, y el detalle de factura
+    filtra por `fecha_cobro` para sumar lo mismo. Líneas sin cobro no entran;
+    semanas recientes dependen del rezago de `sap_bsad_cleared_items` (ver la
+    cabecera de `v1_conciliacion_pago_semanal.sql`).
   - ~$5.1M de comisión calculada (3 comisionistas, ver memoria de sesión) no
     tiene con qué compararse: su LIFNR nunca aparece pagando comisión en BSAK,
     en ninguna división ni sociedad. Sale como "cálculo sin pago" en toda su
@@ -103,7 +104,7 @@ GROUP BY p.periodo_inicio, p.periodo_fin, d.sociedad, d.division_code, d.divisio
 
 # Pago real (BSAK) por sociedad+comisionista+división+periodo -- ver
 # v1_conciliacion_pago_semanal.sql para el porqué de cada decisión (texto en
-# vez de campo estructural, fecha de venta en vez de cobro, sociedad en la
+# vez de campo estructural, fecha de cobro en vez de venta, sociedad en la
 # llave). Solo se usa `pago_real`: `comision_calculada` de esa tabla es el
 # LEFT JOIN acotado a los periodos que sí tienen un pago real, no el total del
 # rango -- lo que se muestra como "Calculado" en el nivel 1 es `comision_total`
@@ -149,6 +150,8 @@ WHERE fecha BETWEEN @start AND @end
 # la excepción a propósito a "en pausa perseguir cobro" (2026-09-02) porque
 # cuando se pueda calcular la comisión sobre lo cobrado, sale de aquí.
 # Mismo filtro de `sociedad` que `_DETALLE_DIARIO_SQL` y por el mismo motivo.
+# Filtra por `fecha_cobro`, no `fecha`: la tabla diaria ya va por fecha de
+# cobro, y así esta hoja suma exactamente lo mismo que "Calculado".
 _DETALLE_FACTURA_SQL = f"""
 SELECT
   billing_document, item_number, fecha, sociedad, division_code, division, cedis,
@@ -157,7 +160,7 @@ SELECT
   comision_estado, se_cobro, monto_cobrado, cantidad_cobrada,
   comision_cobrada, fecha_cobro
 FROM {_TABLA_FACTURA}
-WHERE fecha BETWEEN @start AND @end
+WHERE fecha_cobro BETWEEN @start AND @end
   AND (@division IS NULL OR division_code = @division)
   AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
   AND (@sociedad IS NULL OR sociedad = @sociedad)
@@ -276,7 +279,8 @@ def build_conciliacion(
     for fila in filas_pago:
         clave = (fila["sociedad"], fila["comisionista_id"], fila["division_code"])
         c = por_comisionista[clave]
-        # `pago_real` sale de una columna NUMERIC en BigQuery (DMBTR de BSAK)
+        # `pago_real` sale de una columna NUMERIC en BigQuery (QSSHB de BSAK,
+        # base antes de IVA/retenciones; ver v1_conciliacion_pago_semanal.sql)
         # y llega como Decimal, no float -- float() explícito para poder
         # sumarlo con el resto de la aritmética del módulo.
         c["pago_real"] += float(fila["pago_real"] or 0.0)

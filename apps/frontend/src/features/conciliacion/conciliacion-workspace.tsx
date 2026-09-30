@@ -75,6 +75,37 @@ type GrupoComisionista = {
   tieneAlerta: boolean;
 };
 
+// Sociedad/División quedan fuera a propósito: un comisionista con varias
+// combinaciones las muestra en blanco (colSpan) hasta que se abre el "+", así
+// que ordenar por ahí no tendría con qué comparar al nivel de grupo.
+type ColumnaOrdenable = "comisionista" | "num_semanas" | "pago_real" | "comision_calculada" | "diferencia";
+
+// Primer clic por columna: alfabético empieza A→Z (lo esperado en texto),
+// las columnas de dinero empiezan de mayor a menor (mismo criterio que el
+// orden por defecto de toda la pantalla, "qué se paga más primero").
+const DIRECCION_INICIAL: Record<ColumnaOrdenable, "asc" | "desc"> = {
+  comisionista: "asc",
+  num_semanas: "desc",
+  pago_real: "desc",
+  comision_calculada: "desc",
+  diferencia: "desc"
+};
+
+function valorOrdenGrupo(grupo: GrupoComisionista, columna: ColumnaOrdenable): string | number | null {
+  switch (columna) {
+    case "comisionista":
+      return grupo.comisionista;
+    case "num_semanas":
+      return grupo.num_semanas;
+    case "pago_real":
+      return grupo.pago_real;
+    case "comision_calculada":
+      return grupo.comision_calculada;
+    case "diferencia":
+      return grupo.diferencia;
+  }
+}
+
 type Props = {
   initialCatalog: ComisionesCatalog;
   initialError: string | null;
@@ -447,6 +478,9 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
   const [exportando, setExportando] = useState(false);
   const [seleccion, setSeleccion] = useState<Seleccion | null>(null);
   const [expandidos, setExpandidos] = useState<Set<string>>(new Set());
+  // `null` = el orden por defecto que ya trae `gruposComisionista` (Pagado
+  // descendente). Clic en un encabezado lo reemplaza -- ver `alternarOrden`.
+  const [orden, setOrden] = useState<{ columna: ColumnaOrdenable; direccion: "asc" | "desc" } | null>(null);
   // El panel se porta a document.body (ver más abajo): en el layout autenticado
   // algún ancestro trae `backdrop-filter`/`transform`, que en CSS crea un nuevo
   // "containing block" para `position: fixed` -- el panel quedaba atrapado
@@ -577,6 +611,58 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
   // Cuántas PERSONAS traen alguna alerta, no cuántas filas hoja -- el rótulo
   // dice "comisionista(s) con alerta", así que tiene que contar personas.
   const totalAlertas = gruposComisionista.filter((g) => g.tieneAlerta).length;
+
+  // Clic en un encabezado (2026-09-30, pedido de Silvana): ordena por el
+  // TOTAL del comisionista, el mismo que ya se ve en la fila resumen -- nunca
+  // por los hijos que se destapan al abrir el "+", que es lo que se hubiera
+  // visto raro (una fila colapsada "saltando" de lugar al expandirla).
+  const gruposOrdenados = useMemo(() => {
+    if (!orden) return gruposComisionista;
+    const { columna, direccion } = orden;
+    const copia = gruposComisionista.slice();
+    copia.sort((a, b) => {
+      const va = valorOrdenGrupo(a, columna);
+      const vb = valorOrdenGrupo(b, columna);
+      // Nulos siempre al final sin importar la dirección -- mismo criterio
+      // que el resto de la pantalla (nunca se leen como "cero" ni "primero").
+      if (va === null || vb === null) {
+        if (va === vb) return 0;
+        return va === null ? 1 : -1;
+      }
+      const cmp = typeof va === "string" || typeof vb === "string" ? String(va).localeCompare(String(vb)) : va - (vb as number);
+      return direccion === "asc" ? cmp : -cmp;
+    });
+    return copia;
+  }, [gruposComisionista, orden]);
+
+  function alternarOrden(columna: ColumnaOrdenable) {
+    setOrden((actual) => {
+      if (!actual || actual.columna !== columna) return { columna, direccion: DIRECCION_INICIAL[columna] };
+      return { columna, direccion: actual.direccion === "asc" ? "desc" : "asc" };
+    });
+  }
+
+  /** Encabezado clicable con flecha de dirección -- `<button>` adentro del
+   *  `<th>` en vez de `onClick` en el propio `<th>`: llega el foco de teclado
+   *  gratis, sin repetir el manejo manual de Enter/Espacio que sí hace falta
+   *  en las filas (un `<tr>` no es enfocable por sí solo). */
+  function thOrdenable(columna: ColumnaOrdenable, etiqueta: string, opciones: { numerica?: boolean; titulo?: string } = {}) {
+    const activa = orden?.columna === columna;
+    return (
+      <th
+        aria-sort={activa ? (orden!.direccion === "asc" ? "ascending" : "descending") : undefined}
+        className={opciones.numerica ? "n" : undefined}
+        title={opciones.titulo}
+      >
+        <button className="conciliacion-th-ordenable" onClick={() => alternarOrden(columna)} type="button">
+          {etiqueta}
+          <span aria-hidden="true" className="conciliacion-th-flecha">
+            {activa ? (orden!.direccion === "asc" ? "▲" : "▼") : ""}
+          </span>
+        </button>
+      </th>
+    );
+  }
 
   function alternarExpandido(id: string) {
     setExpandidos((previos) => {
@@ -955,20 +1041,21 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>Comisionista</th>
+                    {thOrdenable("comisionista", "Comisionista")}
                     <th>Sociedad</th>
                     <th>División</th>
-                    <th className="n">Periodos</th>
-                    <th className="n">Pagado</th>
-                    <th className="n">Calculado</th>
-                    <th className="n" title="Calculado − Pagado: positiva es posible pago de menos, negativa (en rojo) es posible pago de más.">
-                      Diferencia
-                    </th>
+                    {thOrdenable("num_semanas", "Periodos", { numerica: true })}
+                    {thOrdenable("pago_real", "Pagado", { numerica: true })}
+                    {thOrdenable("comision_calculada", "Calculado", { numerica: true })}
+                    {thOrdenable("diferencia", "Diferencia", {
+                      numerica: true,
+                      titulo: "Calculado − Pagado: positiva es posible pago de menos, negativa (en rojo) es posible pago de más."
+                    })}
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {gruposComisionista.map((grupo, indiceGrupo) => {
+                  {gruposOrdenados.map((grupo, indiceGrupo) => {
                     const claveGrupo = grupo.comisionista_id || `sin-${indiceGrupo}`;
                     // Un solo hijo: no hay nada que desplegar, se pinta como
                     // siempre. Solo los que tienen más de una combinación
@@ -979,7 +1066,24 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
                     const abierto = expandidos.has(claveGrupo);
                     return (
                       <Fragment key={claveGrupo}>
-                        <tr>
+                        {/* Toda la fila abre/cierra, no solo el "+" (2026-09-30,
+                            pedido de Silvana): el "+" se queda visible como
+                            pista de que hay más, pero ya no es el único punto
+                            donde hacer clic sirve. El botón para el clic con
+                            `stopPropagation` -- si no, un clic ahí dispara el
+                            toggle dos veces (una por el botón, otra por burbujear
+                            a la fila) y no pasa nada, que confunde más que el
+                            bug original. */}
+                        <tr
+                          onClick={() => alternarExpandido(claveGrupo)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              alternarExpandido(claveGrupo);
+                            }
+                          }}
+                          tabIndex={0}
+                        >
                           {/* Sociedad/División van fusionadas en esta celda (colSpan) en vez
                               de dos columnas en "—": en una fila resumen esas dos SIEMPRE
                               están vacías (se reparten entre los hijos), así que mostrarlas
@@ -989,7 +1093,10 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
                               <button
                                 aria-expanded={abierto}
                                 className="cascada-mas"
-                                onClick={() => alternarExpandido(claveGrupo)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  alternarExpandido(claveGrupo);
+                                }}
                                 title={
                                   abierto
                                     ? `Cerrar ${nombreComisionista(grupo.comisionista)}`

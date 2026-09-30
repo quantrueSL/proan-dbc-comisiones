@@ -394,7 +394,7 @@ def de_comision(filas, cab, rastro) -> tuple[list[dict], list[dict]]:
                  "en_operacion": division in EN_OPERACION,
                  # La sociedad (DBC/PAN) es parte de la llave real, no un adorno:
                  # una misma oficina puede tener comisionista distinto según la
-                 # sociedad (Celaya 0012: Agustín en DBC, Genaro en PAN).
+                 # sociedad (ver CORRECCIONES_COMISIONISTA).
                  "sociedad": limpia(c.get(rol.get("sociedad", ""), "")),
                  "centro": centro,
                  "almacen": limpia(c.get(rol.get("almacen", ""), "")),
@@ -422,9 +422,18 @@ def de_comision(filas, cab, rastro) -> tuple[list[dict], list[dict]]:
 
 
 # Llave real del comisionista. La oficina SOLA no basta: la misma oficina
-# cambia de dueño según la sociedad (Celaya 0012 es de Agustín en DBC y de
-# Genaro en PAN) y el centro va con ella (H7CE para DBC, PANF para PAN).
+# puede cambiar de dueño según la sociedad y el centro va con ella (H7CE para
+# DBC, PANF para PAN).
 CLAVE_COMISIONISTA = ("sociedad", "division", "centro", "almacen", "oficina")
+
+# Correcciones a la hoja del cliente, (sociedad, división, oficina) -> (código, nombre).
+# PAN H 0012/0083: la hoja "DIVISIÓN HUEVO (H) ayuda SMA" dice Genaro (4040), pero
+# el pago real de BSAK dice Agustín (14718) -- con Genaro, 0/34 semanas dentro de
+# ±10%; con Agustín, semanas al peso y total -8% (ene-sep 2026). Avisado al cliente.
+CORRECCIONES_COMISIONISTA = {
+    ("PAN", "H", "0012"): ("14718", "AGUSTIN JAIMES"),
+    ("PAN", "H", "0083"): ("14718", "AGUSTIN JAIMES"),
+}
 
 
 def de_comisionistas(tarifas) -> list[dict]:
@@ -439,6 +448,10 @@ def de_comisionistas(tarifas) -> list[dict]:
     for t in tarifas:
         if not limpia(t.get("persona_cod", "")) or not limpia(t.get("oficina", "")):
             continue
+        corr = CORRECCIONES_COMISIONISTA.get((t.get("sociedad"), t.get("division"), t.get("oficina")))
+        if corr:
+            t = {**t, "persona_cod": corr[0], "persona": corr[1],
+                 "hoja": f"{t.get('hoja', '')} (corregido con BSAK)"}
         clave = tuple(t.get(k, "") for k in CLAVE_COMISIONISTA) + (t["persona_cod"],)
         # Se queda la grafía más larga del nombre; el cruce es por código.
         if clave not in vistos or len(t.get("persona", "")) > len(vistos[clave]["persona"]):

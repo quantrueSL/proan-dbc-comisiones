@@ -45,8 +45,8 @@ WITH
 -- oficina, con una llave incompleta.
 --
 -- LA SOCIEDAD ES PARTE DE LA LLAVE (2026-09-08, al integrar PAN): la misma
--- oficina puede tener comisionista distinto según la sociedad -- Celaya 0012
--- es de Agustín en DBC y de Genaro en PAN. Por eso el cruce va contra
+-- oficina puede tener comisionista distinto según la sociedad (ver
+-- CORRECCIONES_COMISIONISTA en tablas_cliente.py). Por eso el cruce va contra
 -- `t.bukrs` de la factura y no contra un valor fijo.
 --
 -- Con esta llave desaparece la ambigüedad sola: 406 filas, 0 combinaciones con

@@ -23,32 +23,39 @@
 -- palabra COMISION -- pero no trae periodo reconocible, así que ya queda
 -- fuera igual que cualquier otro texto sin fecha. No se cuela nada por esto.
 --
--- POR QUÉ VA SOBRE FECHA DE VENTA (`comision_mxn`, devengada) Y NO SOBRE
--- FECHA DE COBRO: se probaron las dos. Sobre una muestra chica (6 semanas de
--- Florentino/IA) cobro salía 24% mejor, pero al medir las 5 divisiones y las
--- 2 sociedades completas (2026-09-08) fue al revés -- venta cuadra mejor en
--- BO/IA/L, y la diferencia entre las dos formas nunca fue grande (es
--- coherente con que ~99% se cobra a los pocos días de venderse: casi
--- siempre dan lo mismo). No hay un criterio claramente mejor con los datos
--- que tenemos -- PENDIENTE DE CONFIRMAR CON EL CLIENTE cuál usan de verdad.
--- Se deja venta por ser la que mejor cuadra hoy, no por estar más segura.
+-- MONTO: QSSHB, NO DMBTR (2026-09-30). DMBTR es el neto depositado (base +16%
+-- IVA -10.67% retenciones = base × 1.0533, sin excepción en las líneas que
+-- cruzan); QSSHB es la base antes de impuestos, comparable con `comision_mxn`.
+-- Cambio medido: diferencia total -7.7% -> -2.8% (PAN H -5.5% -> -0.5%);
+-- periodos dentro de ±2%: 164 -> 605 de 2,848. DBC H sigue en -20%, otro hueco. 6 líneas reales de DBC
+-- ($140.6K) traen QSSHB = 0: se usa DMBTR / 1.0533 como respaldo. Todas las
+-- líneas que cruzan son MXN, así que la moneda de QSSHB no importa aquí.
+--
+-- FECHA DE COBRO, NO DE VENTA (2026-09-30): la línea entra al periodo cuya
+-- ventana contiene su `fecha_cobro` (primer AUGDT en BSAD), con su comisión
+-- completa (`comision_mxn`). Medido ene-jun 2026, 2,649 periodos: exactos (±$1)
+-- 257 -> 632, dentro de ±2% 554 -> 902. El total casi no cambia (-1.5% vs
+-- -1.3%) porque el desfase se compensa entre semanas -- por eso la medición del
+-- 2026-09-08, hecha sobre totales, no lo vio. Caso que lo destapó: Edgardo
+-- Trujillo 18-24 abr, PAN H -$44.6K -> +$2.30; DBC H/IA/L al peso.
+-- Líneas sin cobro no entran a ningún periodo. Depende del rezago de
+-- `sap_bsad_cleared_items`: semanas recientes pueden verse bajas.
 --
 -- SOCIEDAD ES PARTE DE LA LLAVE (no solo DBC): el mismo comisionista puede
 -- tener oficinas distintas en DBC y en PAN (ver `DBC_dim_comisionista`), así
 -- que el puente comisionista->oficina también cruza por sociedad.
 --
--- YA NO DEPENDE DE `sap_bsad_cleared_items`: al ir por fecha de venta, "lo
--- calculado" sale de `comision_mxn` (devengada, sobre facturado), no de
--- `comision_cobrada`. El rezago de esa fuente en meses recientes ya no
--- afecta a esta tabla -- si se vuelve a cambiar a fecha de cobro, ese
--- rezago vuelve a aplicar.
---
--- DOS FUENTES DE PAGO, NINGUNA CUBRE TODO SOLA (2026-09-09):
--- `proan_BSAK_20260708` es una foto fija hasta el 8 de julio de 2026 (ver
--- memoria de sesión bsak_snapshot_congelado). `RT_BSAK` es la que se sigue
--- actualizando en producción y hoy arranca el 1 de agosto de 2026. Entre el
--- 9 y el 31 de julio no hay dato en NINGUNA de las dos -- hueco real de la
--- fuente, no un bug de esta consulta.
+-- RT_BSAK ES VENTANA RODANTE, NO ACUMULADO (parche 2026-09-30, ver memoria de
+-- sesión bsak_snapshot_congelado): se viene acortando desde el 08-19 y hoy
+-- solo trae septiembre -- pero además NO es una ventana consistente: cada
+-- snapshot diario (`RT_BSAK_YYYYMMDD`, existen del 08-15 al 09-29) retiene un
+-- tramo distinto, y filas que sí aparecían en un snapshot desaparecen en
+-- snapshots posteriores (probado: pagos del 08-31 y 09-08/09 visibles en
+-- `RT_BSAK_20260909` ya no están en el `RT_BSAK` de hoy). Un solo snapshot de
+-- respaldo (se probó con el del 08-17) no basta -- deja huecos reales de
+-- semanas completas (15-21 agosto, 01-11 septiembre). La única forma de no
+-- perder pagos es unir TODAS las fotos diarias con comodín (`RT_BSAK_*`) más
+-- la tabla viva, y dejar que el QUALIFY de abajo deduplique por documento.
 --
 -- PERIODOS QUE NO SON UNA SEMANA NORMAL EXISTEN DE VERDAD, no son un error de
 -- parseo: hay un ajuste real el 28/02/2026, "COMISIONES DEL 12 AL 28 DE
@@ -84,25 +91,33 @@ PARTITION BY periodo
 CLUSTER BY division_code, comisionista
 AS
 WITH bsak_crudo AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260708`
   UNION ALL
-  -- BUDAT > el corte del snapshot fijo, aunque hoy no haya solape real: así
-  -- si algún día se reprocesa con una versión de RT_BSAK más amplia, no se
-  -- duplica nada.
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, GJAHR, BELNR, BUZEI
+  -- Todas las fotos diarias de RT_BSAK (08-15 en adelante, ver cabecera): cada
+  -- una retiene un tramo distinto de la ventana rodante, así que hay que
+  -- unirlas todas -- una sola no cubre lo que cubren entre todas.
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  FROM `proan-quantrue.D00_SANDBOX.RT_BSAK_*`
+  WHERE BUDAT > '20260708'
+  UNION ALL
+  -- La tabla viva, mismo corte que arriba -- el QUALIFY de abajo deduplica
+  -- cualquier documento que aparezca repetido entre snapshots y la tabla viva.
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
   WHERE BUDAT > '20260708'
 ),
--- 27 documentos de verdad duplicados en la extracción (mismo BUKRS+GJAHR+
--- BELNR+BUZEI -- la llave real de una línea contable en SAP, confirmado con
--- el mismo BELNR repetido). Medido 2026-09-09: concentrado en dos corridas
--- completas, no en comisionistas sueltos -- 2026-07-08 (26 comisionistas de
--- PAN, "COMISIONES DEL 01 AL 03 DE JULIO DEL 2026") y 2026-04-07 (3
--- comisionistas, "28 AL 31 DE MARZO"). Sin deduplicar, $1,786,993 de más en
--- pago_real. QUALIFY se queda con una sola copia por documento.
+-- Dedup por BUKRS+GJAHR+BELNR+BUZEI -- la llave real de una línea contable en
+-- SAP. Ahora tiene DOS motivos, no uno: (a) 27 documentos de verdad
+-- duplicados dentro de una misma extracción, medido 2026-09-09 -- 2026-07-08
+-- (26 comisionistas de PAN) y 2026-04-07 (3 comisionistas); sin deduplicar
+-- eran $1,786,993 de más. (b) desde el parche del comodín `RT_BSAK_*`
+-- (2026-09-30), el MISMO documento aparece repetido en varias fotos diarias
+-- a propósito (es la forma de no perder los que la ventana rodante fue
+-- soltando) -- el contenido no cambia entre copias, solo hay que quedarse con
+-- una. QUALIFY resuelve ambos casos igual: una sola copia por documento.
 bsak AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
   FROM bsak_crudo
   QUALIFY ROW_NUMBER() OVER (PARTITION BY BUKRS, GJAHR, BELNR, BUZEI ORDER BY BUDAT) = 1
 ),
@@ -162,7 +177,8 @@ pago_real AS (
     END AS anio_pago,
     -- Respaldo para cuando el texto no nombra el mes -- ver `periodo` abajo.
     CAST(SUBSTR(BUDAT, 5, 2) AS INT64) AS mes_budat,
-    DMBTR AS pagado
+    -- Base antes de IVA/retenciones; si viene en 0, se deduce del neto (ver cabecera).
+    IF(QSSHB <> 0, QSSHB, ROUND(DMBTR / 1.0533, 2)) AS pagado
   FROM bsak
   WHERE BUKRS IN ('DBC', 'PAN') AND BLART = 'RE' AND UPPER(SGTXT) LIKE '%COMISION%'
 ),
@@ -273,5 +289,5 @@ LEFT JOIN `proan-quantrue.ZZ_PRUEBAS.dbc_comisiones_calculadas_cobro` c
        ON c.bukrs           = p.sociedad
       AND c.oficina_ventas  = o.oficina
       AND c.division        = p.division
-      AND c.billing_date BETWEEN p.desde AND p.hasta
+      AND c.fecha_cobro BETWEEN p.desde AND p.hasta   -- fecha de cobro, ver cabecera
 GROUP BY p.sociedad, p.LIFNR, p.division, p.desde;

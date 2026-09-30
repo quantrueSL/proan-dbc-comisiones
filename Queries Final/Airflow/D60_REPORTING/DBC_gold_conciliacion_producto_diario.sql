@@ -8,6 +8,9 @@
 -- `ventana_desde` que en los otros seis archivos de esta rama: si una gold usa
 -- ventana más corta que su silver, conserva filas que la silver ya no tiene.
 --
+-- `fecha` ES LA FECHA DE COBRO (2026-09-30, ver el histórico): la ventana va
+-- sobre `fecha_cobro` de factura_linea, que es la columna que aquí se llama `fecha`.
+--
 -- ORDEN EN EL DAG: ULTIMA de la cadena. Sale de otra GOLD (DBC_gold_conciliacion_factura_linea),
 -- no de la silver: si corre en paralelo con las demas se alimenta de la ventana
 -- vieja. Tiene que esperar a que factura_linea termine.
@@ -29,7 +32,7 @@ WHERE fecha >= ventana_desde;
 
 INSERT INTO `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_producto_diario`
 SELECT
-  fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
+  fecha_cobro AS fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
   matnr, descripcion, unidad_venta, unidad_tarifa,
   ANY_VALUE(tarifa)             AS tarifa,
   COUNT(*)                      AS num_lineas,
@@ -39,8 +42,8 @@ SELECT
   SUM(comision)                 AS comision_total,
   COUNTIF(comision_estado != 'calculada') AS lineas_sin_comision
 FROM `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
-WHERE fecha >= ventana_desde   -- <- alcance incremental
-GROUP BY fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
+WHERE fecha_cobro >= ventana_desde   -- <- alcance incremental, sobre la misma columna que el DELETE
+GROUP BY fecha_cobro, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
          matnr, descripcion, unidad_venta, unidad_tarifa;
 
 ASSERT (

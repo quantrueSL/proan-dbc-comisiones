@@ -29,13 +29,13 @@ WHERE periodo >= ventana_desde;
 
 INSERT INTO `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_semanal`
 WITH bsak_crudo AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260708`
   UNION ALL
   -- BUDAT > el corte del snapshot fijo, aunque hoy no haya solape real: así
   -- si algún día se reprocesa con una versión de RT_BSAK más amplia, no se
   -- duplica nada.
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
   WHERE BUDAT > '20260708'
 ),
@@ -47,7 +47,7 @@ WITH bsak_crudo AS (
 -- comisionistas, "28 AL 31 DE MARZO"). Sin deduplicar, $1,786,993 de más en
 -- pago_real. QUALIFY se queda con una sola copia por documento.
 bsak AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
   FROM bsak_crudo
   QUALIFY ROW_NUMBER() OVER (PARTITION BY BUKRS, GJAHR, BELNR, BUZEI ORDER BY BUDAT) = 1
 ),
@@ -107,7 +107,8 @@ pago_real AS (
     END AS anio_pago,
     -- Respaldo para cuando el texto no nombra el mes -- ver `periodo` abajo.
     CAST(SUBSTR(BUDAT, 5, 2) AS INT64) AS mes_budat,
-    DMBTR AS pagado
+    -- Base antes de IVA/retenciones; si viene en 0, se deduce del neto (ver cabecera del histórico).
+    IF(QSSHB <> 0, QSSHB, ROUND(DMBTR / 1.0533, 2)) AS pagado
   FROM bsak
   WHERE BUKRS IN ('DBC', 'PAN') AND BLART = 'RE' AND UPPER(SGTXT) LIKE '%COMISION%'
 ),
@@ -218,7 +219,7 @@ LEFT JOIN `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro` c
        ON c.bukrs           = p.sociedad
       AND c.oficina_ventas  = o.oficina
       AND c.division        = p.division
-      AND c.billing_date BETWEEN p.desde AND p.hasta
+      AND c.fecha_cobro BETWEEN p.desde AND p.hasta   -- fecha de cobro, ver cabecera del histórico
 WHERE p.desde >= ventana_desde   -- <- alcance incremental
 GROUP BY p.sociedad, p.LIFNR, p.division, p.desde;
 
