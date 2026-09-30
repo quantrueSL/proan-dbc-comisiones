@@ -45,17 +45,11 @@
 -- tener oficinas distintas en DBC y en PAN (ver `DBC_dim_comisionista`), así
 -- que el puente comisionista->oficina también cruza por sociedad.
 --
--- RT_BSAK ES VENTANA RODANTE, NO ACUMULADO (parche 2026-09-30, ver memoria de
--- sesión bsak_snapshot_congelado): se viene acortando desde el 08-19 y hoy
--- solo trae septiembre -- pero además NO es una ventana consistente: cada
--- snapshot diario (`RT_BSAK_YYYYMMDD`, existen del 08-15 al 09-29) retiene un
--- tramo distinto, y filas que sí aparecían en un snapshot desaparecen en
--- snapshots posteriores (probado: pagos del 08-31 y 09-08/09 visibles en
--- `RT_BSAK_20260909` ya no están en el `RT_BSAK` de hoy). Un solo snapshot de
--- respaldo (se probó con el del 08-17) no basta -- deja huecos reales de
--- semanas completas (15-21 agosto, 01-11 septiembre). La única forma de no
--- perder pagos es unir TODAS las fotos diarias con comodín (`RT_BSAK_*`) más
--- la tabla viva, y dejar que el QUALIFY de abajo deduplique por documento.
+-- FUENTE DE PAGO (2026-09-30): `proan_BSAK_20260929` es la recarga completa
+-- que hizo el senior (dic-2025 a 29-sep-2026). Contiene todo lo que tenían
+-- `proan_BSAK_20260708` + las fotos RT juntas y llena julio (33 -> 697 líneas
+-- de comisión). Lo posterior sale de las fotos `RT_BSAK_*` + `RT_BSAK`, que son
+-- ventana rodante y pierden filas: por eso se unen todas y se deduplica.
 --
 -- PERIODOS QUE NO SON UNA SEMANA NORMAL EXISTEN DE VERDAD, no son un error de
 -- parseo: hay un ajuste real el 28/02/2026, "COMISIONES DEL 12 AL 28 DE
@@ -91,31 +85,23 @@ PARTITION BY periodo
 CLUSTER BY division_code, comisionista
 AS
 WITH bsak_crudo AS (
+  -- Recarga completa hasta el 29-sep (ver cabecera).
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
-  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260708`
+  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260929`
   UNION ALL
-  -- Todas las fotos diarias de RT_BSAK (08-15 en adelante, ver cabecera): cada
-  -- una retiene un tramo distinto de la ventana rodante, así que hay que
-  -- unirlas todas -- una sola no cubre lo que cubren entre todas.
+  -- Pagos posteriores a la recarga: todas las fotos diarias desde ese día.
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK_*`
-  WHERE BUDAT > '20260708'
+  WHERE _TABLE_SUFFIX >= '20260929' AND BUDAT > '20260929'
   UNION ALL
-  -- La tabla viva, mismo corte que arriba -- el QUALIFY de abajo deduplica
-  -- cualquier documento que aparezca repetido entre snapshots y la tabla viva.
+  -- La tabla viva, mismo corte.
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
-  WHERE BUDAT > '20260708'
+  WHERE BUDAT > '20260929'
 ),
--- Dedup por BUKRS+GJAHR+BELNR+BUZEI -- la llave real de una línea contable en
--- SAP. Ahora tiene DOS motivos, no uno: (a) 27 documentos de verdad
--- duplicados dentro de una misma extracción, medido 2026-09-09 -- 2026-07-08
--- (26 comisionistas de PAN) y 2026-04-07 (3 comisionistas); sin deduplicar
--- eran $1,786,993 de más. (b) desde el parche del comodín `RT_BSAK_*`
--- (2026-09-30), el MISMO documento aparece repetido en varias fotos diarias
--- a propósito (es la forma de no perder los que la ventana rodante fue
--- soltando) -- el contenido no cambia entre copias, solo hay que quedarse con
--- una. QUALIFY resuelve ambos casos igual: una sola copia por documento.
+-- Una copia por BUKRS+GJAHR+BELNR+BUZEI (la llave de una línea contable): la
+-- recarga trae cada documento repetido (PAN 1.1M filas / 317K llaves, copias
+-- con el mismo importe) y las fotos RT se solapan entre sí.
 bsak AS (
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
   FROM bsak_crudo

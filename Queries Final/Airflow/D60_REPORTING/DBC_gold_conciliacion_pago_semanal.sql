@@ -29,23 +29,22 @@ WHERE periodo >= ventana_desde;
 
 INSERT INTO `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_semanal`
 WITH bsak_crudo AS (
+  -- Recarga completa hasta el 29-sep (ver cabecera del histórico).
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
-  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260708`
+  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260929`
   UNION ALL
-  -- BUDAT > el corte del snapshot fijo, aunque hoy no haya solape real: así
-  -- si algún día se reprocesa con una versión de RT_BSAK más amplia, no se
-  -- duplica nada.
+  -- Pagos posteriores a la recarga: todas las fotos diarias desde ese día.
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  FROM `proan-quantrue.D00_SANDBOX.RT_BSAK_*`
+  WHERE _TABLE_SUFFIX >= '20260929' AND BUDAT > '20260929'
+  UNION ALL
+  -- La tabla viva, mismo corte.
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
-  WHERE BUDAT > '20260708'
+  WHERE BUDAT > '20260929'
 ),
--- 27 documentos de verdad duplicados en la extracción (mismo BUKRS+GJAHR+
--- BELNR+BUZEI -- la llave real de una línea contable en SAP, confirmado con
--- el mismo BELNR repetido). Medido 2026-09-09: concentrado en dos corridas
--- completas, no en comisionistas sueltos -- 2026-07-08 (26 comisionistas de
--- PAN, "COMISIONES DEL 01 AL 03 DE JULIO DEL 2026") y 2026-04-07 (3
--- comisionistas, "28 AL 31 DE MARZO"). Sin deduplicar, $1,786,993 de más en
--- pago_real. QUALIFY se queda con una sola copia por documento.
+-- Una copia por BUKRS+GJAHR+BELNR+BUZEI (la llave de una línea contable): la
+-- recarga trae cada documento repetido y las fotos RT se solapan entre sí.
 bsak AS (
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
   FROM bsak_crudo

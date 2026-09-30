@@ -45,12 +45,11 @@
 -- tener oficinas distintas en DBC y en PAN (ver `DBC_dim_comisionista`), así
 -- que el puente comisionista->oficina también cruza por sociedad.
 --
--- DOS FUENTES DE PAGO, NINGUNA CUBRE TODO SOLA (2026-09-09):
--- `proan_BSAK_20260708` es una foto fija hasta el 8 de julio de 2026 (ver
--- memoria de sesión bsak_snapshot_congelado). `RT_BSAK` es la que se sigue
--- actualizando en producción y hoy arranca el 1 de agosto de 2026. Entre el
--- 9 y el 31 de julio no hay dato en NINGUNA de las dos -- hueco real de la
--- fuente, no un bug de esta consulta.
+-- FUENTE DE PAGO (2026-09-30): `proan_BSAK_20260929` es la recarga completa
+-- que hizo el senior (dic-2025 a 29-sep-2026). Contiene todo lo que tenían
+-- `proan_BSAK_20260708` + las fotos RT juntas y llena julio (33 -> 697 líneas
+-- de comisión). Lo posterior sale de las fotos `RT_BSAK_*` + `RT_BSAK`, que son
+-- ventana rodante y pierden filas: por eso se unen todas y se deduplica.
 --
 -- PERIODOS QUE NO SON UNA SEMANA NORMAL EXISTEN DE VERDAD, no son un error de
 -- parseo: hay un ajuste real el 28/02/2026, "COMISIONES DEL 12 AL 28 DE
@@ -86,23 +85,23 @@ PARTITION BY periodo
 CLUSTER BY division_code, comisionista
 AS
 WITH bsak_crudo AS (
+  -- Recarga completa hasta el 29-sep (ver cabecera).
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
-  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260708`
+  FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260929`
   UNION ALL
-  -- BUDAT > el corte del snapshot fijo, aunque hoy no haya solape real: así
-  -- si algún día se reprocesa con una versión de RT_BSAK más amplia, no se
-  -- duplica nada.
+  -- Pagos posteriores a la recarga: todas las fotos diarias desde ese día.
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  FROM `proan-quantrue.D00_SANDBOX.RT_BSAK_*`
+  WHERE _TABLE_SUFFIX >= '20260929' AND BUDAT > '20260929'
+  UNION ALL
+  -- La tabla viva, mismo corte.
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
-  WHERE BUDAT > '20260708'
+  WHERE BUDAT > '20260929'
 ),
--- 27 documentos de verdad duplicados en la extracción (mismo BUKRS+GJAHR+
--- BELNR+BUZEI -- la llave real de una línea contable en SAP, confirmado con
--- el mismo BELNR repetido). Medido 2026-09-09: concentrado en dos corridas
--- completas, no en comisionistas sueltos -- 2026-07-08 (26 comisionistas de
--- PAN, "COMISIONES DEL 01 AL 03 DE JULIO DEL 2026") y 2026-04-07 (3
--- comisionistas, "28 AL 31 DE MARZO"). Sin deduplicar, $1,786,993 de más en
--- pago_real. QUALIFY se queda con una sola copia por documento.
+-- Una copia por BUKRS+GJAHR+BELNR+BUZEI (la llave de una línea contable): la
+-- recarga trae cada documento repetido (PAN 1.1M filas / 317K llaves, copias
+-- con el mismo importe) y las fotos RT se solapan entre sí.
 bsak AS (
   SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
   FROM bsak_crudo
