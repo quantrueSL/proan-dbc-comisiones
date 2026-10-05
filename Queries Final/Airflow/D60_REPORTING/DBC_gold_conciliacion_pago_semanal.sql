@@ -30,25 +30,31 @@ WHERE periodo >= ventana_desde;
 INSERT INTO `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_semanal`
 WITH bsak_crudo AS (
   -- Recarga completa hasta el 29-sep (ver cabecera del histórico).
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.proan_BSAK_20260929`
   UNION ALL
   -- Pagos posteriores a la recarga: todas las fotos diarias desde ese día.
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK_*`
   WHERE _TABLE_SUFFIX >= '20260929' AND BUDAT > '20260929'
   UNION ALL
   -- La tabla viva, mismo corte.
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, GJAHR, BELNR, BUZEI
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL, GJAHR, BELNR, BUZEI
   FROM `proan-quantrue.D00_SANDBOX.RT_BSAK`
   WHERE BUDAT > '20260929'
 ),
 -- Una copia por BUKRS+GJAHR+BELNR+BUZEI (la llave de una línea contable): la
 -- recarga trae cada documento repetido y las fotos RT se solapan entre sí.
 bsak AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL
   FROM bsak_crudo
   QUALIFY ROW_NUMBER() OVER (PARTITION BY BUKRS, GJAHR, BELNR, BUZEI ORDER BY BUDAT) = 1
+),
+-- Compensaciones que incluyen una transferencia real (KZ). Una factura de
+-- comisión cerrada sin KZ (contra YE/AB) es una cancelación, no un pago:
+-- 92 en 2026 (~$5M), p.ej. PAN 25-31 jul registrada dos veces (2026-10-05).
+compensado_con_pago AS (
+  SELECT DISTINCT BUKRS, LIFNR, AUGBL FROM bsak WHERE BLART = 'KZ'
 ),
 pago_real AS (
   -- BLART='RE' es el lado con el texto real; el otro lado (KZ) trae SGTXT vacío.
@@ -110,6 +116,8 @@ pago_real AS (
     IF(QSSHB <> 0, QSSHB, ROUND(DMBTR / 1.0533, 2)) AS pagado
   FROM bsak
   WHERE BUKRS IN ('DBC', 'PAN') AND BLART = 'RE' AND UPPER(SGTXT) LIKE '%COMISION%'
+    AND EXISTS (SELECT 1 FROM compensado_con_pago k
+                WHERE k.BUKRS = bsak.BUKRS AND k.LIFNR = bsak.LIFNR AND k.AUGBL = bsak.AUGBL)
 ),
 periodo AS (
   -- El año sale del BUDAT del pago; diciembre pagado en enero es del año

@@ -587,7 +587,15 @@ pago_factura_v1 AS (
     VBELN_billing_document AS billing_document,
     MIN(AUGDT_clearing_dt) AS fecha,
     SUM(DMBTR_amount_in_local_currency) AS pagado
-  FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
+  -- Una fila por línea contable: si se compensó dos veces (anulada y rehecha), solo la más reciente.
+  FROM (
+    SELECT *
+    FROM `proan-quantrue.D30_INTEGRATION.sap_bsad_cleared_items`
+    WHERE BUKRS_company_code IN ('DBC','PAN') AND debit_lg
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY BUKRS_company_code, GJAHR_fiscal_year, BELNR_account_document_number, BUZEI_item_number
+      ORDER BY AUGDT_clearing_dt DESC, AUGBL_document_number DESC) = 1
+  )
   WHERE BUKRS_company_code IN ('DBC', 'PAN')
     AND debit_lg
     AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''

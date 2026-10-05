@@ -6885,6 +6885,14 @@ body.proan-report-assistant-open .proan-content-scroll {
 .conciliacion-tabla-fija th:first-child .conciliacion-th-ordenable { justify-content: flex-start; }
 .conciliacion-th-ordenable:hover, .conciliacion-th-ordenable:focus { color: #3d3d7c; outline: none; }
 .conciliacion-th-flecha { display: inline-block; width: 9px; font-size: 9px; line-height: 1; }
+/* Fila resumen de un comisionista, SOLO mientras está abierta (2026-10-05):
+   la distingue de los hijos que acaba de destapar debajo, sin pesar nada
+   visualmente en el caso normal (colapsada, que es casi toda la tabla).
+   El fondo es el mismo gris de la fila TOTAL del Excel (ver `GRIS_TOTAL` en
+   conciliacion-workspace.tsx) -- una sola idea de "esto es un total", no dos. */
+.conciliacion-tabla-fija tbody tr[data-abierto="si"] { background: #e5e7eb; font-weight: 700; }
+.conciliacion-tabla-fija tbody tr[data-abierto="si"]:hover,
+.conciliacion-tabla-fija tbody tr[data-abierto="si"]:focus { background: #dde1e6; }
 /* Pago vs. calculado (2026-09-08). Mismo rojo que .financial-metric-subtitle.is-negative:
    un solo color de "esto va corto" en toda la app, no uno nuevo por pantalla.
    Dos selectores a propósito (2026-09-09): la clase sola alcanza para el

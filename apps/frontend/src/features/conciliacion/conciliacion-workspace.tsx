@@ -102,7 +102,12 @@ function valorOrdenGrupo(grupo: GrupoComisionista, columna: ColumnaOrdenable): s
     case "comision_calculada":
       return grupo.comision_calculada;
     case "diferencia":
-      return grupo.diferencia;
+      // Por magnitud, no por el signo (2026-10-05, pedido de Silvana): "qué
+      // hay que revisar primero" no distingue pagar de más de pagar de menos
+      // -- un -80k importa tanto como un +80k, y un +3k importa menos que
+      // cualquiera de los dos. El signo se sigue viendo en la celda (y el
+      // color), esto solo decide el orden.
+      return grupo.diferencia === null ? null : Math.abs(grupo.diferencia);
   }
 }
 
@@ -1074,7 +1079,14 @@ export function ConciliacionWorkspace({ initialCatalog, initialError, initialRes
                             toggle dos veces (una por el botón, otra por burbujear
                             a la fila) y no pasa nada, que confunde más que el
                             bug original. */}
+                        {/* `data-abierto` solo pinta algo distinto cuando SÍ hay
+                            hijos destapados debajo (2026-10-05, pedido de
+                            Silvana): colapsada se ve como cualquier fila, nada
+                            de peso visual de más -- abierta, se distingue de
+                            sus hijos con el mismo gris que ya usa la fila TOTAL
+                            del Excel (`GRIS_TOTAL`), no un color nuevo. */}
                         <tr
+                          data-abierto={abierto ? "si" : undefined}
                           onClick={() => alternarExpandido(claveGrupo)}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
