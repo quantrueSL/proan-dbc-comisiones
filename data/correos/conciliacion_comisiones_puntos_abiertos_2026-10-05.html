@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Conciliación de comisiones: puntos abiertos</title>
+<style>
+  :root {
+    --ink: #1f1f1d; --ink-2: #4a4a46; --muted: #76756f; --rule: #dcdad3;
+    --surface: #ffffff; --soft: #f5f4f0;
+    --gray-bar: #b9b7ae; --green: #3f8f5a; --green-soft: #b9dcc4;
+  }
+  @page { size: Letter; margin: 18mm 17mm 18mm 17mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--ink);
+         font: 10.5pt/1.45 "Segoe UI", Calibri, Arial, sans-serif; }
+  h1 { font-size: 19pt; line-height: 1.2; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 10pt; }
+  h2 { font-size: 13pt; margin: 22px 0 6px; font-weight: 600; break-after: avoid; }
+  h3 { font-size: 11pt; margin: 14px 0 4px; font-weight: 600; break-after: avoid; }
+  p { margin: 0 0 8px; }
+  ul, ol { margin: 0 0 8px; padding-left: 20px; }
+  li { margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 9.5pt; break-inside: avoid; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; color: var(--ink-2); border-bottom: 1.5px solid var(--ink-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .q { background: var(--soft); border-left: 3px solid var(--green); padding: 7px 10px; margin: 6px 0 10px; break-inside: avoid; }
+  .q > b { display: block; margin-bottom: 2px; }
+  .q ul { margin: 0; }
+  .figure { margin: 6px 0 4px; break-inside: avoid; }
+  .figure .cap { color: var(--muted); font-size: 8.5pt; margin-top: 2px; }
+  .kpis { display: flex; gap: 10px; margin: 8px 0 12px; }
+  .kpi { flex: 1; border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; }
+  .kpi .v { font-size: 15pt; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { color: var(--muted); font-size: 8.5pt; }
+  .section { break-inside: auto; }
+  .note { color: var(--muted); font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<h1>Conciliación de comisiones: puntos abiertos</h1>
+<p class="sub">5 de octubre de 2026 · DBC y PAN · periodos pagados del 1 de enero al 25 de septiembre de 2026</p>
+
+<h2>1. Dónde estamos</h2>
+<p>Comparamos cada pago de comisión registrado en SAP contra la comisión que calculamos para el mismo comisionista, división y periodo. En el periodo revisado hay <b>4,553 periodos pagados</b>.</p>
+
+<div class="kpis">
+  <div class="kpi"><div class="v">$21.7M</div><div class="l">Suma de las diferencias, periodo por periodo</div></div>
+  <div class="kpi"><div class="v">−$4.7M</div><div class="l">Diferencia neta (se pagó algo más de lo calculado)</div></div>
+  <div class="kpi"><div class="v">$15.5M</div><div class="l">De la diferencia, con causa identificada</div></div>
+</div>
+
+<p>Las diferencias de una semana se compensan con las de otras, por eso el neto es mucho menor que la suma. La mayor parte se explica por la forma en que se agrupan las fechas en los pagos, no por el cálculo de la comisión:</p>
+
+<div class="figure">
+<svg viewBox="0 0 760 262" width="100%" role="img" aria-label="Cascada: de 21.7 millones de diferencia, 15.5 millones tienen causa">
+  <g font-family="Segoe UI, Calibri, Arial, sans-serif" font-size="12" fill="#1f1f1d">
+    <!-- guía vertical en cero -->
+    <line x1="250" y1="8" x2="250" y2="252" stroke="#dcdad3" stroke-width="1"/>
+
+    <text x="238" y="29" text-anchor="end" font-weight="600">Diferencia total</text>
+    <rect x="250" y="14" width="420" height="22" rx="3" fill="#b9b7ae"/>
+    <text x="678" y="29">$21.7M</text>
+
+    <text x="238" y="63" text-anchor="end">Último día del mes pagado después</text>
+    <rect x="497.7" y="48" width="172.3" height="22" rx="3" fill="#3f8f5a"/>
+    <text x="678" y="63">−$8.9M</text>
+
+    <text x="238" y="97" text-anchor="end">Abarrotes dentro de Huevo (DBC)</text>
+    <rect x="441.6" y="82" width="56.1" height="22" rx="3" fill="#3f8f5a"/>
+    <text x="505.7" y="97">−$2.9M</text>
+
+    <text x="238" y="131" text-anchor="end">Otros corrimientos de días</text>
+    <rect x="395.2" y="116" width="46.4" height="22" rx="3" fill="#b9dcc4" stroke="#3f8f5a" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <text x="449.6" y="131">−$2.4M (por confirmar)</text>
+
+    <text x="238" y="165" text-anchor="end">Pagos sin venta asociada</text>
+    <rect x="379.7" y="150" width="15.5" height="22" rx="3" fill="#3f8f5a"/>
+    <text x="403.2" y="165">−$0.8M</text>
+
+    <text x="238" y="199" text-anchor="end">Ajuste PAN 12-28 febrero</text>
+    <rect x="370" y="184" width="9.7" height="22" rx="3" fill="#3f8f5a"/>
+    <text x="387.7" y="199">−$0.5M</text>
+
+    <text x="238" y="241" text-anchor="end" font-weight="600">Sin explicar</text>
+    <rect x="250" y="226" width="120" height="22" rx="3" fill="#b9b7ae"/>
+    <text x="378" y="241">$6.2M</text>
+
+    <!-- conectores -->
+    <g stroke="#9a988f" stroke-width="1" stroke-dasharray="2 2">
+      <line x1="497.7" y1="36" x2="497.7" y2="82"/>
+      <line x1="441.6" y1="70" x2="441.6" y2="116"/>
+      <line x1="395.2" y1="104" x2="395.2" y2="150"/>
+      <line x1="379.7" y1="138" x2="379.7" y2="184"/>
+      <line x1="370" y1="172" x2="370" y2="226"/>
+    </g>
+  </g>
+</svg>
+<div class="cap">Suma de |calculado − pagado| por comisionista × división × periodo. Verde: causa identificada. Verde claro punteado: movimientos de días probables, todavía por confirmar.</div>
+</div>
+
+<p>Considerando estas causas, el <b>62.8%</b> de los periodos cuadra dentro de ±2%. Lo que queda sin explicar ($6.2M) se concentra en PAN Huevo y en DBC Vuala, y se detalla en los puntos 5 a 7.</p>
+
+<h3>Cómo calculamos</h3>
+<ul>
+  <li>La comisión se calcula sobre lo <b>cobrado</b>, con la tarifa de comisión de SAP.</li>
+  <li>Del lado del pago tomamos el <b>importe base</b> de la factura de comisión, antes de IVA y retenciones.</li>
+  <li>El periodo y la división de cada pago salen del texto de la factura de comisión en SAP (por ejemplo, "COMISION HUEVO 22-31 AGOSTO").</li>
+</ul>
+
+<h2>2. Cómo se agrupan los días de fin e inicio de mes</h2>
+<p>La semana normal va de sábado a viernes. Cuando la semana cruza de mes, encontramos dos formas distintas de hacerlo:</p>
+<ul>
+  <li><b>De diciembre a mayo:</b> los últimos días del mes se pagaban aparte (21-27 y 28-31 de marzo). Los primeros días del mes nuevo se sumaban a la semana siguiente (1-10 de abril).</li>
+  <li><b>Desde junio:</b> los últimos días del mes se suman a la última semana (20-30 de junio, 22-31 de agosto). Los primeros días del mes nuevo se pagan aparte (1-3 de julio, 1-4 de septiembre).</li>
+</ul>
+<p>Como la regla cambió a mitad de año, comparando semana por semana parece que se paga de más a fin de mes y de menos al inicio. En realidad son los mismos días, agrupados de otra forma. Proponemos comparar por bloque en las semanas de cambio de mes: el bloque de fin de mes (la última semana completa más los días que sobran) y el bloque de inicio (los primeros días del mes nuevo más la semana siguiente). El resto de las semanas se ve igual que hoy.</p>
+
+<h3>Lo cobrado el último día del mes se paga en un periodo posterior</h3>
+<p>Todos los meses, en DBC y en PAN, la comisión de lo cobrado el último día no entra en el pago de fin de mes y aparece en un pago posterior, que no siempre es el mismo:</p>
+<table>
+  <tr><th>Mes</th><th>Último día</th><th class="num">Comisión de ese día</th><th>Se paga en</th><th>Pago del mes siguiente</th></tr>
+  <tr><td>Enero</td><td>31 (sáb)</td><td class="num">$428K</td><td>01-06 feb</td><td>1º</td></tr>
+  <tr><td>Febrero</td><td>28 (sáb)</td><td class="num">$898K</td><td>01-06 mar</td><td>1º</td></tr>
+  <tr><td>Marzo</td><td>31 (mar)</td><td class="num">$600K</td><td>01-10 abr</td><td>1º</td></tr>
+  <tr><td>Abril</td><td>30 (jue)</td><td class="num">$407K</td><td>16-22 may</td><td>3º</td></tr>
+  <tr><td>Mayo</td><td>30 (sáb)</td><td class="num">$351K</td><td>06-12 jun</td><td>2º</td></tr>
+  <tr><td>Junio</td><td>30 (mar)</td><td class="num">$613K</td><td>01-03 jul</td><td>1º</td></tr>
+  <tr><td>Julio</td><td>31 (vie)</td><td class="num">$246K</td><td>15-21 ago</td><td>3º</td></tr>
+  <tr><td>Agosto</td><td>31 (lun)</td><td class="num">$611K</td><td>05-11 sep</td><td>2º</td></tr>
+</table>
+<ul>
+  <li><b>Se mueve el día completo, al peso.</b> En 22-31 de agosto: Agustín Jaimes (DBC Vuala) +$12,030, igual a lo cobrado el 31; Raúl Saldaña Lozano (PAN) +$29,073 en 22-31 ago y −$29,072 en 05-11 sep; Rigoberto Guerrero (PAN) +$20,302 y −$20,303.</li>
+  <li><b>El destino es el mismo para todos los comisionistas cada mes,</b> en DBC y en PAN, así que parece una decisión del proceso de pago.</li>
+  <li><b>Hay casos en que se mueve solo una parte.</b> A Edgardo Trujillo (PAN) en 22-31 ago le sobran $67.5K de los $125.5K cobrados el 31, y le faltan $69.4K en 12-18 sep (el tercer pago, no el segundo).</li>
+  <li>El pago de 01-04 sep se registró el 8-10 de septiembre y aun así no incluyó lo cobrado el 31 de agosto, así que no parece un tema de captura.</li>
+</ul>
+
+<h3>Ajuste PAN del 12 al 28 de febrero</h3>
+<p>El pago "COMISIONES DEL 12 AL 28 DE FEBRERO DEL 2026" (13 comisionistas, $1.07M) cubre días que también están en los pagos semanales normales de esas fechas. Al comparar, esos días cuentan dos veces del lado calculado.</p>
+
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿Les parece bien comparar por bloque en las semanas de cambio de mes?</li>
+  <li>¿La forma de agrupar desde junio es la que se va a mantener?</li>
+  <li>¿En qué pago entra lo cobrado el último día del mes y por qué cambia (1º, 2º o 3º pago del mes siguiente)? ¿Se mueve siempre el día completo o puede ser solo una parte?</li>
+  <li>En septiembre aparece un pago "05-12" y luego otro "12-18", así que el día 12 sale en los dos. ¿El primero debía ser "05-11"?</li>
+  <li>¿Qué cubre exactamente el ajuste PAN del 12 al 28 de febrero?</li>
+</ul></div>
+
+<h2>3. Abarrotes dentro de la comisión de Huevo (DBC)</h2>
+<p>En DBC, la comisión de abarrotes se paga dentro de la factura "COMISION HUEVO". Al considerarla junto con Huevo, la comisión de DBC Huevo cuadra con lo pagado. Esto explica $2.9M de la diferencia.</p>
+<table>
+  <tr><th>Comisionista (DBC Huevo)</th><th class="num">Pagado</th><th class="num">Pagado / calculado (solo Huevo)</th><th class="num">Pagado / calculado (Huevo + abarrotes)</th></tr>
+  <tr><td>Jorge Alberto Sánchez</td><td class="num">$1.11M</td><td class="num">1.64</td><td class="num">1.00</td></tr>
+  <tr><td>César de Rueda</td><td class="num">$1.58M</td><td class="num">1.56</td><td class="num">1.01</td></tr>
+  <tr><td>Elías Barba</td><td class="num">$1.31M</td><td class="num">1.34</td><td class="num">1.00</td></tr>
+  <tr><td>Florentino González</td><td class="num">$1.17M</td><td class="num">1.14</td><td class="num">1.00</td></tr>
+  <tr><td>Noel García</td><td class="num">$1.65M</td><td class="num">1.85</td><td class="num">1.05</td></tr>
+</table>
+
+<h2>4. Celaya: Genaro Quiroz y Agustín Jaimes</h2>
+<p>En la hoja "H Comisiones (PAN)" las oficinas 0012 y 0083 aparecen como de Genaro Quiroz. En los pagos de SAP, la 0012 se le paga a Agustín en todo 2026, y Genaro solo cobra la 0122. La conciliación ya sigue lo que dicen los pagos.</p>
+<p>Además, desde la semana 19-25 de septiembre a Genaro se le paga una parte de lo de Agustín, en todas las divisiones. Por ejemplo, en PAN Huevo +$37,677.71 en una factura aparte, emitida junto a la de Agustín. No encontramos en SAP una oficina, cliente o ruta que lo explique.</p>
+<div class="q"><b>Preguntas y propuesta</b>
+<ul>
+  <li>¿Nos confirman que la 0012 es de Agustín, para que también corrijan la hoja?</li>
+  <li>¿Genaro asumió parte de la operación de Agustín a partir de septiembre?</li>
+  <li><b>Propuesta:</b> conciliar Celaya como un solo bloque (Genaro y Agustín juntos), para que los repartos entre ellos no aparezcan como diferencia.</li>
+</ul></div>
+
+<h2>5. Casos puntuales</h2>
+
+<h3>Carlos López Jiménez (PAN Huevo, oficinas 0038 y 0117): facturas que no se le pagan</h3>
+<p>En varias semanas, lo que calculamos de más coincide exactamente con una o dos facturas del cliente 13148 (oficina 0117, mayoreo):</p>
+<table>
+  <tr><th>Semana</th><th>Factura(s)</th></tr>
+  <tr><td>21-27 mar</td><td>2015370005</td></tr>
+  <tr><td>18-24 abr</td><td>2015398799</td></tr>
+  <tr><td>09-15 may</td><td>2015437132 y 2015433838</td></tr>
+  <tr><td>01-05 jun</td><td>2015466031</td></tr>
+</table>
+<p>No encontramos nada que las distinga de las otras ~105 facturas de ese cliente que sí se pagan: mismo material, misma tarifa, mismo plazo de cobro.</p>
+<div class="q"><b>Pregunta</b>¿Nos pueden compartir el cálculo de la semana 18-24 de abril de Carlos? Queremos entender por qué no está la factura 2015398799: ¿se pagó en otra semana, a otro comisionista, o hay una regla que la excluya?</div>
+
+<h3>Juan José López Prieto (Vuala): pago extra en la semana 18-24 de abril</h3>
+<p>Se le pagaron $35,284.80 y calculamos $6,635.40, una diferencia de $28,649.40. El resto de sus semanas cuadra dentro de ±4%, y en SAP no encontramos ventas que expliquen el extra.</p>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿Nos pueden dar el desglose del pago "COMISION VUALA SEMANA 18-24 ABRIL"?</li>
+  <li>¿La oficina 0240 (almacén BO47) es suya? Empieza a vender justo en abril, cuando baja la venta de su oficina 0144.</li>
+</ul></div>
+
+<h3>María de la Luz Cea (Leche): pagos acumulados</h3>
+<p>La leche se le paga acumulada, aunque el texto de la factura indique una sola semana:</p>
+<ul>
+  <li>"COMISION LECHE SEMANA 18-24 JULIO" ($483.30) es exactamente lo calculado del 4 al 24 de julio: las tres semanas.</li>
+  <li>"COMISION DE LECHE" (11 de marzo, sin fechas, $575.10) más "COMISION LECHE SEMANA 11-17 ABRIL" ($483.30) suman $1,058.40, exactamente lo calculado del 1 de enero al 17 de abril.</li>
+</ul>
+<p>Semana por semana parece que se le paga de más; en realidad es la misma comisión pagada en menos facturas.</p>
+<div class="q"><b>Pregunta</b>¿La comisión de leche se paga acumulada? ¿Con qué regla (monto mínimo, cada cierto número de semanas)?</div>
+
+<h2>6. Vuala (botana) y otras diferencias de nivel</h2>
+<p>En Vuala hay semanas con diferencias en los dos sentidos que no se explican por fechas. En total calculamos +2.3% ($503K) sobre lo pagado, con casos como Oscar Renato Trujillo (+10.7%) y Felipe Vázquez (+7.8%).</p>
+<p>Hay otras dos diferencias que se repiten de forma consistente:</p>
+<ul>
+  <li><b>PAN Huevo:</b> a Brandon Hernández, Felipe Vázquez y Raúl Saldaña Franco se les paga entre 3.5% y 5% más que lo calculado en casi todas las semanas ($640K en conjunto).</li>
+  <li><b>Croqueta, 14-20 de febrero:</b> Agustín Jaimes cobra $80.0K contra $2.0K calculados, y César de Rueda $45.8K contra $5.6K. Parecen pagos de algo más que esa semana.</li>
+</ul>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿Se paga o se descuenta algo más dentro de la comisión de Vuala (otros productos, ajustes, venta que no comisiona)?</li>
+  <li>¿Brandon Hernández, Felipe Vázquez y Raúl Saldaña Franco tienen en PAN una tarifa distinta, o les cambió durante el año?</li>
+  <li>¿Qué cubren los pagos de Croqueta del 14-20 de febrero a Agustín Jaimes y César de Rueda?</li>
+</ul></div>
+
+<h2>7. Comisionistas sin pago, o con pagos sin venta asociada</h2>
+<table>
+  <tr><th>Comisionista</th><th>Código proveedor</th><th>Oficinas</th><th>Situación</th><th class="num">Monto ene-25 sep</th></tr>
+  <tr><td>Jonathan Manuel Espinosa Ordaz</td><td>19603</td><td>0184</td><td>Comisión calculada, sin ningún pago en SAP</td><td class="num">$5.13M</td></tr>
+  <tr><td>Luis Fernando Ruiz Zúñiga</td><td>20254</td><td>0017, 0079</td><td>Comisión calculada, sin ningún pago en SAP</td><td class="num">$2.49M</td></tr>
+  <tr><td>Amelia Becerra</td><td>14917</td><td>Sin oficina en la hoja</td><td>Pagos de Huevo y Leche sin venta con la que compararlos</td><td class="num">$476K</td></tr>
+  <tr><td>Armando Padilla</td><td>16385</td><td>0065</td><td>Pagos de Huevo, Croqueta y Leche; la 0065 no tiene ventas en 2026</td><td class="num">$310K</td></tr>
+</table>
+<p>Los códigos de proveedor de Jonathan y Luis no tienen ningún pago registrado en SAP este año, ni de comisión ni de otro concepto, y no encontramos otro código a su nombre. Amelia y Armando reciben además pagos de Vuala que no tienen asignados en la hoja de comisionistas.</p>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>A Jonathan y Luis, ¿se les paga con otro proveedor o fuera de SAP, o a esas oficinas no les corresponde comisión?</li>
+  <li>¿Qué oficinas atienden Amelia Becerra y Armando Padilla en cada división?</li>
+</ul></div>
+
+<h2>8. Venta que no se puede calcular</h2>
+<p>Parte de la venta no tiene tarifa de comisión en SAP para su combinación de oficina, almacén y división, o no tiene un tipo de venta asignado. Las más grandes (ventas ene-sep 2026):</p>
+<table>
+  <tr><th>Oficina</th><th>Almacén</th><th>División</th><th>Motivo</th><th class="num">Venta</th></tr>
+  <tr><td>0188 (México Carlos)</td><td>BO43</td><td>Vuala</td><td>Sin tipo de venta</td><td class="num">$9.83M</td></tr>
+  <tr><td>0176 (México 2)</td><td>BO17</td><td>Vuala</td><td>Sin tarifa (medio mayoreo)</td><td class="num">$4.14M</td></tr>
+  <tr><td>0106 (San Luis), PAN</td><td>H707</td><td>Huevo</td><td>Sin tipo de venta</td><td class="num">$4.12M</td></tr>
+  <tr><td>0256 (México 2)</td><td>H781</td><td>Croqueta</td><td>Sin tipo de venta</td><td class="num">$1.29M</td></tr>
+  <tr><td>0149 (San Cristóbal)</td><td>H721</td><td>Huevo</td><td>Sin tipo de venta</td><td class="num">$1.10M</td></tr>
+  <tr><td>0227 (Celaya)</td><td>BO11</td><td>Vuala</td><td>Sin tarifa (medio mayoreo)</td><td class="num">$778K</td></tr>
+  <tr><td>0240, 0242</td><td>BO47, H788</td><td>Vuala, Croqueta</td><td>Oficinas nuevas, sin tipo de venta</td><td class="num">$1.56M</td></tr>
+  <tr><td>0268, 0277, 0278</td><td>H724, H789</td><td>Croqueta, Leche</td><td>Oficinas nuevas, sin tipo de venta</td><td class="num">$1.70M</td></tr>
+  <tr><td>0128 (Tuxtla)</td><td>H718</td><td>Leche</td><td>Sin tarifa (medio mayoreo)</td><td class="num">$148K</td></tr>
+</table>
+<p>Sobre lo que nos comentaron de Celaya y Tuxtla:</p>
+<ul>
+  <li><b>0122:</b> en nuestros datos sí tiene comisión (Genaro, todas las divisiones). La oficina de Celaya de medio mayoreo que no tiene tarifa es la <b>0227</b> (Vuala, almacén BO11).</li>
+  <li><b>0128 Tuxtla:</b> Vuala y Croqueta sí tienen tarifa. Solo la Leche de esa oficina (almacén H718) no tiene.</li>
+</ul>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿La oficina de Celaya que no comisiona es la 0227?</li>
+  <li>¿La Leche de la 0128 Tuxtla debe comisionar? Si sí, ¿con qué tarifa?</li>
+  <li>Para el resto de la tabla: ¿estas oficinas comisionan? Si sí, ¿con qué tarifa y tipo de venta?</li>
+</ul></div>
+
+<h2>9. Propuesta: estandarizar la forma de pago</h2>
+<p>Hoy los periodos que cubre cada pago, el manejo de los cambios de mes y el texto de las facturas de comisión varían de una semana a otra y entre comisionistas. Por eso cada conciliación requiere un análisis caso por caso. Algunos ejemplos:</p>
+<ul>
+  <li>Hay 57 facturas de comisión ($1.6M) cuyo texto no trae fechas o usa otro formato, por ejemplo "COMISION LECHE SEMANA ENERO - FEBRERO" ($248K en 28 facturas), "COMISION HUEVO" o "COMISION VUALA" sin fecha, y "COMISION VUALA SEMANA 06/12 AL 20/02/26".</li>
+  <li>El periodo de fin de mes y el pago que recibe el último día cambian de un mes a otro (punto 2).</li>
+  <li>Hay pagos acumulados de varias semanas con el texto de una sola (punto 5).</li>
+</ul>
+<p>Proponemos acordar una forma estándar de armar los pagos:</p>
+<ul>
+  <li>Periodos fijos, con días completos.</li>
+  <li>Una regla única para el cambio de mes.</li>
+  <li>Un formato único para el texto de la factura de comisión (división, fecha inicial y fecha final), o un campo de referencia en SAP.</li>
+</ul>
+<p>Con eso la conciliación se vuelve directa y verificable cada semana.</p>
+
+<p class="note">Cifras en pesos mexicanos. Montos de comisión antes de IVA y retenciones.</p>
+
+</body>
+</html>

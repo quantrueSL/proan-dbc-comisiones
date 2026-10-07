@@ -28,6 +28,18 @@
 
 DECLARE ventana_desde DATE DEFAULT DATE_TRUNC(DATE_SUB(CURRENT_DATE(), INTERVAL 12 MONTH), MONTH);
 
+-- ÚLTIMA FOTO DIARIA DE MARM (2026-10-07). Antes leía `sap_MARM_20260921` fija, y un
+-- DAG diario se quedaría con esa foto para siempre. Es una variable de script y no
+-- `_TABLE_SUFFIX = (SELECT MAX(_TABLE_SUFFIX) ...)`: con la subconsulta BigQuery no
+-- poda y lee las 717 fotos (274 MB); con la variable lee una (10 MB). El regex pide
+-- 8 dígitos para que una tabla `sap_MARM_TEMP` no gane el MAX (la `T` ordena por
+-- encima de los dígitos). Medido el 2026-10-07: contra la foto del 21-sep, la del 5-oct
+-- cambia 0 de 11.415 factores KG, así que el cambio no mueve ningún número.
+DECLARE marm_sufijo STRING DEFAULT (
+  SELECT MAX(REPLACE(table_name, 'sap_MARM_', ''))
+  FROM `proan-quantrue.D10_POSTPROCESSING`.INFORMATION_SCHEMA.TABLES
+  WHERE REGEXP_CONTAINS(table_name, r'^sap_MARM_[0-9]{8}$'));
+
 DELETE FROM `proan-quantrue.D50_AGGREGATE.DBC_comisiones_calculadas_cobro`
 WHERE billing_date >= ventana_desde;
 
@@ -431,10 +443,13 @@ alcance_pan AS (
 -- también lo son y es un hueco del maestro, no otra unidad -- pendiente de
 -- confirmar con el cliente la lista concreta. Mientras tanto, mejor el
 -- número de siempre que perder la comisión de ventas reales.
+-- Foto de MARM: la última disponible (variable `marm_sufijo`, DECLARE del principio),
+-- no una fecha fija.
 marm_kg AS (
   SELECT LTRIM(MATNR, '0') AS matnr_clean, SAFE_DIVIDE(UMREN, UMREZ) AS kg_por_unidad_base
-  FROM `proan-quantrue.D10_POSTPROCESSING.sap_MARM_20260921`
-  WHERE MEINH = 'KG'
+  FROM `proan-quantrue.D10_POSTPROCESSING.sap_MARM_*`
+  WHERE _TABLE_SUFFIX = marm_sufijo   -- última foto, ver el DECLARE del principio
+    AND MEINH = 'KG'
 ),
 
 facturas AS (

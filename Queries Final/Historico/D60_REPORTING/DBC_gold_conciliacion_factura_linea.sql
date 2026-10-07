@@ -18,6 +18,16 @@
 -- excepción a propósito).
 -- =============================================================================
 
+-- ÚLTIMA FOTO DIARIA DE MAKT (2026-10-07). Antes leía `proan_MAKT_Materials_20260831`
+-- fija: ya había 6 materiales facturados en 2026 sin descripción y 10 con el texto
+-- desactualizado. Variable de script y no `MAX(_TABLE_SUFFIX)` en subconsulta, porque
+-- esa no poda y lee las 742 fotos (208 MB) en vez de una (10 MB). El regex pide 8
+-- dígitos para que una tabla con otro sufijo no gane el MAX.
+DECLARE makt_sufijo STRING DEFAULT (
+  SELECT MAX(REPLACE(table_name, 'proan_MAKT_Materials_', ''))
+  FROM `proan-quantrue.D00_SANDBOX`.INFORMATION_SCHEMA.TABLES
+  WHERE REGEXP_CONTAINS(table_name, r'^proan_MAKT_Materials_[0-9]{8}$'));
+
 CREATE OR REPLACE TABLE `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
 PARTITION BY fecha
 CLUSTER BY division_code, comisionista
@@ -76,11 +86,14 @@ venta_nativa AS (
   FROM `proan-quantrue.D30_INTEGRATION.sap_2lis_13_vditm_billing_document_item`
 ),
 -- Descripción de producto en español. Verificado 2026-09-02: 0 duplicados por
--- material dentro de SPRAS='S', 100% de cobertura contra lo facturado 2026.
+-- material dentro de SPRAS='S', 100% de cobertura contra lo facturado 2026
+-- (con la foto fija del 31-ago esa cobertura ya se había perdido: 6 materiales
+-- nuevos sin descripción al 2026-10-07; leer la última foto lo arregla).
 descripcion AS (
   SELECT LTRIM(MATNR, '0') AS matnr_clean, MAKTX AS descripcion
-  FROM `proan-quantrue.D00_SANDBOX.proan_MAKT_Materials_20260831`
-  WHERE SPRAS = 'S'
+  FROM `proan-quantrue.D00_SANDBOX.proan_MAKT_Materials_*`
+  WHERE _TABLE_SUFFIX = makt_sufijo   -- última foto, ver el DECLARE del principio
+    AND SPRAS = 'S'
 )
 SELECT
   t.billing_document,

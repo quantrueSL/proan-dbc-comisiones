@@ -1,0 +1,24 @@
+Asunto: Conciliación de comisiones DBC y PAN: avance y puntos abiertos
+
+Hola a todos,
+
+Les compartimos el avance de la conciliación de comisiones de DBC y PAN.
+
+En las últimas semanas hemos avanzado bastante. Revisamos los pagos con mucho detalle, comisionista por comisionista y semana por semana, y gracias a eso el cálculo está hoy mucho más cerca de lo pagado. La mayor parte de las diferencias ya tiene una explicación. De $21.7M de diferencias semana a semana, $15.5M tienen causa identificada. La principal es la forma en que se agrupan los días de fin de mes en los pagos. En DBC Huevo, además, el pago incluye la comisión de abarrotes.
+
+En el PDF adjunto les compartimos los puntos que todavía no cuadran, con ejemplos concretos y las preguntas de cada uno. Entre ellos:
+
+  - Cómo se agrupan los días de fin e inicio de mes, y en qué pago entra lo cobrado el último día del mes.
+  - Casos puntuales de Carlos López, Juan José López y María de la Luz Cea.
+  - Celaya: la propuesta de conciliar a Genaro y Agustín como un solo bloque.
+  - Diferencias en Vuala, y comisionistas con comisión calculada sin pago o con pagos sin venta asociada.
+  - Venta que hoy no se puede calcular por falta de tarifa o tipo de venta en SAP.
+
+Además, queremos proponerles estandarizar la forma de armar los pagos: periodos fijos, una misma regla para los cambios de mes y un formato único en el texto de las facturas de comisión. Hoy cada pago se arma de forma un poco distinta, lo que nos obliga a revisar caso por caso. Con un criterio común, la conciliación sería directa y se podría verificar cada semana sin esfuerzo adicional.
+
+Como son varios temas, es posible que la reunión del miércoles se extienda un poco. Más adelante nos gustaría organizar sesiones de trabajo con Diego, Miriam y Alejandro para ir cerrando cada punto con más detalle.
+
+Quedamos atentos a sus comentarios.
+
+Saludos,
+Silvana
