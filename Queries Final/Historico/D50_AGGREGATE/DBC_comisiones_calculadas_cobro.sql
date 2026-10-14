@@ -876,6 +876,34 @@ pago_factura AS (
     AND VBELN_billing_document IS NOT NULL AND VBELN_billing_document != ''
     AND AUGDT_clearing_dt >= '2026-01-01'
   GROUP BY VBELN_billing_document
+),
+
+-- EXCLUSIONES DE NEGOCIO (cliente, 2026-10-14): venta que no comisiona aunque tenga tarifa.
+-- Se marca (status EXCLUIDA, sin tarifa ni comisión) en vez de borrarse, para reportar cuánto queda fuera.
+--   'oficina sin comisión': oficinas de México (cedis Mexico 1, Mexico 2, Mexico Carlos) y la 0130.
+--   'comisionista de baja': oficinas cuyo único comisionista ya no trabaja en DBC
+--     (Jonathan Espinosa 19603, Irapuato 2; Luis F. Ruiz 20254, Morelia). Incluye su abarrotes.
+oficinas_baja AS (
+  SELECT sociedad, oficina
+  FROM `proan-quantrue.D20_DIMENSION.dm_DBC_comisionista`
+  WHERE NULLIF(TRIM(oficina), '') IS NOT NULL
+  GROUP BY sociedad, oficina
+  HAVING LOGICAL_AND(LPAD(TRIM(persona_cod), 10, '0') IN ('0000019603', '0000020254'))
+),
+marcado AS (
+  SELECT
+    t.*,
+    CASE
+      WHEN t.vkbur = '0130' OR REGEXP_CONTAINS(UPPER(IFNULL(t.cedis, '')), r'^M[EÉ]XICO (1|2|CARLOS)$')
+        THEN 'oficina sin comisión'
+      WHEN ob.oficina IS NOT NULL THEN 'comisionista de baja'
+    END AS motivo_exclusion
+  FROM con_tarifa t
+  LEFT JOIN oficinas_baja ob ON ob.sociedad = t.bukrs AND ob.oficina = t.vkbur
+),
+excluido AS (
+  SELECT * REPLACE (IF(motivo_exclusion IS NULL, tarifa, NULL) AS tarifa)
+  FROM marcado
 )
 
 SELECT
@@ -897,6 +925,7 @@ SELECT
   t.importe_mxn,
   t.tarifa,
   CASE
+    WHEN t.motivo_exclusion    IS NOT NULL THEN 'EXCLUIDA'
     WHEN t.tarifa              IS NOT NULL THEN 'OK'
     WHEN t.SETNAME              IS NULL    THEN 'SIN_SET'
     WHEN t.tipo_venta_resuelto  IS NULL    THEN 'SIN_CEDIS'
@@ -912,8 +941,9 @@ SELECT
   -- nada se ha cobrado todavía (no NULL: NULL es "sin tarifa", 0 es "con
   -- tarifa, sin cobro").
   ROUND(t.cantidad * t.tarifa * COALESCE(SAFE_DIVIDE(p.pagado, ft.con_impuestos), 0), 2) AS comision_cobrada,
-  p.fecha_cobro
-FROM con_tarifa t
+  p.fecha_cobro,
+  t.motivo_exclusion
+FROM excluido t
 LEFT JOIN factura_totales ft ON ft.billing_document = t.billing_document
 LEFT JOIN pago_factura p     ON p.billing_document   = t.billing_document
 -- Sin `ORDER BY` final: BigQuery no admite ordenar el resultado de un

@@ -95,13 +95,49 @@ describe("CortesWorkspace", () => {
     expect(html).not.toContain("ocultos porque todo cuadra");
   });
 
-  it("cada pago muestra su estado y su diferencia, y las semanas del mes son las columnas", () => {
-    const html = pinta();
+  it("cada pago muestra su estado, lo pagado, lo calculado y su diferencia, y las semanas del mes son las columnas", () => {
+    const html = pinta({ ...RESPUESTA, filas: [RESPUESTA.filas[0]] });
     expect(html).toContain("27 jun a 3 jul");
     expect(html).toContain("25 jul a 31 jul");
     expect(html).toContain("Sugerencia");
+    expect(html).toContain("<em>Pag.</em> $10,000");
+    expect(html).toContain("<em>Calc.</em> $14,100");
     expect(html).toContain("+$4,100");
-    expect(html).toContain("-$2,500");
+    expect(pinta({ ...RESPUESTA, filas: [RESPUESTA.filas[2]] })).toContain("-$2,500");
+  });
+
+  it("con varios comisionistas la lista muestra solo su total; la diferencia queda dentro de cada división", () => {
+    const html = pinta();
+    expect(html).toContain("<em>Pag.</em> $10,000");
+    expect(html).toContain("<em>Calc.</em> $14,100");
+    expect(html).not.toContain("+$4,100</b>");
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("el pago de Huevo de DBC se muestra como Huevo + Abarrotes", () => {
+    const r: CortesMesResponse = {
+      ...RESPUESTA,
+      filas: [fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-04", "2026-07-10", "ok", 0)], { junta_con: ["A"] })]
+    };
+    const html = renderToStaticMarkup(
+      <CortesWorkspace
+        initialCatalog={{
+          ...EMPTY_CATALOG,
+          divisiones: [
+            { business_area_code: "H", business_area_name: "Huevo" },
+            { business_area_code: "A", business_area_name: "Abarrotes" }
+          ]
+        }}
+        initialError={null}
+        initialResponse={r}
+        mesInicial="2026-07"
+        meses={["2026-07"]}
+        puedeEditar
+      />
+    );
+    expect(html).toContain("Huevo + Abarrotes");
+    expect(html).toContain("se paga junto");
+    expect(html).toContain("1 división ·");
   });
 
   it("la cabecera cuenta los pagos por estado con su monto en pesos", () => {
@@ -127,6 +163,28 @@ describe("CortesWorkspace", () => {
     expect(html).toContain("Cierre de mes: $4,200");
     expect(html).toContain("$0 de comisión");
     expect(html).not.toContain("Cobros sin pago:");
+  });
+
+  it("Consolidar lo que cuadra cuenta lo que planea el servidor, no todo lo que cuadra", () => {
+    const r: CortesMesResponse = {
+      ...RESPUESTA,
+      filas: [
+        fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-04", "2026-07-10", "ok", 0), pago("b", "2026-07-11", "2026-07-17", "ok", 0)], { lote: ["a"] }),
+        fila("0000004335", "NOEL GARCIA", [pago("c", "2026-07-04", "2026-07-10", "ok", 0)], { lote: ["c"] })
+      ]
+    };
+    const html = pinta(r);
+    expect(html).toContain("Consolidar lo que cuadra (2)");
+    expect(html).not.toContain("Consolidar lo que cuadra (3)");
+  });
+
+  it("un consolidado con datos nuevos lo dice en su celda", () => {
+    const r: CortesMesResponse = {
+      ...RESPUESTA,
+      filas: [fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-04", "2026-07-10", "cons", 0, { drift: 300 })])]
+    };
+    expect(pinta(r)).toContain("⚠ Cambió");
+    expect(pinta({ ...r, filas: [fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-04", "2026-07-10", "cons", 0)])] })).not.toContain("⚠ Cambió");
   });
 
   it("un comisionista sin nombre se muestra por su número, no vacío", () => {

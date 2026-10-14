@@ -4,9 +4,11 @@
 // aparte, el detalle por producto de su ventana. Quien tiene permiso puede mover
 // un corte con las flechas (los clics seguidos se juntan en un solo guardado),
 // aplicar o descartar la sugerencia y devolver el pago a la ventana del texto.
-// Consolidar llega en la siguiente fase.
+// Arriba: cifras del pago y navegación entre pagos (anterior, siguiente, siguiente
+// pendiente). Consolidar congela el pago y sus dos cortes; reabrirlo pide confirmar,
+// porque cambia lo que ya se reportó. A un pago sin ventana se le fija a mano.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CortesAccion,
   CortesDetalleResponse,
@@ -18,6 +20,7 @@ import type {
 } from "@/types/comisiones";
 import {
   ETIQUETA_ESTADO,
+  calculadoPorParte,
   cortesMovidos,
   describirMovimiento,
   diasQueCambian,
@@ -37,11 +40,24 @@ import {
 type Props = {
   mes: string;
   filaResumen: CortesFila;
+  /** "Huevo" o "Huevo + Abarrotes" cuando el pago cubre varias divisiones. */
+  etiquetaDivision: string;
+  nombresDivision: Record<string, string>;
   pagoId: string;
   puedeEditar: boolean;
+  /** Aviso de lo último que se hizo ("Sugerencia aplicada."), que sobrevive al cambio de pago. */
+  aviso: string | null;
+  saltarSolo: boolean;
+  onSaltarSoloChange: (valor: boolean) => void;
+  onAnterior: (() => void) | null;
+  onSiguiente: (() => void) | null;
+  onSiguientePendiente: () => void;
+  onElegirPago: (pagoId: string) => void;
   onCerrar: () => void;
   /** La fila ya guardada: la lista del mes se actualiza con ella. */
   onFilaActualizada: (fila: CortesFila) => void;
+  /** Se aplicó una sugerencia: la lista decide si se queda aquí o salta al siguiente pendiente. */
+  onAccionHecha: (mensaje: string, fila: CortesFila, avanzar?: boolean) => void;
 };
 
 const numero = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 2 });
@@ -67,6 +83,110 @@ function Cifras({ pago }: { pago: CortesPago }) {
   const cuadra = dif !== null && Math.abs(dif) <= 1;
   return (
     <dl className="cortes-cifras">
+      <div>
+        <dt>Pagado</dt>
+        <dd>{pesos(pago.pagado)}</dd>
+      </div>
+      <div>
+        <dt>Calculado</dt>
+        <dd>{pago.calculado === null ? "—" : pesos(pago.calculado)}</dd>
+      </div>
+      <div>
+        <dt>Diferencia</dt>
+        <dd className={dif === null ? "" : cuadra ? "is-cuadra" : "is-dif"}>{textoDiferencia(dif)}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function DetalleTabla({
+  detalle,
+  nombresDivision,
+  principal
+}: {
+  detalle: CortesDetalleResponse;
+  nombresDivision: Record<string, string>;
+  /** La división de la fila: va primero, y las que se pagan junto con ella después. */
+  principal: string | null;
+}) {
+  const divisiones = Array.from(new Set(detalle.filas.map((f) => f.division_code ?? "")));
+  const varias = divisiones.length > 1;
+  const peso = (c: string | null | undefined) => (c === principal ? "" : `~${c ?? ""}`);
+  const orden = [...detalle.filas].sort((a, b) => peso(a.division_code).localeCompare(peso(b.division_code)));
+  const nombre = (codigo: string | null | undefined) => (codigo ? nombresDivision[codigo] ?? codigo : "—");
+  const columnas = varias ? 8 : 7;
+  return (
+    <div className="hydro-table-wrap">
+      <table className="cortes-tabla">
+        <thead>
+          <tr>
+            {varias ? <th>División</th> : null}
+            <th>CEDIS</th>
+            <th>Producto</th>
+            <th className="n">Vendido</th>
+            <th>Unidad tarifa</th>
+            <th className="n">Cant. base</th>
+            <th className="n">Tarifa</th>
+            <th className="n">Comisión</th>
+          </tr>
+        </thead>
+        <tbody>
+          {orden.map((f, i) => {
+            const cambioDivision = varias && i > 0 && orden[i - 1].division_code !== f.division_code;
+            const subtotal = cambioDivision
+              ? orden.filter((o) => o.division_code === orden[i - 1].division_code).reduce((t, o) => t + (o.comision_total ?? 0), 0)
+              : null;
+            return (
+              <Fragment key={`${f.division_code}-${f.cedis}-${f.oficina}-${f.tipo_venta}-${f.matnr}-${i}`}>
+                {subtotal !== null ? (
+                  <tr className="cortes-subtotal">
+                    <td colSpan={columnas - 1}>Subtotal {nombre(orden[i - 1].division_code)}</td>
+                    <td className="n">{pesos(subtotal)}</td>
+                  </tr>
+                ) : null}
+                <tr>
+                  {varias ? <td>{nombre(f.division_code)}</td> : null}
+                  <td>
+                    {f.cedis ?? "—"}
+                    {f.tipo_venta ? <small> · {f.tipo_venta}</small> : null}
+                  </td>
+                  <td title={f.matnr}>{f.descripcion ?? f.matnr}</td>
+                  <td className="n">
+                    {f.cantidad_venta_total === null ? "—" : numero.format(f.cantidad_venta_total)} <small>{f.unidad_venta}</small>
+                  </td>
+                  <td>{f.unidad_tarifa ?? "—"}</td>
+                  <td className="n">{f.cantidad_base_total === null ? "—" : numero.format(f.cantidad_base_total)}</td>
+                  <td className="n">{f.tarifa === null ? "—" : numero.format(f.tarifa)}</td>
+                  <td className="n">{pesos(f.comision_total)}</td>
+                </tr>
+              </Fragment>
+            );
+          })}
+          {varias && orden.length ? (
+            <tr className="cortes-subtotal">
+              <td colSpan={columnas - 1}>Subtotal {nombre(orden[orden.length - 1].division_code)}</td>
+              <td className="n">
+                {pesos(orden.filter((o) => o.division_code === orden[orden.length - 1].division_code).reduce((t, o) => t + (o.comision_total ?? 0), 0))}
+              </td>
+            </tr>
+          ) : null}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={columnas - 1}>Total</td>
+            <td className="n">{pesos(detalle.comision_total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function Resumen({ pago }: { pago: CortesPago }) {
+  const dif = pago.diferencia;
+  const cuadra = dif !== null && Math.abs(dif) <= 1;
+  return (
+    <dl className="cortes-resumen">
       <div>
         <dt>Pagado</dt>
         <dd>{pesos(pago.pagado)}</dd>
@@ -109,7 +229,24 @@ function describirEvento(e: CortesEvento): string {
   }
 }
 
-export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, onFilaActualizada }: Props) {
+export function CortesPanel({
+  mes,
+  filaResumen,
+  etiquetaDivision,
+  nombresDivision,
+  pagoId,
+  puedeEditar,
+  aviso: avisoAccion,
+  saltarSolo,
+  onSaltarSoloChange,
+  onAnterior,
+  onSiguiente,
+  onSiguientePendiente,
+  onElegirPago,
+  onCerrar,
+  onFilaActualizada,
+  onAccionHecha
+}: Props) {
   const [tab, setTab] = useState<"cortes" | "detalle">("cortes");
   const [contexto, setContexto] = useState(1);
   const [datos, setDatos] = useState<CortesFilaResponse | null>(null);
@@ -120,6 +257,9 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
   const [aviso, setAviso] = useState<string | null>(null);
   const [pendiente, setPendiente] = useState<{ izqId: string; fecha: string } | null>(null);
   const [historial, setHistorial] = useState<CortesEvento[] | null>(null);
+  // Pagos consolidados que la persona quiere reabrir: se pide confirmar antes.
+  const [reabrir, setReabrir] = useState<string[] | null>(null);
+  const [ventana, setVentana] = useState({ ini: "", fin: "" });
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ultimaFecha = useRef<{ izqId: string; fecha: string } | null>(null);
 
@@ -145,6 +285,8 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
     setAviso(null);
     setPendiente(null);
     setHistorial(null);
+    setReabrir(null);
+    setVentana({ ini: "", fin: "" });
     cargarFila().catch((e) => vigente && setError(e instanceof Error ? e.message : "No se pudo cargar el pago."));
     return () => {
       vigente = false;
@@ -185,7 +327,7 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
     };
   }, [tab, ventanaKey, detalle, pendiente, filaResumen.sociedad, filaResumen.comisionista_id, filaResumen.division_code]);
 
-  async function editar(accion: CortesAccion, extra: Record<string, unknown>): Promise<boolean> {
+  async function editar(accion: CortesAccion, extra: Record<string, unknown>, mensajeExito?: string, avanzar = true): Promise<boolean> {
     if (!filaBase) return false;
     setGuardando(true);
     setAviso(null);
@@ -207,6 +349,7 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
         setDatos(payload);
         setHistorial(null);
         onFilaActualizada(payload.fila);
+        if (mensajeExito) onAccionHecha(mensajeExito, payload.fila, avanzar);
         return true;
       }
       if (res.status === 409 && payload?.codigo === "conflicto_version") {
@@ -272,16 +415,43 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
   const vista = fila && !sinVentana ? pagosEnVista(fila, pago.pago_id, contexto) : [];
   const elementos = fila ? elementosDeLinea(fila, vista) : [];
   const puedeActuar = puedeEditar && !guardando && !pendiente && !!filaBase;
+  const filaActual = fila ?? filaResumen;
+  const huerfanos = filaActual.huerfanos ?? [];
+  const consolidado = pago.estado === "cons";
+  /** Los pagos consolidados a cada lado de un corte (uno o los dos). */
+  function consolidadosDelCorte(izqId: string): string[] {
+    const corte = filaActual.cortes.find((c) => c.izq === izqId);
+    return [corte?.izq, corte?.der].filter((id): id is string => !!id && filaActual.pagos.find((p) => p.pago_id === id)?.estado === "cons");
+  }
+  // Desglose por división cuando el pago junta varias (Huevo + Abarrotes).
+  const partes =
+    !sinVentana && datos?.dias_partes && Object.keys(datos.dias_partes).length > 1
+      ? Object.entries(calculadoPorParte(datos.dias_partes, pago.ini!, pago.fin!)).sort(([a], [b]) =>
+          a === filaResumen.division_code ? -1 : b === filaResumen.division_code ? 1 : a.localeCompare(b)
+        )
+      : null;
 
   return (
     <section aria-label="Panel del pago" className="cortes-panel">
       <header className="cortes-panel-cab">
         <div>
-          <h2>{nombreComisionista(filaResumen)}</h2>
+          <h2>
+            {nombreComisionista(filaResumen)} · {etiquetaDivision}
+          </h2>
           <p>
-            {filaResumen.sociedad} · {filaResumen.division_code ?? "Sin división"} ·{" "}
+            {filaResumen.sociedad} ·{" "}
             {sinVentana ? "pago sin ventana" : `pago ${rangoCorto(pago.ini!, pago.fin!)}`}
           </p>
+          {pago.documentos?.map((d) => (
+            <p className="cortes-panel-doc" key={d.doc_id}>
+              <span>
+                Doc. {d.documento}
+                {d.compensacion ? ` · Pago SAP ${d.compensacion}` : ""}
+                {d.fecha_pago ? ` · pagado el ${fechaCorta(d.fecha_pago)}` : ""}
+              </span>
+              {d.texto ? <b>{d.texto}</b> : null}
+            </p>
+          ))}
         </div>
         <div className="cortes-panel-cab-acc">
           {pendiente ? <span className="cortes-estado-guardado">Cambio sin guardar…</span> : null}
@@ -292,6 +462,128 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
           </button>
         </div>
       </header>
+
+      <nav aria-label="Moverse entre pagos" className="cortes-nav">
+        <button className="cortes-boton" disabled={!onAnterior} onClick={() => onAnterior?.()} type="button">
+          ‹ Pago anterior
+        </button>
+        <button className="cortes-boton" disabled={!onSiguiente} onClick={() => onSiguiente?.()} type="button">
+          Pago siguiente ›
+        </button>
+        <button className="cortes-boton is-primario" onClick={onSiguientePendiente} title="Atajo: N" type="button">
+          Siguiente pendiente ›
+        </button>
+        <label className="cortes-check">
+          <input checked={saltarSolo} onChange={(e) => onSaltarSoloChange(e.target.checked)} type="checkbox" />
+          Pasar solo al siguiente pendiente
+        </label>
+      </nav>
+
+      {avisoAccion ? (
+        <p className="cortes-flash" role="status">
+          ✓ {avisoAccion}
+        </p>
+      ) : null}
+
+      <Resumen pago={pago} />
+
+      {partes ? (
+        <div className="cortes-bloque cortes-partes">
+          <p className="cortes-nota">
+            Un solo pago de SAP cubre {etiquetaDivision}. Se compara con la suma de las comisiones y los cortes se mueven en bloque.
+          </p>
+          <div className="hydro-table-wrap">
+            <table className="cortes-tabla cortes-tabla-partes">
+              <thead>
+                <tr>
+                  <th>Origen</th>
+                  <th className="n">Comisión</th>
+                </tr>
+              </thead>
+              <tbody>
+                {partes.map(([origen, monto]) => (
+                  <tr key={origen}>
+                    <td>Calculado · {nombresDivision[origen] ?? origen}</td>
+                    <td className="n">{pesos(monto)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>Suma calculada</td>
+                  <td className="n">{pago.calculado === null ? "—" : pesos(pago.calculado)}</td>
+                </tr>
+                <tr>
+                  <td>Pagado (un solo pago)</td>
+                  <td className="n">{pesos(pago.pagado)}</td>
+                </tr>
+                <tr>
+                  <td>Diferencia</td>
+                  <td className={`n ${pago.diferencia !== null && Math.abs(pago.diferencia) <= 1 ? "is-cuadra" : "is-dif"}`}>
+                    {textoDiferencia(pago.diferencia)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      {huerfanos.length ? (
+        <div className="cortes-caja is-aviso cortes-huerfanos">
+          <h3>Guardado de un documento que ya no está en SAP</h3>
+          <ul>
+            {huerfanos.map((h) => (
+              <li key={h.pago_id}>
+                <span>
+                  {h.tipo === "consolidado" ? "Consolidado" : "Ajuste"} {h.ini && h.fin ? rangoCorto(h.ini, h.fin) : ""} · {h.pago_id.split("|").pop()}
+                </span>
+                {puedeEditar ? (
+                  <button
+                    className="cortes-boton"
+                    disabled={!puedeActuar}
+                    onClick={() => void editar("quitar-huerfano", { pago_id: h.pago_id }, "Se quitó lo guardado de ese documento.", false)}
+                    type="button"
+                  >
+                    Quitar
+                  </button>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <p>Mientras siga ahí, esos cobros pueden quedar sin pago. Quítalo si el documento se canceló o se volvió a cargar.</p>
+        </div>
+      ) : null}
+
+      {reabrir ? (
+        <div className="cortes-caja is-error cortes-reabrir" role="alertdialog">
+          <h3>Esto ya estaba cerrado</h3>
+          <p>
+            {reabrir
+              .map((id) => {
+                const p = filaActual.pagos.find((x) => x.pago_id === id);
+                return p?.ini && p.fin
+                  ? `${rangoCorto(p.ini, p.fin)}${p.consolidado_por ? `, consolidado por ${p.consolidado_por}` : ""}`
+                  : id;
+              })
+              .join(" · ")}
+            . Reabrirlo permite mover sus cortes y cambia lo que ya se reportó.
+          </p>
+          <div className="cortes-acciones">
+            <button
+              className="cortes-boton is-peligro"
+              disabled={!puedeActuar}
+              onClick={() => void editar("reabrir", { pago_ids: reabrir }, reabrir.length > 1 ? "Pagos reabiertos." : "Pago reabierto.", false).then(() => setReabrir(null))}
+              type="button"
+            >
+              Reabrir {reabrir.length} pago(s)
+            </button>
+            <button className="cortes-boton" onClick={() => setReabrir(null)} type="button">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="cortes-tabs" role="tablist">
         <button aria-selected={tab === "cortes"} onClick={() => setTab("cortes")} role="tab" type="button">
@@ -318,46 +610,7 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                 Productos cobrados entre {fechaCorta(detalle.ini)} y {fechaCorta(detalle.fin)}, la ventana de este pago.
                 Si se mueve un corte, esta tabla cambia con él.
               </p>
-              <div className="hydro-table-wrap">
-                <table className="cortes-tabla">
-                  <colgroup>
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "38%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "14%" }} />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th>CEDIS</th>
-                      <th>Tipo de venta</th>
-                      <th>Producto</th>
-                      <th className="n">Vendido</th>
-                      <th className="n">Comisión</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detalle.filas.map((f, i) => (
-                      <tr key={`${f.cedis}-${f.oficina}-${f.tipo_venta}-${f.matnr}-${i}`}>
-                        <td>{f.cedis ?? "—"}</td>
-                        <td>{f.tipo_venta ?? "—"}</td>
-                        <td title={f.matnr}>{f.descripcion ?? f.matnr}</td>
-                        <td className="n">
-                          {f.cantidad_venta_total === null ? "—" : numero.format(f.cantidad_venta_total)}{" "}
-                          <small>{f.unidad_venta}</small>
-                        </td>
-                        <td className="n">{pesos(f.comision_total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={4}>Total</td>
-                      <td className="n">{pesos(detalle.comision_total)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+              <DetalleTabla detalle={detalle} nombresDivision={nombresDivision} principal={filaResumen.division_code} />
             </>
           ) : null}
         </div>
@@ -372,9 +625,29 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                 <h3>Pago sin ventana</h3>
                 <p>
                   El texto de este pago no trae fechas que se puedan leer, así que no sabemos qué cobros cubre. Pagado{" "}
-                  {pesos(pago.pagado)}, documento {pago.docs.join(", ")}. Poder fijar su inicio y su fin llega más
-                  adelante.
+                  {pesos(pago.pagado)}, documento {pago.docs.join(", ")}.{" "}
+                  {puedeEditar ? "Dale su inicio y su fin para ver contra qué cobros se compara." : ""}
                 </p>
+                {puedeEditar ? (
+                  <div className="cortes-ventana">
+                    <label>
+                      Inicio
+                      <input onChange={(e) => setVentana((v) => ({ ...v, ini: e.target.value }))} type="date" value={ventana.ini} />
+                    </label>
+                    <label>
+                      Fin
+                      <input onChange={(e) => setVentana((v) => ({ ...v, fin: e.target.value }))} type="date" value={ventana.fin} />
+                    </label>
+                    <button
+                      className="cortes-boton is-primario"
+                      disabled={!puedeActuar || !ventana.ini || !ventana.fin || ventana.ini > ventana.fin}
+                      onClick={() => void editar("fijar-ventana", { pago_id: pago.pago_id, ini: ventana.ini, fin: ventana.fin }, "Ventana fijada.", false)}
+                      type="button"
+                    >
+                      Fijar ventana
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : (
@@ -394,6 +667,16 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                                 <span>Corte</span>
                                 <b>{fechaConDia(el.fecha)}</b>
                                 {el.congelado ? <small>Congelado</small> : null}
+                                {el.congelado && puedeEditar ? (
+                                  <button
+                                    className="cortes-ir"
+                                    onClick={() => setReabrir(consolidadosDelCorte(el.izq))}
+                                    title="Para moverlo hay que reabrir el pago consolidado"
+                                    type="button"
+                                  >
+                                    Reabrir
+                                  </button>
+                                ) : null}
                                 {movible ? (
                                   <span className="cortes-corte-flechas">
                                     <button
@@ -470,7 +753,13 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                               title={`Documento ${p.docs.join(", ")}`}
                             >
                               <div className="cortes-tramo-cab">
-                                <b>{rangoCorto(p.ini!, p.fin!)}</b>
+                                {p.pago_id === pago.pago_id ? (
+                                  <b>{rangoCorto(p.ini!, p.fin!)}</b>
+                                ) : (
+                                  <button className="cortes-ir" onClick={() => onElegirPago(p.pago_id)} title="Ir a este pago" type="button">
+                                    {rangoCorto(p.ini!, p.fin!)}
+                                  </button>
+                                )}
                                 <Pastilla estado={p.estado} />
                               </div>
                               <Cifras pago={p} />
@@ -542,7 +831,7 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                         <button
                           className="cortes-boton is-primario"
                           disabled={!puedeActuar}
-                          onClick={() => void editar("aplicar", { pago_id: pago.pago_id, cambios: sugerencia.cambios })}
+                          onClick={() => void editar("aplicar", { pago_id: pago.pago_id, cambios: sugerencia.cambios }, "Sugerencia aplicada.")}
                           type="button"
                         >
                           Aplicar
@@ -586,16 +875,50 @@ export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, o
                 </div>
               ) : null}
 
-              <div className="cortes-bloque cortes-pie">
-                <button className="cortes-boton is-primario" disabled title="Disponible en la siguiente fase" type="button">
-                  Consolidar este pago
-                </button>
-                <span>
-                  {puedeEditar
-                    ? "Consolidar se habilita en la siguiente fase."
-                    : "Solo lectura: tu rol no puede editar los cortes."}
-                </span>
-              </div>
+              {consolidado ? (
+                <div className="cortes-bloque">
+                  <div className="cortes-caja is-consolidado">
+                    <h3>Consolidado{pago.consolidado_por ? ` por ${pago.consolidado_por}` : ""}</h3>
+                    <p>
+                      {pago.consolidado_en ? `El ${fechaCorta(pago.consolidado_en.slice(0, 10))}. ` : ""}
+                      Quedó con calculado {pago.calculado === null ? "—" : pesos(pago.calculado)} y pagado {pesos(pago.pagado)}; sus dos cortes están
+                      congelados.
+                    </p>
+                    {Math.abs(pago.drift ?? 0) > 1 ? (
+                      <p className="cortes-cambio">
+                        ⚠ Los cobros cambiaron desde entonces: hoy el calculado sería{" "}
+                        {pesos((pago.calculado ?? 0) + (pago.drift ?? 0))} ({textoDiferencia(pago.drift)}).
+                      </p>
+                    ) : null}
+                    {Math.abs(pago.drift_pagado ?? 0) > 1 ? (
+                      <p className="cortes-cambio">
+                        ⚠ El pago en SAP cambió desde entonces: hoy figura {pesos(pago.pagado + (pago.drift_pagado ?? 0))} ({textoDiferencia(pago.drift_pagado ?? null)}).
+                      </p>
+                    ) : null}
+                    {puedeEditar ? (
+                      <div className="cortes-acciones">
+                        <button className="cortes-boton" disabled={!puedeActuar} onClick={() => setReabrir([pago.pago_id])} type="button">
+                          Reabrir pago
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : (
+                <div className="cortes-bloque cortes-pie">
+                  <button
+                    className="cortes-boton is-primario"
+                    disabled={!puedeActuar || sinVentana}
+                    onClick={() => void editar("consolidar", { pago_id: pago.pago_id }, "Pago consolidado.")}
+                    type="button"
+                  >
+                    {pago.diferencia !== null && Math.abs(pago.diferencia) > 1
+                      ? `Consolidar con diferencia de ${pesos(Math.abs(pago.diferencia))}`
+                      : "Consolidar este pago"}
+                  </button>
+                  <span>{puedeEditar ? "Congela los dos cortes de este pago." : "Solo lectura: tu rol no puede editar los cortes."}</span>
+                </div>
+              )}
 
               <details className="cortes-historial" onToggle={(e) => void abrirHistorial((e.target as HTMLDetailsElement).open)}>
                 <summary>Historial de esta fila</summary>

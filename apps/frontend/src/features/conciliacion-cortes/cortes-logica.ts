@@ -149,11 +149,114 @@ export function filaTodoCuadra(fila: CortesFila): boolean {
 /** Filas visibles. La seleccionada se queda aunque "solo lo que requiere acción" la ocultaría. */
 export function filtrarFilas(filas: CortesFila[], filtros: FiltrosCortes, seleccionadaId?: string | null): CortesFila[] {
   return filas.filter((f) => {
-    if (filtros.division && f.division_code !== filtros.division) return false;
+    if (filtros.division && f.division_code !== filtros.division && !(f.junta_con ?? []).includes(filtros.division)) return false;
     if (filtros.comisionistaId && f.comisionista_id !== filtros.comisionistaId) return false;
     if (filtros.soloAccion && filaTodoCuadra(f) && f.fila_id !== seleccionadaId) return false;
     return true;
   });
+}
+
+// ─── Tabla por comisionista ──────────────────────────────────────────────
+
+export type GrupoComisionista = {
+  /** El número de proveedor: un comisionista con filas en DBC y en PAN es un solo grupo. */
+  clave: string;
+  nombre: string;
+  filas: CortesFila[];
+};
+
+/** Las filas agrupadas por comisionista (sin importar la sociedad), en el orden en que llegan (ya vienen ordenadas por nombre). */
+export function agruparPorComisionista(filas: CortesFila[]): GrupoComisionista[] {
+  const grupos = new Map<string, GrupoComisionista>();
+  for (const f of filas) {
+    const clave = f.comisionista_id;
+    const g = grupos.get(clave) ?? { clave, nombre: nombreComisionista(f), filas: [] };
+    g.filas.push(f);
+    grupos.set(clave, g);
+  }
+  return Array.from(grupos.values());
+}
+
+export type TotalColumna = { n: number; pagado: number; calculado: number };
+
+/**
+ * Pagado y calculado de un comisionista por columna del mes (una por semana y, al final, "sin ventana").
+ * Un pago cuenta en la columna donde termina, aunque abarque varias.
+ */
+export function totalesPorColumna(filas: CortesFila[], semanas: SemanaColumna[]): TotalColumna[] {
+  const columnas: TotalColumna[] = Array.from({ length: semanas.length + 1 }, () => ({ n: 0, pagado: 0, calculado: 0 }));
+  for (const fila of filas) {
+    for (const { pago, colFin } of posicionarPagos(fila.pagos, semanas)) {
+      const c = columnas[colFin];
+      c.n += 1;
+      c.pagado += pago.pagado;
+      c.calculado += pago.calculado ?? 0;
+    }
+    for (const pago of fila.pagos) {
+      if (pago.estado !== "sinv") continue;
+      const c = columnas[semanas.length];
+      c.n += 1;
+      c.pagado += pago.pagado;
+    }
+  }
+  return columnas;
+}
+
+/** Pagos que piden que alguien haga algo: una sugerencia por revisar o un pago sin explicación. */
+export function esPendiente(pago: CortesPago): boolean {
+  return pago.estado === "sug" || pago.estado === "sin";
+}
+
+/** Un consolidado con datos nuevos (cobros o pago en SAP) desde que se congeló. */
+export function hayDrift(pago: CortesPago): boolean {
+  return pago.estado === "cons" && (Math.abs(pago.drift ?? 0) > 1 || Math.abs(pago.drift_pagado ?? 0) > 1);
+}
+
+/** Lo que "Consolidar lo que cuadra" cerraría en las filas dadas: pagos y filas (el plan lo arma el servidor). */
+export function resumenLote(filas: CortesFila[]): { pagos: number; filas: number } {
+  const conLote = filas.filter((f) => (f.lote?.length ?? 0) > 0);
+  return { pagos: conLote.reduce((n, f) => n + (f.lote?.length ?? 0), 0), filas: conLote.length };
+}
+
+export type RefPago = { filaId: string; pagoId: string };
+
+/**
+ * Todos los pagos en el orden en que se recorre la tabla: comisionista por comisionista, división por
+ * división y, dentro de cada una, de la semana más antigua a la más reciente (los pagos sin ventana, al final).
+ */
+export function colaDePagos(grupos: GrupoComisionista[], semanas: SemanaColumna[]): RefPago[] {
+  const cola: RefPago[] = [];
+  for (const g of grupos) {
+    for (const fila of g.filas) {
+      for (const { pago } of posicionarPagos(fila.pagos, semanas)) cola.push({ filaId: fila.fila_id, pagoId: pago.pago_id });
+      for (const pago of fila.pagos) if (pago.estado === "sinv") cola.push({ filaId: fila.fila_id, pagoId: pago.pago_id });
+    }
+  }
+  return cola;
+}
+
+/** El siguiente pago pendiente después de `actual` (da la vuelta al final); `null` si ya no queda ninguno. */
+export function siguientePendiente(
+  cola: RefPago[],
+  actual: RefPago | null,
+  pendiente: (ref: RefPago) => boolean
+): RefPago | null {
+  if (!cola.length) return null;
+  const i = actual ? cola.findIndex((r) => r.filaId === actual.filaId && r.pagoId === actual.pagoId) : -1;
+  for (let k = 1; k <= cola.length; k++) {
+    const candidato = cola[(i + k + cola.length) % cola.length];
+    if (pendiente(candidato)) return candidato;
+  }
+  return null;
+}
+
+/** Calculado de cada división de origen dentro de una ventana (para el desglose Huevo + Abarrotes). */
+export function calculadoPorParte(partes: Record<string, [string, number][]> | undefined, ini: string, fin: string): Record<string, number> {
+  const salida: Record<string, number> = {};
+  for (const [origen, dias] of Object.entries(partes ?? {})) {
+    salida[origen] = Math.round(dias.reduce((s, [fecha, monto]) => (fecha >= ini && fecha <= fin ? s + monto : s), 0) * 100) / 100;
+  }
+  return salida;
 }
 
 export type TotalEstado = { n: number; pagado: number; calculado: number; difAbs: number };

@@ -30,6 +30,8 @@ def _doc(n, ini, fin, pagado, *, valida=True, division="H", sociedad="DBC", lifn
         "pagado": pagado,
         "fecha_pago": fecha_pago or D0 + timedelta(days=fin + 7),
         "comisionista": "EDGARDO TRUJILLO DE LA TORRE",
+        "augbl": f"20000{n:05d}",
+        "texto": f"COMISION HUEVO {n}",
     }
 
 
@@ -129,7 +131,7 @@ def test_el_panel_trae_los_pagos_de_la_fila_y_sus_cobros_diarios(bq):
 
 def test_el_panel_de_una_fila_inexistente_no_falla(bq):
     r = svc.build_fila(mes="2026-07", sociedad="PAN", comisionista_id="0000009999", division_code="H")
-    assert r == {"mes": "2026-07", "fila": None, "dias": []}
+    assert r == {"mes": "2026-07", "fila": None, "dias": [], "dias_partes": {}}
 
 
 def test_el_detalle_devuelve_las_filas_y_el_total_de_comision(bq):
@@ -294,3 +296,174 @@ def test_el_historial_lo_puede_ver_cualquiera(bq):
     r = client.post("/v1/comisionesbi/cortes/historial",
                     json={"sociedad": "DBC", "comisionista_id": LIFNR, "division_code": "H"})
     assert r.status_code == 200 and r.json()["eventos"][0]["tipo"] == "descartar_sugerencia"
+
+
+def test_huevo_de_dbc_junta_abarrotes_en_un_solo_calculo(bq, monkeypatch):
+    """El SQL ya manda Abarrotes con la división de pago H y su origen A: el calculado y el panel los suman."""
+    original = svc.run_query
+
+    def con_abarrotes(sql, nombre, parametros=None):
+        filas = original(sql, nombre, parametros)
+        if "cobros diarios" in nombre:
+            extra = [
+                {"sociedad": "DBC", "comisionista_id": LIFNR, "division_code": "H", "origen": "A",
+                 "fecha": D0 + timedelta(days=i), "comision": 100.0}
+                for i in range(35)
+            ]
+            filas = [{**f, "origen": "H"} for f in filas] + extra
+        return filas
+
+    monkeypatch.setattr(svc, "run_query", con_abarrotes)
+    r = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert dict(r["dias"])["2026-06-27"] == MONTOS[0] + 100.0
+    assert set(r["dias_partes"]) == {"H", "A"}
+    assert dict(r["dias_partes"]["A"])["2026-06-27"] == 100.0
+    assert r["fila"]["junta_con"] == ["A"]
+    # El pago de 27 jun a 3 jul cuadra con Huevo + Abarrotes (7 días = 700 más), no solo con Huevo
+    primero = next(p for p in r["fila"]["pagos"] if p["ini"] == "2026-06-27")
+    assert primero["calculado"] == pytest.approx(_suma(0, 6) + 700.0)
+
+
+def test_las_divisiones_que_no_se_juntan_no_traen_partes(bq):
+    r = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    # H de DBC sí declara junta_con aunque ese comisionista no tenga Abarrotes cobrado
+    assert r["fila"]["junta_con"] == ["A"]
+    assert set(r["dias_partes"]) == {"H"}
+
+
+def test_cada_pago_trae_su_documento_su_compensacion_y_el_texto_de_sap(bq):
+    r = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    primero = next(p for p in r["fila"]["pagos"] if p["ini"] == "2026-06-27")
+    (doc,) = primero["documentos"]
+    assert doc["documento"] == "0000000001"
+    assert doc["compensacion"] == "2000000001"
+    assert doc["texto"] == "COMISION HUEVO 1"
+    mes = svc.build_mes(mes="2026-07")
+    assert mes["filas"][0]["pagos"][0]["documentos"]
+
+
+# ─── Fase 5: consolidar, reabrir, lote, ventana a mano y huérfanos ───────
+
+PAGO3 = "DBC|2026|0000000003"  # sin ventana legible
+FILA_ID = f"DBC|{LIFNR}|H"
+
+
+def test_consolidar_congela_el_pago_y_sus_cortes_y_guarda_quien_lo_hizo(bq):
+    svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    v = svc.consolidar(mes="2026-07", key=KEY, pago_id=PAGO1, version=1, usuario="luis")
+    p = _fila(v)[PAGO1]
+    assert p["estado"] == "cons" and p["consolidado_por"] == "luis" and p["consolidado_en"]
+    assert p["drift"] == 0 and p["drift_pagado"] == 0
+    assert v["fila"]["cortes"][0]["congelado"] is True
+    # el corte que comparte con el vecino ya no se mueve
+    with pytest.raises(ErrorCorte) as e:
+        svc.mover_corte(mes="2026-07", key=KEY, izq_pago_id=PAGO1, fecha=date(2026, 7, 3), version=2, usuario="ana")
+    assert e.value.codigo == "corte_congelado"
+    # y sobrevive a una lectura nueva
+    de_nuevo = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert _fila(de_nuevo)[PAGO1]["estado"] == "cons"
+    assert svc.build_historial(key=KEY)["eventos"][0]["tipo"] == "consolidar"
+
+
+def test_se_puede_consolidar_con_diferencia_y_la_foto_guarda_lo_de_ese_momento(bq):
+    v = svc.consolidar(mes="2026-07", key=KEY, pago_id=PAGO1, version=0, usuario="ana")
+    p = _fila(v)[PAGO1]
+    assert p["estado"] == "cons" and p["diferencia"] != 0
+    foto = estado.get_store().leer([KEY])[KEY].consolidados[PAGO1]
+    assert foto.calculado == pytest.approx(_suma(0, 6)) and foto.pagado == pytest.approx(_suma(0, 5))
+    with pytest.raises(ErrorCorte) as e:
+        svc.consolidar(mes="2026-07", key=KEY, pago_id=PAGO1, version=1, usuario="ana")
+    assert e.value.codigo == "ya_consolidado"
+
+
+def test_si_los_datos_cambian_despues_de_consolidar_se_avisa_con_el_drift(bq):
+    foto = estado.Foto(date(2026, 7, 4), date(2026, 7, 10), 100.0, 100.0)
+    estado.get_store().escribir(KEY, 0, estado.DocFila(consolidados={PAGO2: foto}), {"tipo": "prueba"})
+    vista = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    p = _fila(vista)[PAGO2]
+    assert p["estado"] == "cons"
+    assert p["drift"] == pytest.approx(_suma(7, 13) - 100.0)
+    assert p["drift_pagado"] == pytest.approx(_suma(6, 13) - 100.0)
+
+
+def test_reabrir_devuelve_el_pago_a_calcularse_y_no_se_puede_reabrir_lo_abierto(bq):
+    svc.consolidar(mes="2026-07", key=KEY, pago_id=PAGO1, version=0, usuario="ana")
+    v = svc.reabrir(mes="2026-07", key=KEY, pago_ids=[PAGO1], version=1, usuario="ana")
+    assert _fila(v)[PAGO1]["estado"] == "sug" and _fila(v)[PAGO1]["consolidado_por"] is None
+    with pytest.raises(ErrorCorte) as e:
+        svc.reabrir(mes="2026-07", key=KEY, pago_ids=[PAGO1], version=2, usuario="ana")
+    assert e.value.codigo == "no_consolidado"
+    assert [x["tipo"] for x in svc.build_historial(key=KEY)["eventos"]][:2] == ["reabrir", "consolidar"]
+
+
+def test_consolidar_lo_que_cuadra_va_de_izquierda_a_derecha_y_se_detiene_en_lo_que_no_cuadra(bq):
+    # el primer pago aún pide sugerencia: el lote no consolida nada
+    assert svc.build_mes(mes="2026-07")["filas"][0]["lote"] == []
+    assert svc.consolidar_lote(mes="2026-07", fila_ids=[FILA_ID], usuario="ana") == {"consolidados": 0, "filas": 0, "omitidas": 0}
+    vista = svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    # la fila que devuelve una edición trae el mismo lote que la lista, para que el conteo de la pantalla no baile
+    assert vista["fila"]["lote"] == [PAGO1, PAGO2]
+    assert svc.build_mes(mes="2026-07")["filas"][0]["lote"] == [PAGO1, PAGO2]
+    r = svc.consolidar_lote(mes="2026-07", fila_ids=[FILA_ID], usuario="ana")
+    assert r == {"consolidados": 2, "filas": 1, "omitidas": 0}
+    pagos = _fila(svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H"))
+    assert pagos[PAGO1]["estado"] == pagos[PAGO2]["estado"] == "cons" and pagos[PAGO2]["consolidado_por"] == "ana"
+    assert svc.build_mes(mes="2026-07")["filas"][0]["lote"] == []
+
+
+def test_el_lote_solo_toca_las_filas_pedidas(bq):
+    svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    assert svc.consolidar_lote(mes="2026-07", fila_ids=["DBC|0000000000|H"], usuario="ana")["consolidados"] == 0
+
+
+def test_un_pago_sin_ventana_recibe_la_que_le_da_la_persona(bq):
+    v = svc.fijar_ventana(mes="2026-07", key=KEY, pago_id=PAGO3, ini=date(2026, 7, 4), fin=date(2026, 7, 10), version=0, usuario="ana")
+    p = _fila(v)[PAGO3]
+    assert p["ini"] == "2026-07-04" and p["fin"] == "2026-07-10" and p["estado"] != "sinv"
+    assert p["ini_default"] is None and p["ajustado"] is True
+    # volver a la ventana del texto lo devuelve a "sin ventana"
+    v = svc.restablecer_pago(mes="2026-07", key=KEY, pago_id=PAGO3, version=1, usuario="ana")
+    assert _fila(v)[PAGO3]["estado"] == "sinv"
+
+
+def test_fijar_ventana_rechaza_un_pago_que_ya_la_tiene_y_un_rango_al_reves(bq):
+    with pytest.raises(ErrorCorte) as e:
+        svc.fijar_ventana(mes="2026-07", key=KEY, pago_id=PAGO1, ini=date(2026, 7, 1), fin=date(2026, 7, 2), version=0, usuario="ana")
+    assert e.value.codigo == "tiene_ventana"
+    with pytest.raises(ErrorCorte) as e:
+        svc.fijar_ventana(mes="2026-07", key=KEY, pago_id=PAGO3, ini=date(2026, 7, 10), fin=date(2026, 7, 4), version=0, usuario="ana")
+    assert e.value.codigo == "ventana_invalida"
+
+
+def test_un_ajuste_de_un_documento_que_ya_no_esta_en_sap_se_avisa_y_se_puede_quitar(bq):
+    fantasma = "DBC|2026|9999999999"
+    ov = {fantasma: {"ini": date(2026, 7, 5), "fin": date(2026, 7, 8)}}
+    estado.get_store().escribir(KEY, 0, estado.DocFila(overrides=ov), {"tipo": "prueba"})
+    fila = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")["fila"]
+    assert fila["huerfanos"] == [{"pago_id": fantasma, "tipo": "ajuste", "ini": "2026-07-05", "fin": "2026-07-08"}]
+    v = svc.quitar_huerfano(mes="2026-07", key=KEY, pago_id=fantasma, version=1, usuario="ana")
+    assert v["fila"]["huerfanos"] == []
+    with pytest.raises(ErrorCorte) as e:
+        svc.quitar_huerfano(mes="2026-07", key=KEY, pago_id=PAGO1, version=2, usuario="ana")
+    assert e.value.codigo == "no_huerfano"
+
+
+def test_los_ajustes_de_otro_rango_no_cuentan_como_huerfanos(bq):
+    lejos = {"DBC|2026|8888888888": {"ini": date(2025, 1, 5), "fin": date(2025, 1, 8)}}
+    estado.get_store().escribir(KEY, 0, estado.DocFila(overrides=lejos), {"tipo": "prueba"})
+    vista = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert vista["fila"]["huerfanos"] == []
+
+
+def test_consolidar_y_reabrir_por_la_api_piden_rol_de_administrador(bq):
+    url = "/v1/comisionesbi/cortes"
+    viewer = {"x-rol": "viewer", "x-usuario": "x"}
+    assert client.post(f"{url}/consolidar", json={**CUERPO, "pago_id": PAGO1}, headers=viewer).status_code == 403
+    r = client.post(f"{url}/consolidar", json={**CUERPO, "pago_id": PAGO1}, headers=ADMIN)
+    assert r.status_code == 200 and {p["pago_id"]: p for p in r.json()["fila"]["pagos"]}[PAGO1]["estado"] == "cons"
+    r = client.post(f"{url}/reabrir", json={**CUERPO, "version": 1, "pago_ids": [PAGO1]}, headers=ADMIN)
+    assert r.status_code == 200
+    r = client.post(f"{url}/reabrir", json={**CUERPO, "version": 2, "pago_ids": [PAGO1]}, headers=ADMIN)
+    assert r.status_code == 422 and r.json()["codigo"] == "no_consolidado"
+    r = client.post(f"{url}/consolidar-lote", json={"mes": "2026-07", "fila_ids": [FILA_ID]}, headers=ADMIN)
+    assert r.status_code == 200 and r.json()["consolidados"] == 0

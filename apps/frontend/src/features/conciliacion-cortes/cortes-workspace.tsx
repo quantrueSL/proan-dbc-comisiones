@@ -1,27 +1,35 @@
 "use client";
 
 // Conciliación por cortes (pestaña de pruebas, convive con la de Conciliación).
-// Fase 3: solo lectura. Cabecera con filtros y totales, lista del mes (una
-// celda por pago, un solo estado) y, al elegir un pago, su panel.
+// Cabecera con filtros y totales; tabla con un total por comisionista que se abre
+// por división (una celda por pago, un solo estado); y, al elegir un pago, su
+// panel a la derecha, fijo mientras se recorre la lista.
 
-import { useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import type { ComisionesCatalog, CortesEstado, CortesFila, CortesMesResponse, DivisionRow } from "@/types/comisiones";
 import { CortesPanel } from "./cortes-panel";
 import {
   ETIQUETA_ESTADO,
   ETIQUETA_TOTAL,
+  agruparPorComisionista,
+  colaDePagos,
+  esPendiente,
   etiquetaMes,
   fechaCorta,
   filaTodoCuadra,
   filtrarFilas,
+  hayDrift,
   huecosDelMes,
-  nombreComisionista,
   pesos,
   posicionarPagos,
   rangoCorto,
+  resumenLote,
   semanasDelMes,
+  siguientePendiente,
   textoDiferencia,
-  totalesCortes
+  totalesCortes,
+  totalesPorColumna,
+  type RefPago
 } from "./cortes-logica";
 
 type Props = {
@@ -36,12 +44,19 @@ type Props = {
 
 type Seleccion = { filaId: string; pagoId: string };
 
-const ORDEN_ESTADOS: CortesEstado[] = ["cons", "ok", "sug", "sin", "sinv"];
+const ESTADOS_ARRIBA: CortesEstado[] = ["cons", "ok", "sug", "sin"];
 
 function etiquetaDivision(fila: DivisionRow): { codigo: string; nombre: string } {
   const codigo = String(fila.business_area_code ?? "");
   const nombre = fila.business_area_name;
   return { codigo, nombre: nombre === null || nombre === undefined ? codigo : String(nombre) };
+}
+
+function conFilaNueva(respuesta: CortesMesResponse, nueva: CortesFila): CortesMesResponse {
+  const { desde, hasta } = respuesta;
+  // Una edición devuelve la fila completa del rango cargado; la lista solo enseña los pagos que tocan el mes.
+  const pagos = nueva.pagos.filter((p) => p.estado === "sinv" || (p.ini !== null && p.fin !== null && p.ini <= hasta && p.fin >= desde));
+  return { ...respuesta, filas: respuesta.filas.map((f) => (f.fila_id === nueva.fila_id ? { ...nueva, pagos } : f)) };
 }
 
 export function CortesWorkspace({ initialCatalog, initialError, initialResponse, mesInicial, meses, puedeEditar }: Props) {
@@ -54,12 +69,23 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   // Por defecto se ven todas las filas: quien concilia decide si oculta las que ya cuadran.
   const [soloAccion, setSoloAccion] = useState(false);
   const [seleccion, setSeleccion] = useState<Seleccion | null>(null);
+  const [abiertos, setAbiertos] = useState<Set<string>>(new Set());
+  // Después de aplicar una sugerencia: quedarse en el pago (con un aviso) o saltar solo al siguiente pendiente.
+  const [saltarSolo, setSaltarSolo] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+  // "Consolidar lo que cuadra": primero se pide confirmar; luego se manda al servidor, que arma el plan.
+  const [confirmandoLote, setConfirmandoLote] = useState(false);
+  const [procesandoLote, setProcesandoLote] = useState(false);
+  const [avisoLote, setAvisoLote] = useState<string | null>(null);
+  // Sube al recargar el mes después de un lote: el panel abierto vuelve a pedir su fila.
+  const [refrescos, setRefrescos] = useState(0);
 
   async function cargarMes(nuevo: string) {
     setMes(nuevo);
     setCargando(true);
     setError(null);
     setSeleccion(null);
+    setAviso(null);
     try {
       const res = await fetch("/api/comisionesbi/cortes/mes", {
         method: "POST",
@@ -76,49 +102,148 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
     }
   }
 
+  async function consolidarLote() {
+    setProcesandoLote(true);
+    setConfirmandoLote(false);
+    setAvisoLote(null);
+    try {
+      const res = await fetch("/api/comisionesbi/cortes/editar/consolidar-lote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mes, fila_ids: filasFiltradas.map((f) => f.fila_id) })
+      });
+      const payload = (await res.json().catch(() => null)) as { consolidados?: number; filas?: number; omitidas?: number; detail?: string } | null;
+      if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo consolidar.");
+      const lista = await fetch("/api/comisionesbi/cortes/mes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mes })
+      });
+      const nueva = (await lista.json().catch(() => null)) as CortesMesResponse | null;
+      if (lista.ok && nueva) setRespuesta(nueva);
+      setRefrescos((n) => n + 1);
+      const omitidas = payload.omitidas ? ` ${payload.omitidas} fila(s) se saltaron porque alguien más las estaba editando.` : "";
+      setAvisoLote(`Se consolidaron ${payload.consolidados ?? 0} pago(s) en ${payload.filas ?? 0} fila(s).${omitidas}`);
+    } catch (causa) {
+      setAvisoLote(causa instanceof Error ? causa.message : "No se pudo consolidar.");
+    } finally {
+      setProcesandoLote(false);
+    }
+  }
+
   const filas = respuesta?.filas ?? [];
   const desde = respuesta?.desde ?? `${mes}-01`;
   const hasta = respuesta?.hasta ?? `${mes}-28`;
   const semanas = useMemo(() => semanasDelMes(mes), [mes]);
 
+  const nombresDivision = useMemo(() => {
+    const mapa: Record<string, string> = {};
+    for (const row of initialCatalog.divisiones) {
+      const { codigo, nombre } = etiquetaDivision(row);
+      if (codigo) mapa[codigo] = nombre;
+    }
+    return mapa;
+  }, [initialCatalog]);
+  /** "Huevo + Abarrotes" si el pago de esta fila cubre varias divisiones. */
+  const nombreDeFila = (f: CortesFila): string =>
+    [f.division_code, ...(f.junta_con ?? [])]
+      .map((c) => (c ? nombresDivision[c] ?? c : "Sin división"))
+      .join(" + ");
+
+  const filasFiltradas = useMemo(
+    () => filtrarFilas(filas, { division, comisionistaId, soloAccion: false }),
+    [filas, division, comisionistaId]
+  );
   const visibles = useMemo(
     () => filtrarFilas(filas, { division, comisionistaId, soloAccion }, seleccion?.filaId),
     [filas, division, comisionistaId, soloAccion, seleccion]
   );
-  const ocultas = useMemo(
-    () => filtrarFilas(filas, { division, comisionistaId, soloAccion: false }).length - visibles.length,
-    [filas, division, comisionistaId, visibles]
-  );
-  const totales = useMemo(
-    () => totalesCortes(filtrarFilas(filas, { division, comisionistaId, soloAccion: false }), desde, hasta),
-    [filas, division, comisionistaId, desde, hasta]
-  );
+  const ocultas = filasFiltradas.length - visibles.length;
+  const totales = useMemo(() => totalesCortes(filasFiltradas, desde, hasta), [filasFiltradas, desde, hasta]);
+  const grupos = useMemo(() => agruparPorComisionista(visibles), [visibles]);
+  const lote = useMemo(() => resumenLote(filasFiltradas), [filasFiltradas]);
 
   const opcionesComisionista = useMemo(() => {
     const vistos = new Map<string, string>();
-    for (const f of filas) {
-      if (division && f.division_code !== division) continue;
-      if (!vistos.has(f.comisionista_id)) vistos.set(f.comisionista_id, nombreComisionista(f));
+    for (const g of agruparPorComisionista(filas.filter((f) => !division || f.division_code === division || (f.junta_con ?? []).includes(division)))) {
+      vistos.set(g.filas[0].comisionista_id, g.nombre);
     }
     return Array.from(vistos.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [filas, division]);
 
   const hayPagosSinVentana = visibles.some((f) => f.pagos.some((p) => p.estado === "sinv"));
   const columnas = semanas.length + (hayPagosSinVentana ? 1 : 0);
-  const plantilla = { gridTemplateColumns: `minmax(120px, 170px) repeat(${columnas}, minmax(76px, 1fr))` };
+  const plantilla = { gridTemplateColumns: `minmax(210px, 270px) repeat(${columnas}, minmax(116px, 1fr))` };
 
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
+  const cola = useMemo(() => colaDePagos(grupos, semanas), [grupos, semanas]);
 
-  function elegir(fila: CortesFila, pagoId: string) {
-    setSeleccion({ filaId: fila.fila_id, pagoId });
+  // La tabla recorre en el mismo orden que la cola; "anterior" y "siguiente" se quedan dentro de la fila.
+  const vecinos = useMemo(() => {
+    if (!seleccion) return { anterior: null, siguiente: null };
+    const deLaFila = cola.filter((r) => r.filaId === seleccion.filaId);
+    const i = deLaFila.findIndex((r) => r.pagoId === seleccion.pagoId);
+    return { anterior: i > 0 ? deLaFila[i - 1] : null, siguiente: i >= 0 && i < deLaFila.length - 1 ? deLaFila[i + 1] : null };
+  }, [cola, seleccion]);
+
+  function elegir(ref: RefPago, mensaje: string | null = null) {
+    setSeleccion({ filaId: ref.filaId, pagoId: ref.pagoId });
+    setAviso(mensaje);
+    const fila = filas.find((f) => f.fila_id === ref.filaId);
+    if (fila) {
+      const clave = fila.comisionista_id;
+      setAbiertos((previos) => (previos.has(clave) ? previos : new Set(previos).add(clave)));
+    }
   }
 
-  // Una edición devuelve la fila completa del rango cargado; la lista solo enseña los pagos que tocan el mes.
-  function reemplazarFila(nueva: CortesFila) {
-    const pagos = nueva.pagos.filter((p) => p.estado === "sinv" || (p.ini !== null && p.fin !== null && p.ini <= hasta && p.fin >= desde));
-    setRespuesta((actual) =>
-      actual ? { ...actual, filas: actual.filas.map((f) => (f.fila_id === nueva.fila_id ? { ...nueva, pagos } : f)) } : actual
-    );
+  // Lleva la celda elegida a la vista dentro de la tabla (que tiene su propio scroll).
+  useEffect(() => {
+    if (!seleccion) return;
+    document.querySelector(".cortes-celda.es-seleccion")?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [seleccion, abiertos]);
+
+  function pendienteEn(lista: CortesFila[]) {
+    return (ref: RefPago) => {
+      const pago = lista.find((f) => f.fila_id === ref.filaId)?.pagos.find((p) => p.pago_id === ref.pagoId);
+      return !!pago && esPendiente(pago);
+    };
+  }
+
+  function irAlSiguientePendiente(lista: CortesFila[] = filas, mensaje: string | null = null) {
+    const colaActual = lista === filas ? cola : colaDePagos(agruparPorComisionista(filtrarFilas(lista, { division, comisionistaId, soloAccion }, seleccion?.filaId)), semanas);
+    const sig = siguientePendiente(colaActual, seleccion, pendienteEn(lista));
+    if (sig) elegir(sig, mensaje);
+    else setAviso(`${mensaje ? `${mensaje} ` : ""}No quedan pagos pendientes con estos filtros.`);
+  }
+
+  // Tecla N: salta al siguiente pago pendiente (no si se está escribiendo o eligiendo en un campo).
+  useEffect(() => {
+    function alTeclear(e: KeyboardEvent) {
+      if ((e.key !== "n" && e.key !== "N") || e.ctrlKey || e.metaKey || e.altKey) return;
+      const destino = e.target as HTMLElement | null;
+      if (destino && /^(INPUT|SELECT|TEXTAREA)$/.test(destino.tagName)) return;
+      irAlSiguientePendiente();
+    }
+    window.addEventListener("keydown", alTeclear);
+    return () => window.removeEventListener("keydown", alTeclear);
+  });
+
+  function filaActualizada(nueva: CortesFila) {
+    setRespuesta((actual) => (actual ? conFilaNueva(actual, nueva) : actual));
+  }
+
+  // Una sugerencia aplicada: se avisa en el mismo pago o, si la persona lo pidió, se pasa al siguiente pendiente.
+  function accionHecha(mensaje: string, nueva: CortesFila, avanzar = true) {
+    if (avanzar && saltarSolo && respuesta) irAlSiguientePendiente(conFilaNueva(respuesta, nueva).filas, mensaje);
+    else setAviso(mensaje);
+  }
+
+  function alternarGrupo(clave: string) {
+    setAbiertos((previos) => {
+      const siguiente = new Set(previos);
+      if (!siguiente.delete(clave)) siguiente.add(clave);
+      return siguiente;
+    });
   }
 
   return (
@@ -137,74 +262,108 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
       </header>
 
       <section aria-label="Filtros y totales" className="cortes-barra">
-        <div className="cortes-filtros">
-          <label>
-            Mes
-            <select disabled={cargando} onChange={(e) => void cargarMes(e.target.value)} value={mes}>
-              {meses.map((m) => (
-                <option key={m} value={m}>
-                  {etiquetaMes(m)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            División
-            <select
-              onChange={(e) => {
-                setDivision(e.target.value);
-                setComisionistaId("");
-              }}
-              value={division}
-            >
-              <option value="">Todas</option>
-              {initialCatalog.divisiones.map((row, i) => {
-                const { codigo, nombre } = etiquetaDivision(row);
-                return (
-                  <option key={`${codigo}-${i}`} value={codigo}>
+        <div className="cortes-barra-izq">
+          <div className="cortes-filtros">
+            <label>
+              Mes
+              <select disabled={cargando} onChange={(e) => void cargarMes(e.target.value)} value={mes}>
+                {meses.map((m) => (
+                  <option key={m} value={m}>
+                    {etiquetaMes(m)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              División
+              <select
+                onChange={(e) => {
+                  setDivision(e.target.value);
+                  setComisionistaId("");
+                }}
+                value={division}
+              >
+                <option value="">Todas</option>
+                {initialCatalog.divisiones.map((row, i) => {
+                  const { codigo, nombre } = etiquetaDivision(row);
+                  return (
+                    <option key={`${codigo}-${i}`} value={codigo}>
+                      {nombre}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label>
+              Comisionista
+              <select onChange={(e) => setComisionistaId(e.target.value)} value={comisionistaId}>
+                <option value="">Todos</option>
+                {opcionesComisionista.map(([id, nombre]) => (
+                  <option key={id} value={id}>
                     {nombre}
                   </option>
-                );
-              })}
-            </select>
-          </label>
-          <label>
-            Comisionista
-            <select onChange={(e) => setComisionistaId(e.target.value)} value={comisionistaId}>
-              <option value="">Todos</option>
-              {opcionesComisionista.map(([id, nombre]) => (
-                <option key={id} value={id}>
-                  {nombre}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="cortes-check">
-            <input checked={soloAccion} onChange={(e) => setSoloAccion(e.target.checked)} type="checkbox" />
-            Solo lo que requiere acción
-          </label>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="cortes-selectores">
+            <label className="cortes-check">
+              <input checked={soloAccion} onChange={(e) => setSoloAccion(e.target.checked)} type="checkbox" />
+              Solo lo que requiere acción
+            </label>
+            <button
+              className="cortes-boton"
+              disabled={!puedeEditar || lote.pagos === 0 || procesandoLote || cargando}
+              onClick={() => setConfirmandoLote(true)}
+              title={puedeEditar ? "Consolida de izquierda a derecha, hasta el primer pago que no cuadra de cada fila" : "Solo lectura: tu rol no puede consolidar"}
+              type="button"
+            >
+              Consolidar lo que cuadra ({lote.pagos})
+            </button>
+          </div>
+          {confirmandoLote ? (
+            <div className="cortes-confirmar" role="alertdialog">
+              <p>
+                Se consolidarán {lote.pagos} pago(s) de {lote.filas} fila(s), de izquierda a derecha, hasta el primero que no cuadra de cada una. Sus
+                cortes quedarán congelados.
+              </p>
+              <div className="cortes-acciones">
+                <button className="cortes-boton is-primario" onClick={() => void consolidarLote()} type="button">
+                  Consolidar
+                </button>
+                <button className="cortes-boton" onClick={() => setConfirmandoLote(false)} type="button">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {procesandoLote ? <p className="cortes-nota">Consolidando…</p> : null}
+          {avisoLote ? (
+            <p className="cortes-flash" role="status">
+              {avisoLote}
+            </p>
+          ) : null}
         </div>
 
-        <dl className="cortes-totales">
-          {ORDEN_ESTADOS.map((estado) => {
+        <dl className="cortes-kpis">
+          {ESTADOS_ARRIBA.map((estado) => {
             const t = totales.porEstado[estado];
             return (
-              <div key={estado}>
-                <dt>
-                  <i className={`cortes-punto is-${estado}`} />
-                  {ETIQUETA_TOTAL[estado]}
-                </dt>
+              <div className={`cortes-kpi is-${estado}`} key={estado}>
+                <dt>{ETIQUETA_TOTAL[estado]}</dt>
                 <dd>{t.n}</dd>
-                <small>{estado === "sinv" ? `${pesos(t.pagado)} pagado` : `${pesos(t.calculado)} calculado`}</small>
+                <small>{pesos(t.calculado)} calculado</small>
                 {estado === "sug" || estado === "sin" ? <small title="Suma de las diferencias en valor absoluto">Dif. {pesos(t.difAbs)}</small> : null}
               </div>
             );
           })}
-          <div>
-            <dt>
-              <i className="cortes-punto is-hueco" />
-              Cobros sin pago
-            </dt>
+          <div className="cortes-kpi is-sinv">
+            <dt>{ETIQUETA_TOTAL.sinv}</dt>
+            <dd>{totales.porEstado.sinv.n}</dd>
+            <small>{pesos(totales.porEstado.sinv.pagado)} pagado</small>
+          </div>
+          <div className="cortes-kpi is-hueco es-ancho">
+            <dt>Cobros sin pago</dt>
             <dd>{totales.sinPago.n}</dd>
             <small>{pesos(totales.sinPago.comision)} de comisión</small>
             {totales.cierre.n ? (
@@ -219,80 +378,156 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
       <div className={`cortes-cuerpo${filaSeleccionada ? " con-panel" : ""}`}>
         <section aria-busy={cargando} aria-label="Pagos del mes" className="hydro-table-card cortes-lista">
           <div className="cortes-lista-tit">
-            <h2>Pagos de {etiquetaMes(mes)}</h2>
+            <h2>Pagos de {etiquetaMes(mes)} por comisionista</h2>
             <span>
-              {visibles.length} comisionista(s) · clic en una celda para ver el pago
+              {grupos.length} comisionista(s) · el total muestra pagado y calculado; ábrelo para ver cada división con su diferencia
               {cargando ? " · cargando…" : ""}
             </span>
           </div>
 
-          {visibles.length ? (
+          {grupos.length ? (
             <div className="cortes-matriz-scroll">
               <div className="cortes-matriz">
                 <div className="cortes-fila cortes-fila-cab" style={plantilla}>
-                  <span />
+                  <span className="cortes-cab-quien">Comisionista / división</span>
                   {semanas.map((s) => (
                     <span key={s.ini}>{rangoCorto(s.ini, s.fin)}</span>
                   ))}
                   {hayPagosSinVentana ? <span>Sin ventana</span> : null}
                 </div>
-                {visibles.map((fila) => {
-                  const posicionados = posicionarPagos(fila.pagos, semanas);
-                  const sinVentana = fila.pagos.filter((p) => p.estado === "sinv");
-                  const hueco = huecosDelMes(fila, desde, hasta);
+
+                {grupos.map((grupo) => {
+                  // Con un solo comisionista a la vista no hay nada que ahorrar: se enseñan sus divisiones.
+                  const abierto = abiertos.has(grupo.clave) || grupos.length === 1;
+                  const porRevisar = grupo.filas.reduce((n, f) => n + f.pagos.filter((p) => p.estado !== "ok" && p.estado !== "cons").length, 0);
+                  const totalesCol = totalesPorColumna(grupo.filas, semanas);
+                  const contiene = seleccion ? grupo.filas.some((f) => f.fila_id === seleccion.filaId) : false;
+                  const nDivisiones = grupo.filas.length;
                   return (
-                    <div className="cortes-fila" key={fila.fila_id} style={plantilla}>
-                      <div className="cortes-quien">
-                        <b title={nombreComisionista(fila)}>{nombreComisionista(fila)}</b>
-                        <span>
-                          {fila.sociedad} · {fila.division_code ?? "Sin división"}
-                          {filaTodoCuadra(fila) ? " · todo cuadra" : ""}
-                        </span>
-                        {hueco.n ? <em>Cobros sin pago: {pesos(hueco.comision)}</em> : null}
-                      </div>
-                      {posicionados.map(({ pago, colIni, colFin }) => {
-                        const seleccionada = seleccion?.pagoId === pago.pago_id && seleccion.filaId === fila.fila_id;
-                        return (
-                          <button
-                            aria-label={`${nombreComisionista(fila)}, pago ${rangoCorto(pago.ini!, pago.fin!)}, ${ETIQUETA_ESTADO[pago.estado]}`}
-                            aria-pressed={seleccionada}
-                            className={`cortes-celda is-${pago.estado}${seleccionada ? " es-seleccion" : ""}`}
-                            key={pago.pago_id}
-                            onClick={() => elegir(fila, pago.pago_id)}
-                            style={{ gridColumn: `${colIni + 2} / ${colFin + 3}` }}
-                            title={`${rangoCorto(pago.ini!, pago.fin!)} · pagado ${pesos(pago.pagado)}`}
-                            type="button"
-                          >
-                            <span className="cortes-celda-estado">
-                              <i className={`cortes-punto is-${pago.estado}`} />
-                              {ETIQUETA_ESTADO[pago.estado]}
+                    <Fragment key={grupo.clave}>
+                      <div className={`cortes-fila cortes-fila-total${contiene ? " con-seleccion" : ""}`} style={plantilla}>
+                        <div className="cortes-quien">
+                          <button aria-expanded={abierto} onClick={() => alternarGrupo(grupo.clave)} type="button">
+                            <span aria-hidden="true" className={`cortes-flecha${abierto ? " es-abierta" : ""}`}>
+                              ▶
                             </span>
-                            <span className="cortes-celda-valor">{textoDiferencia(pago.diferencia)}</span>
+                            <b title={grupo.nombre}>{grupo.nombre}</b>
                           </button>
-                        );
-                      })}
-                      {hayPagosSinVentana
-                        ? sinVentana.map((pago) => {
-                            const seleccionada = seleccion?.pagoId === pago.pago_id && seleccion.filaId === fila.fila_id;
-                            return (
-                              <button
-                                aria-pressed={seleccionada}
-                                className={`cortes-celda is-sinv${seleccionada ? " es-seleccion" : ""}`}
-                                key={pago.pago_id}
-                                onClick={() => elegir(fila, pago.pago_id)}
-                                style={{ gridColumn: `${semanas.length + 2} / ${semanas.length + 3}` }}
-                                type="button"
-                              >
-                                <span className="cortes-celda-estado">
-                                  <i className="cortes-punto is-sinv" />
-                                  {ETIQUETA_ESTADO.sinv}
+                          <span>
+                            {nDivisiones} {nDivisiones === 1 ? "división" : "divisiones"} · {porRevisar ? `${porRevisar} pago(s) por revisar` : "todo cuadra"}
+                          </span>
+                        </div>
+                        {totalesCol.slice(0, columnas).map((c, i) =>
+                          c.n ? (
+                            <div className="cortes-total-col" key={i}>
+                              <span>
+                                <em>Pag.</em> {pesos(c.pagado)}
+                              </span>
+                              {i < semanas.length ? (
+                                <span>
+                                  <em>Calc.</em> {pesos(c.calculado)}
                                 </span>
-                                <span className="cortes-celda-valor">{pesos(pago.pagado)}</span>
-                              </button>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="cortes-total-col is-vacio" key={i}>
+                              —
+                            </div>
+                          )
+                        )}
+                      </div>
+
+                      {abierto
+                        ? grupo.filas.map((fila) => {
+                            const posicionados = posicionarPagos(fila.pagos, semanas);
+                            const sinVentana = fila.pagos.filter((p) => p.estado === "sinv");
+                            const hueco = huecosDelMes(fila, desde, hasta);
+                            const cubiertas = new Set<number>();
+                            posicionados.forEach(({ colIni, colFin }) => {
+                              for (let c = colIni; c <= colFin; c++) cubiertas.add(c);
+                            });
+                            const esFilaElegida = seleccion?.filaId === fila.fila_id;
+                            return (
+                              <div className={`cortes-fila cortes-fila-division${esFilaElegida ? " con-seleccion" : ""}`} key={fila.fila_id} style={plantilla}>
+                                <div className="cortes-quien">
+                                  <b>{nombreDeFila(fila)}</b>
+                                  <span>
+                                    {fila.sociedad}
+                                    {fila.junta_con?.length ? " · se paga junto" : ""}
+                                    {filaTodoCuadra(fila) ? " · todo cuadra" : ""}
+                                  </span>
+                                  {hueco.n ? <em>Cobros sin pago: {pesos(hueco.comision)}</em> : null}
+                                  {fila.huerfanos?.length ? <em>⚠ {fila.huerfanos.length} guardado(s) de un documento que ya no está</em> : null}
+                                </div>
+                                {posicionados.map(({ pago, colIni, colFin }) => {
+                                  const elegida = seleccion?.pagoId === pago.pago_id && esFilaElegida;
+                                  return (
+                                    <button
+                                      aria-label={`${grupo.nombre}, ${nombreDeFila(fila)}, pago ${rangoCorto(pago.ini!, pago.fin!)}, ${ETIQUETA_ESTADO[pago.estado]}`}
+                                      aria-pressed={elegida}
+                                      className={`cortes-celda is-${pago.estado}${elegida ? " es-seleccion" : ""}`}
+                                      key={pago.pago_id}
+                                      onClick={() => elegir({ filaId: fila.fila_id, pagoId: pago.pago_id })}
+                                      style={{ gridColumn: `${colIni + 2} / ${colFin + 3}` }}
+                                      title={`${rangoCorto(pago.ini!, pago.fin!)} · pagado ${pesos(pago.pagado)}`}
+                                      type="button"
+                                    >
+                                      <span className="cortes-celda-estado">
+                                        <i className={`cortes-punto is-${pago.estado}`} />
+                                        {ETIQUETA_ESTADO[pago.estado]}
+                                        {hayDrift(pago) ? (
+                                          <span className="cortes-celda-cambio" title="Los datos cambiaron desde que se consolidó">
+                                            ⚠ Cambió
+                                          </span>
+                                        ) : null}
+                                      </span>
+                                      <span className="cortes-celda-fila">
+                                        <em>Pag.</em> {pesos(pago.pagado)}
+                                      </span>
+                                      <span className="cortes-celda-fila">
+                                        <em>Calc.</em> {pago.calculado === null ? "—" : pesos(pago.calculado)}
+                                      </span>
+                                      <span className="cortes-celda-fila is-dif">
+                                        <em>Dif.</em> <b>{textoDiferencia(pago.diferencia)}</b>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                                {semanas.map((_, c) =>
+                                  cubiertas.has(c) ? null : (
+                                    <div className="cortes-celda-vacia" key={`v${c}`} style={{ gridColumn: c + 2 }}>
+                                      —
+                                    </div>
+                                  )
+                                )}
+                                {hayPagosSinVentana
+                                  ? sinVentana.map((pago) => {
+                                      const elegida = seleccion?.pagoId === pago.pago_id && esFilaElegida;
+                                      return (
+                                        <button
+                                          aria-pressed={elegida}
+                                          className={`cortes-celda is-sinv${elegida ? " es-seleccion" : ""}`}
+                                          key={pago.pago_id}
+                                          onClick={() => elegir({ filaId: fila.fila_id, pagoId: pago.pago_id })}
+                                          style={{ gridColumn: `${semanas.length + 2} / ${semanas.length + 3}` }}
+                                          type="button"
+                                        >
+                                          <span className="cortes-celda-estado">
+                                            <i className="cortes-punto is-sinv" />
+                                            {ETIQUETA_ESTADO.sinv}
+                                          </span>
+                                          <span className="cortes-celda-fila">
+                                            <em>Pag.</em> {pesos(pago.pagado)}
+                                          </span>
+                                        </button>
+                                      );
+                                    })
+                                  : null}
+                              </div>
                             );
                           })
                         : null}
-                    </div>
+                    </Fragment>
                   );
                 })}
               </div>
@@ -303,33 +538,48 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             </p>
           )}
 
-          {ocultas > 0 ? (
-            <p className="cortes-ocultas">
-              {ocultas} comisionista(s) ocultos porque todo cuadra o ya está consolidado.{" "}
-              <button onClick={() => setSoloAccion(false)} type="button">
-                Mostrar todos
-              </button>
-            </p>
-          ) : null}
-
-          <div className="cortes-leyenda">
-            {ORDEN_ESTADOS.map((e) => (
-              <span key={e}>
-                <i className={`cortes-punto is-${e}`} />
-                {ETIQUETA_ESTADO[e]}
-              </span>
-            ))}
+          <div className="cortes-pie-lista">
+            <div className="cortes-leyenda">
+              {(["ok", "sug", "sin", "sinv", "cons"] as CortesEstado[]).map((e) => (
+                <span key={e}>
+                  <i className={`cortes-punto is-${e}`} />
+                  {ETIQUETA_ESTADO[e]}
+                </span>
+              ))}
+            </div>
+            {ocultas > 0 ? (
+              <p className="cortes-ocultas">
+                {ocultas} fila(s) ocultas porque todo cuadra o ya está consolidado.{" "}
+                <button onClick={() => setSoloAccion(false)} type="button">
+                  Mostrar todas
+                </button>
+              </p>
+            ) : null}
           </div>
         </section>
 
         {filaSeleccionada && seleccion ? (
           <CortesPanel
+            aviso={aviso}
+            key={refrescos}
+            etiquetaDivision={nombreDeFila(filaSeleccionada)}
             filaResumen={filaSeleccionada}
             mes={mes}
-            onCerrar={() => setSeleccion(null)}
-            onFilaActualizada={reemplazarFila}
+            nombresDivision={nombresDivision}
+            onAccionHecha={accionHecha}
+            onAnterior={vecinos.anterior ? () => elegir(vecinos.anterior!) : null}
+            onCerrar={() => {
+              setSeleccion(null);
+              setAviso(null);
+            }}
+            onElegirPago={(pagoId) => elegir({ filaId: filaSeleccionada.fila_id, pagoId })}
+            onFilaActualizada={filaActualizada}
+            onSaltarSoloChange={setSaltarSolo}
+            onSiguiente={vecinos.siguiente ? () => elegir(vecinos.siguiente!) : null}
+            onSiguientePendiente={() => irAlSiguientePendiente()}
             pagoId={seleccion.pagoId}
             puedeEditar={puedeEditar}
+            saltarSolo={saltarSolo}
           />
         ) : null}
       </div>

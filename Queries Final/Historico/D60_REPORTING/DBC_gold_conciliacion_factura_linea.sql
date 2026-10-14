@@ -150,4 +150,6 @@ LEFT JOIN comisionista_oficina co
        ON co.sociedad = t.bukrs AND co.oficina = t.oficina_ventas
 LEFT JOIN comisionista_oficina_division cod
        ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
-      AND cod.division = t.division;
+      AND cod.division = t.division
+-- Venta excluida (México, 0130, comisionistas de baja; cliente 2026-10-14) no entra a la conciliación.
+WHERE t.status != 'EXCLUIDA';

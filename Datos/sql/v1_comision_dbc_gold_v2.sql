@@ -129,6 +129,7 @@ base AS (
       WHEN 'SIN_SET'    THEN 'material sin SET'
       WHEN 'SIN_CEDIS'  THEN 'sin CEDIS/tipo de venta'
       WHEN 'SIN_TARIFA' THEN 'sin tarifa para esa llave'
+      WHEN 'EXCLUIDA'   THEN 'excluida'
     END AS comision_estado,
     -- 2026-09-22: el cliente confirmó que la oficina 0130 no genera comisión
     -- (nunca tiene tarifa, en ninguna división) -- mismo tratamiento que
@@ -136,7 +137,9 @@ base AS (
     -- es que le falte el dato, es que la respuesta correcta es "ninguna"), y
     -- comisiones_engine.py la saca de los totales y la reporta aparte, no la
     -- descarta en silencio.
-    t.oficina_ventas = '0130'                                AS oficina_excluida,
+    -- 2026-10-14: generalizado a toda la venta EXCLUIDA de la silver (0130, oficinas de
+    -- México y oficinas de comisionistas de baja; ver `motivo_exclusion` allí).
+    t.status = 'EXCLUIDA'                                    AS oficina_excluida,
     CAST(t.importe_mxn AS FLOAT64)                           AS monto,
     t.comision_mxn                                           AS comision,
     t.comision_cobrada,

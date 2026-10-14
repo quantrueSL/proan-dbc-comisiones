@@ -181,6 +181,23 @@ class CortesPagoBody(CortesEdicion):
     pago_id: str
 
 
+class CortesReabrirBody(CortesEdicion):
+    pago_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class CortesLoteBody(BaseModel):
+    """Consolida lo que cuadra en las filas dadas (`sociedad|comisionista_id|división`); el plan lo arma el servidor."""
+
+    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    fila_ids: list[str] = Field(min_length=1, max_length=2000)
+
+
+class CortesVentanaBody(CortesEdicion):
+    pago_id: str
+    ini: date
+    fin: date
+
+
 class CortesHistorialBody(BaseModel):
     sociedad: str
     comisionista_id: str
@@ -399,6 +416,45 @@ def post_cortes_recuperar(body: CortesPagoBody, usuario: str = Depends(editor)) 
 def post_cortes_restablecer(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
     """Vuelve la ventana de un pago a la que propone el texto."""
     return cortes.restablecer_pago(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/consolidar")
+def post_cortes_consolidar(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
+    """Congela un pago: guarda su ventana, lo pagado y lo calculado, y sus cortes dejan de moverse."""
+    return cortes.consolidar(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/reabrir")
+def post_cortes_reabrir(body: CortesReabrirBody, usuario: str = Depends(editor)) -> dict:
+    """Quita la foto de uno o más pagos consolidados."""
+    return cortes.reabrir(
+        mes=body.mes, key=_llave(body), pago_ids=body.pago_ids, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/consolidar-lote")
+def post_cortes_consolidar_lote(body: CortesLoteBody, usuario: str = Depends(editor)) -> dict:
+    """Consolida lo que cuadra, de izquierda a derecha, en las filas pedidas."""
+    return cortes.consolidar_lote(mes=body.mes, fila_ids=body.fila_ids, usuario=usuario)
+
+
+@app.post("/v1/comisionesbi/cortes/fijar-ventana")
+def post_cortes_fijar_ventana(body: CortesVentanaBody, usuario: str = Depends(editor)) -> dict:
+    """Da inicio y fin a un pago cuyo texto no trae fechas legibles."""
+    return cortes.fijar_ventana(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, ini=body.ini, fin=body.fin,
+        version=body.version, usuario=usuario,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/quitar-huerfano")
+def post_cortes_quitar_huerfano(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
+    """Borra el ajuste o la foto de un documento que ya no existe en SAP."""
+    return cortes.quitar_huerfano(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
     )
 

@@ -487,10 +487,22 @@ export type CortesSugerencia = {
   afectados: CortesAfectado[];
 };
 
+export type CortesHuerfano = { pago_id: string; tipo: "ajuste" | "consolidado"; ini: string | null; fin: string | null };
+
+export type CortesDocumento = {
+  doc_id: string;
+  documento: string;
+  compensacion: string | null;
+  texto: string | null;
+  fecha_pago: string | null;
+};
+
 export type CortesPago = {
   pago_id: string;
   /** Documentos de SAP que forman el pago (casi siempre uno). */
   docs: string[];
+  /** Lo que dice SAP de cada documento: número, compensación (el pago) y el texto con que se pagó. */
+  documentos?: CortesDocumento[];
   /** `null` en un pago sin ventana legible en el texto. */
   ini: string | null;
   fin: string | null;
@@ -504,6 +516,10 @@ export type CortesPago = {
   sin_calculo: boolean;
   /** Consolidado: calculado de hoy − calculado congelado. */
   drift: number | null;
+  /** Consolidado: pagado de hoy en SAP − pagado congelado. */
+  drift_pagado?: number | null;
+  consolidado_por?: string | null;
+  consolidado_en?: string | null;
   /** La persona descartó la sugerencia de este pago. */
   descartada: boolean;
   ajustado: boolean;
@@ -530,6 +546,12 @@ export type CortesFila = {
   division_code: string | null;
   /** Versión guardada de la fila: toda edición dice cuál vio. */
   version: number;
+  /** Divisiones que el pago de esta fila cubre además de la suya (Huevo de DBC paga también Abarrotes). */
+  junta_con?: string[];
+  /** Ajustes o consolidados guardados de un documento que ya no está en SAP. */
+  huerfanos?: CortesHuerfano[];
+  /** Pagos del mes que "Consolidar lo que cuadra" cerraría en esta fila. */
+  lote?: string[];
   pagos: CortesPago[];
   huecos: CortesHueco[];
   traslapes: CortesTraslape[];
@@ -562,8 +584,10 @@ export type CortesFilaFilters = {
 export type CortesFilaResponse = {
   mes: string;
   fila: CortesFila | null;
-  /** [fecha ISO, comisión del día]. */
+  /** [fecha ISO, comisión del día]; ya suma las divisiones que se pagan juntas. */
   dias: [string, number][];
+  /** Solo si la fila junta divisiones: los cobros diarios de cada una (por código de división de origen). */
+  dias_partes?: Record<string, [string, number][]>;
 };
 
 export type CortesDetalleFilters = {
@@ -575,6 +599,7 @@ export type CortesDetalleFilters = {
 };
 
 export type CortesDetalleRow = {
+  division_code?: string | null;
   cedis: string | null;
   oficina: string | null;
   tipo_venta: string | null;
@@ -599,7 +624,18 @@ export type CortesDetalleResponse = {
 };
 
 /** Acciones de edición (ver `app/api/comisionesbi/cortes/editar/[accion]`). */
-export type CortesAccion = "mover" | "mover-borde" | "aplicar" | "descartar" | "recuperar" | "restablecer";
+export type CortesAccion =
+  | "mover"
+  | "mover-borde"
+  | "aplicar"
+  | "descartar"
+  | "recuperar"
+  | "restablecer"
+  | "consolidar"
+  | "reabrir"
+  | "consolidar-lote"
+  | "fijar-ventana"
+  | "quitar-huerfano";
 
 export type CortesEvento = {
   tipo: string;

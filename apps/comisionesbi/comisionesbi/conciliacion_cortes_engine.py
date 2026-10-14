@@ -237,6 +237,7 @@ class PagoResuelto:
     estado: str
     sin_calculo: bool = False
     drift: float | None = None  # consolidado: calculado vivo - calculado congelado
+    drift_pagado: float | None = None  # consolidado: pagado vivo - pagado congelado
     descartada: bool = False  # la persona descartó la sugerencia de este pago
     sugerencia: Sugerencia | None = None
 
@@ -423,6 +424,7 @@ def resolver_fila(
     vs.sort(key=lambda v: (v.ini, v.fin, v.pago_id))
     ctx = _Ctx(vs, serie, estado.descartadas)
     docs_de = {p.pago_id: p.docs for p in pagos}
+    pagado_vivo = {p.pago_id: p.pagado for p in pagos}
 
     resueltos: list[PagoResuelto] = []
     for i, v in enumerate(vs):
@@ -437,6 +439,7 @@ def resolver_fila(
         if v.cons:
             r.estado = CONSOLIDADO
             r.drift = round(serie.suma(v.ini, v.fin) - (v.frozen_calc or 0.0), 2)
+            r.drift_pagado = round(pagado_vivo[v.pago_id] - v.pagado, 2)
         elif abs(dif) > TOLERANCIA:
             fuera = sugerir_en is not None and not (v.ini <= sugerir_en[1] and v.fin >= sugerir_en[0])
             r.sugerencia = None if fuera or v.pago_id in ctx.descartadas else _mejor_sugerencia(ctx, i)

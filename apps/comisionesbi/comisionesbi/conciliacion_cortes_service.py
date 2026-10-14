@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 from comisionesbi.conciliacion_cortes_engine import (
+    CONSOLIDADO,
+    OK,
     SIN_VENTANA,
     CambioBorde,
     DocPago,
@@ -51,6 +53,11 @@ _TABLA_PAGO_DOC = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_pago_documen
 _TABLA_DIARIA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario`"
 _TABLA_VENDORS = "`proan-quantrue.D20_DIMENSION.dm_vendors`"
 
+# Divisiones que se pagan en el mismo documento que otra: el pago de Huevo de DBC cubre también Abarrotes
+# (confirmado con el cliente; con Abarrotes sumado cuadran 339 de 807 pagos en vez de 192). Se calcula en bloque.
+DIVISIONES_JUNTAS: dict[tuple[str, str], tuple[str, ...]] = {("DBC", "H"): ("A",)}
+_JUNTA_A_PAGO = {(soc, otra): div for (soc, div), otras in DIVISIONES_JUNTAS.items() for otra in otras}
+
 MARGEN_DIAS = 35
 # Un pago sin ventana legible no tiene fechas que lo ubiquen en un mes: se asigna al
 # mes en que se pagó (y a las dos semanas siguientes, que es cuando se paga el cierre).
@@ -60,7 +67,7 @@ _MES = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
 
 _DOCS_SQL = f"""
 SELECT d.sociedad, d.doc_id, d.comisionista_id, d.division_code, d.desde_texto, d.hasta_texto,
-       d.ventana_valida, d.pagado, d.fecha_pago, v.razon_social AS comisionista
+       d.ventana_valida, d.pagado, d.fecha_pago, d.augbl, d.texto, v.razon_social AS comisionista
 FROM {_TABLA_PAGO_DOC} d
 LEFT JOIN (
   SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social FROM {_TABLA_VENDORS} GROUP BY id_proveedor
@@ -74,18 +81,22 @@ WHERE (@sociedad IS NULL OR d.sociedad = @sociedad)
   )
 """
 
+# `division_pago` es la división con la que se paga: Abarrotes de DBC se cobra junto con Huevo.
+_DIVISION_PAGO_SQL = "IF(sociedad = 'DBC' AND division_code = 'A', 'H', division_code)"
+
 _DIARIO_SQL = f"""
-SELECT sociedad, comisionista_id, division_code, fecha, SUM(comision_total) AS comision
+SELECT sociedad, comisionista_id, {_DIVISION_PAGO_SQL} AS division_code, division_code AS origen,
+       fecha, SUM(comision_total) AS comision
 FROM {_TABLA_DIARIA}
 WHERE fecha BETWEEN @ini_ext AND @fin_ext
   AND (@sociedad IS NULL OR sociedad = @sociedad)
-  AND (@division IS NULL OR division_code = @division)
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
   AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
-GROUP BY sociedad, comisionista_id, division_code, fecha
+GROUP BY 1, 2, 3, 4, 5
 """
 
 _DETALLE_SQL = f"""
-SELECT cedis, oficina, tipo_venta, matnr, descripcion, unidad_venta, unidad_tarifa,
+SELECT division_code, cedis, oficina, tipo_venta, matnr, descripcion, unidad_venta, unidad_tarifa,
   ANY_VALUE(tarifa)           AS tarifa,
   SUM(num_lineas)             AS num_lineas,
   SUM(cantidad_venta_total)   AS cantidad_venta_total,
@@ -97,8 +108,8 @@ FROM {_TABLA_DIARIA}
 WHERE fecha BETWEEN @ini AND @fin
   AND sociedad = @sociedad
   AND comisionista_id = @comisionista_id
-  AND (@division IS NULL OR division_code = @division)
-GROUP BY cedis, oficina, tipo_venta, matnr, descripcion, unidad_venta, unidad_tarifa
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
+GROUP BY division_code, cedis, oficina, tipo_venta, matnr, descripcion, unidad_venta, unidad_tarifa
 """
 
 
@@ -131,7 +142,11 @@ def _cache_ttl_seconds() -> int:
 
 
 def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = False):
-    """Lo crudo de BigQuery: (ini, fin, docs, diario, nombres, cobertura)."""
+    """Lo crudo de BigQuery: (ini, fin, docs, diario, nombres, cobertura, partes, info_docs).
+
+    `diario` ya suma las divisiones que se pagan juntas; `partes` guarda cada origen por separado
+    ({fila: {división de origen: {fecha: comisión}}}) para enseñar de dónde viene el calculado.
+    """
     llave = (mes, sociedad, division, comisionista_id, con_cobertura)
     ttl = _cache_ttl_seconds()
     hit = _CACHE.get(llave)
@@ -161,18 +176,31 @@ def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = 
         filas_docs, filas_diario = f_docs.result(), f_diario.result()
         cobertura_datos = f_cobertura.result() if f_cobertura else None
     nombres = {r["comisionista_id"]: r.get("comisionista") for r in filas_docs}
-    docs = [DocPago.desde_fila(r) for r in filas_docs]
-    diario = [
-        {
-            "sociedad": r["sociedad"],
-            "comisionista_id": r["comisionista_id"],
-            "division_code": r["division_code"],
-            "fecha": r["fecha"],
-            "comision": float(r["comision"] or 0.0),
+    info_docs = {
+        r["doc_id"]: {
+            "doc_id": r["doc_id"],
+            "documento": str(r["doc_id"]).split("|")[-1],
+            "compensacion": r.get("augbl"),
+            "texto": r.get("texto"),
+            "fecha_pago": _iso(r.get("fecha_pago")),
         }
-        for r in filas_diario
+        for r in filas_docs
+    }
+    docs = [DocPago.desde_fila(r) for r in filas_docs]
+    suma: dict[tuple, float] = {}
+    partes: dict[FilaKey, dict[str, dict]] = {}
+    for r in filas_diario:
+        comision = float(r["comision"] or 0.0)
+        fila_key = (r["sociedad"], r["comisionista_id"], r["division_code"])
+        suma[(*fila_key, r["fecha"])] = suma.get((*fila_key, r["fecha"]), 0.0) + comision
+        origen = r.get("origen") or r["division_code"]
+        por_fecha = partes.setdefault(fila_key, {}).setdefault(origen, {})
+        por_fecha[r["fecha"]] = por_fecha.get(r["fecha"], 0.0) + comision
+    diario = [
+        {"sociedad": s, "comisionista_id": c, "division_code": d, "fecha": f, "comision": m}
+        for (s, c, d, f), m in suma.items()
     ]
-    datos = (ini, fin, docs, diario, nombres, cobertura_datos)
+    datos = (ini, fin, docs, diario, nombres, cobertura_datos, partes, info_docs)
     if ttl:
         _CACHE[llave] = (time.monotonic() + ttl, datos)
     return datos
@@ -180,13 +208,13 @@ def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = 
 
 def _cargar(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = False):
     """Todas las filas resueltas, con el estado guardado de cada una aplicado."""
-    ini, fin, docs, diario, nombres, cobertura_datos = _datos(mes, sociedad, division, comisionista_id, con_cobertura)
+    ini, fin, docs, diario, nombres, cobertura_datos, _, info_docs = _datos(mes, sociedad, division, comisionista_id, con_cobertura)
     claves = list(agrupar_pagos(docs))
     guardados = get_store().leer(claves)
     estados = {k: d.a_estado() for k, d in guardados.items()}
     resueltas = construir_filas(docs, diario, estados, (ini, fin))
     versiones = {k: d.version for k, d in guardados.items()}
-    return ini, fin, resueltas, nombres, diario, cobertura_datos, versiones
+    return ini, fin, resueltas, nombres, diario, cobertura_datos, versiones, info_docs, guardados
 
 
 # ─── Serialización ───────────────────────────────────────────────────────
@@ -218,10 +246,14 @@ def _sugerencia_json(s: Sugerencia | None) -> dict | None:
     }
 
 
-def _pago_json(p: PagoResuelto) -> dict:
+def _pago_json(p: PagoResuelto, info_docs: dict | None = None, doc: DocFila | None = None) -> dict:
+    info_docs = info_docs or {}
+    quien = (doc.consolidados_info.get(p.pago_id) if doc else None) or {}
     return {
         "pago_id": p.pago_id,
         "docs": list(p.docs),
+        # Lo que dice SAP de cada documento: su número, la compensación (el pago) y el texto con que se pagó.
+        "documentos": [info_docs[d] for d in p.docs if d in info_docs],
         "ini": _iso(p.ini),
         "fin": _iso(p.fin),
         "ini_default": _iso(p.ini_default),
@@ -232,13 +264,75 @@ def _pago_json(p: PagoResuelto) -> dict:
         "estado": p.estado,
         "sin_calculo": p.sin_calculo,
         "drift": p.drift,
+        "drift_pagado": p.drift_pagado,
+        "consolidado_por": quien.get("por"),
+        "consolidado_en": quien.get("ts"),
         "descartada": p.descartada,
         "ajustado": p.ajustado,
         "sugerencia": _sugerencia_json(p.sugerencia),
     }
 
 
-def _fila_json(fila: FilaResuelta, nombre: str | None, pagos: list[PagoResuelto], version: int = 0) -> dict:
+def _partes_json(key: FilaKey, partes: dict) -> dict:
+    origenes = partes.get(key) or {}
+    if len(origenes) < 2 and not DIVISIONES_JUNTAS.get((key[0], key[2])):
+        return {}
+    return {
+        origen: sorted(([_iso(f), m] for f, m in por_fecha.items()), key=lambda x: x[0])
+        for origen, por_fecha in origenes.items()
+    }
+
+
+def _rango_cargado(ini: date, fin: date) -> tuple[date, date]:
+    return ini - timedelta(days=MARGEN_DIAS), fin + timedelta(days=MARGEN_DIAS)
+
+
+def _huerfanos(fila: FilaResuelta, doc: DocFila | None, rango: tuple[date, date] | None) -> list[dict]:
+    """Ajustes o consolidados guardados de un documento que debería estar en el rango cargado y ya no está en SAP."""
+    if doc is None or rango is None:
+        return []
+    presentes = {p.pago_id for p in fila.pagos}
+    salida = []
+    for pago_id in sorted((set(doc.overrides) | set(doc.consolidados)) - presentes):
+        foto = doc.consolidados.get(pago_id)
+        if foto:
+            ini, fin, tipo = foto.ini, foto.fin, "consolidado"
+        else:
+            ov = doc.overrides.get(pago_id, {})
+            ini, fin, tipo = ov.get("ini"), ov.get("fin"), "ajuste"
+        fechas = [d for d in (ini, fin) if d]
+        if not fechas or not any(rango[0] <= d <= rango[1] for d in fechas):
+            continue
+        salida.append({"pago_id": pago_id, "tipo": tipo, "ini": _iso(ini), "fin": _iso(fin)})
+    return salida
+
+
+def _lote(fila: FilaResuelta, ini: date, fin: date) -> list[str]:
+    """Pagos del mes que "Consolidar lo que cuadra" cierra: de izquierda a derecha, hasta el primero que no cuadra.
+
+    Se corta ahí a propósito: consolidar un pago congela sus cortes, y uno que aún no cuadra puede necesitar
+    moverlos.
+    """
+    plan = []
+    for p in fila.pagos:
+        if p.estado == SIN_VENTANA or not _toca_el_mes(p, ini, fin) or p.estado == CONSOLIDADO:
+            continue
+        if p.estado != OK:
+            break
+        plan.append(p.pago_id)
+    return plan
+
+
+def _fila_json(
+    fila: FilaResuelta,
+    nombre: str | None,
+    pagos: list[PagoResuelto],
+    version: int = 0,
+    info_docs: dict | None = None,
+    doc: DocFila | None = None,
+    rango: tuple[date, date] | None = None,
+    lote: list[str] | None = None,
+) -> dict:
     sociedad, comisionista_id, division_code = fila.key
     return {
         "fila_id": f"{sociedad}|{comisionista_id}|{division_code or ''}",
@@ -247,7 +341,11 @@ def _fila_json(fila: FilaResuelta, nombre: str | None, pagos: list[PagoResuelto]
         "comisionista": nombre,
         "division_code": division_code,
         "version": version,
-        "pagos": [_pago_json(p) for p in pagos],
+        # Divisiones que este pago cubre además de la suya (Huevo de DBC paga también Abarrotes).
+        "junta_con": list(DIVISIONES_JUNTAS.get((sociedad, division_code), ())),
+        "pagos": [_pago_json(p, info_docs, doc) for p in pagos],
+        "huerfanos": _huerfanos(fila, doc, rango),
+        "lote": lote or [],
         "huecos": [
             {"ini": _iso(h.ini), "fin": _iso(h.fin), "comision": h.comision, "despues_de": h.despues_de, "antes_de": h.antes_de, "cierre": h.cierre}
             for h in fila.huecos
@@ -268,14 +366,19 @@ def _toca_el_mes(p: PagoResuelto, ini: date, fin: date) -> bool:
 
 def build_mes(*, mes: str, sociedad=None, division=None, comisionista_id=None) -> dict:
     """La lista del mes: una fila por sociedad × comisionista × división, con los pagos que tocan el mes."""
-    ini, fin, filas, nombres, _, cobertura_datos, versiones = _cargar(
+    ini, fin, filas, nombres, _, cobertura_datos, versiones, info_docs, guardados = _cargar(
         mes, sociedad, division, comisionista_id, con_cobertura=True
     )
     salida = []
     for key, fila in filas.items():
         pagos = [p for p in fila.pagos if _toca_el_mes(p, ini, fin)]
         if pagos:
-            salida.append(_fila_json(fila, nombres.get(key[1]), pagos, versiones.get(key, 0)))
+            salida.append(
+                _fila_json(
+                    fila, nombres.get(key[1]), pagos, versiones.get(key, 0), info_docs,
+                    doc=guardados.get(key), rango=_rango_cargado(ini, fin), lote=_lote(fila, ini, fin),
+                )
+            )
     salida.sort(key=lambda f: (f["comisionista"] is None, f["comisionista"] or f["comisionista_id"], f["division_code"] or ""))
     return {
         "mes": mes,
@@ -289,16 +392,21 @@ def build_mes(*, mes: str, sociedad=None, division=None, comisionista_id=None) -
 def _vista_fila(mes: str, key: FilaKey, doc: DocFila) -> dict:
     """La fila resuelta con el estado `doc`, más los cobros diarios (sin volver a BigQuery si está en caché)."""
     sociedad, comisionista_id, division_code = key
-    _, _, docs, diario, nombres, _ = _datos(mes, sociedad, division_code, comisionista_id)
+    _, _, docs, diario, nombres, _, partes, info_docs = _datos(mes, sociedad, division_code, comisionista_id)
     pagos = agrupar_pagos(docs).get(key)
     if not pagos:
-        return {"mes": mes, "fila": None, "dias": []}
+        return {"mes": mes, "fila": None, "dias": [], "dias_partes": {}}
     dias = {r["fecha"]: r["comision"] for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key}
     fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado())
     return {
         "mes": mes,
-        "fila": _fila_json(fila, nombres.get(comisionista_id), fila.pagos, doc.version),
+        "fila": _fila_json(
+            fila, nombres.get(comisionista_id), fila.pagos, doc.version, info_docs,
+            doc=doc, rango=_rango_cargado(*rango_mes(mes)), lote=_lote(fila, *rango_mes(mes)),
+        ),
         "dias": sorted(([_iso(f), m] for f, m in dias.items()), key=lambda x: x[0]),
+        # Solo cuando la fila junta varias divisiones: los cobros diarios de cada una.
+        "dias_partes": _partes_json(key, partes),
     }
 
 
@@ -343,7 +451,7 @@ def build_detalle(
 
 def _contexto_edicion(mes: str, key: FilaKey, version: int):
     sociedad, comisionista_id, division_code = key
-    _, _, docs, diario, _, _ = _datos(mes, sociedad, division_code, comisionista_id)
+    _, _, docs, diario, _, _, _, _ = _datos(mes, sociedad, division_code, comisionista_id)
     doc = get_store().leer([key]).get(key) or DocFila()
     if doc.version != version:
         raise ConflictoVersion("La fila cambió mientras la editabas. Se recargó con lo último.")
@@ -370,12 +478,17 @@ def _ov_json(overrides: dict, ids=None) -> dict:
     }
 
 
-def _guardar(mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartadas=None, detalle=None):
+def _escribir(
+    mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartadas=None, consolidados=None,
+    consolidados_info=None, detalle=None,
+) -> DocFila:
+    """Guarda el nuevo estado de la fila (transacción con la versión que se leyó) y su evento en el historial."""
     nuevo = DocFila(
         version=doc.version,
         overrides=doc.overrides if overrides is None else overrides,
         descartadas=doc.descartadas if descartadas is None else descartadas,
-        consolidados=doc.consolidados,
+        consolidados=doc.consolidados if consolidados is None else consolidados,
+        consolidados_info=doc.consolidados_info if consolidados_info is None else consolidados_info,
     )
     cambiados = {
         pid for pid in set(doc.overrides) | set(nuevo.overrides) if doc.overrides.get(pid) != nuevo.overrides.get(pid)
@@ -390,8 +503,11 @@ def _guardar(mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartad
     }
     if detalle:
         evento["detalle"] = detalle
-    guardado = get_store().escribir(key, doc.version, nuevo, evento)
-    return _vista_fila(mes, key, guardado)
+    return get_store().escribir(key, doc.version, nuevo, evento)
+
+
+def _guardar(mes, key, doc, usuario, tipo, **kwargs):
+    return _vista_fila(mes, key, _escribir(mes, key, doc, usuario, tipo, **kwargs))
 
 
 def mover_corte(*, mes, key, izq_pago_id, fecha: date, version, usuario) -> dict:
@@ -470,3 +586,103 @@ def restablecer_pago(*, mes, key, pago_id, version, usuario) -> dict:
 
 def build_historial(*, key: FilaKey, limite: int = 30) -> dict:
     return {"eventos": get_store().historial(key, limite)}
+
+
+# ─── Consolidar, reabrir y fijar la ventana de un pago sin texto legible ──
+
+
+def _texto_foto(foto) -> dict:
+    return {
+        "ini": foto.ini.isoformat(),
+        "fin": foto.fin.isoformat(),
+        "pagado": f"{foto.pagado:.2f}",
+        "calculado": f"{foto.calculado:.2f}",
+    }
+
+
+def consolidar(*, mes, key, pago_id, version, usuario) -> dict:
+    """Congela el pago: guarda su ventana, lo pagado y lo calculado de hoy, y sus dos cortes dejan de moverse."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    _pago(fila, pago_id)
+    foto = fila.foto(pago_id)  # ya consolidado o sin ventana: ErrorCorte
+    return _guardar(
+        mes, key, doc, usuario, "consolidar", pago_id=pago_id,
+        consolidados={**doc.consolidados, pago_id: foto},
+        consolidados_info={**doc.consolidados_info, pago_id: {"por": usuario, "ts": ahora_iso()}},
+        detalle=_texto_foto(foto),
+    )
+
+
+def reabrir(*, mes, key, pago_ids, version, usuario) -> dict:
+    """Quita la foto de uno o más pagos: vuelven a su ventana ajustada (o a la del texto) y a recalcularse."""
+    doc, _ = _contexto_edicion(mes, key, version)
+    faltan = [p for p in pago_ids if p not in doc.consolidados]
+    if faltan:
+        raise ErrorCorte("no_consolidado", "Alguno de esos pagos no está consolidado.")
+    return _guardar(
+        mes, key, doc, usuario, "reabrir", pago_id=pago_ids[0],
+        consolidados={k: v for k, v in doc.consolidados.items() if k not in pago_ids},
+        consolidados_info={k: v for k, v in doc.consolidados_info.items() if k not in pago_ids},
+        detalle={"pagos": ",".join(pago_ids)},
+    )
+
+
+def consolidar_lote(*, mes: str, fila_ids: list[str], usuario: str) -> dict:
+    """Consolida lo que cuadra en las filas pedidas, con el plan que arma el servidor (izquierda a derecha)."""
+    ini, fin, filas, _, _, _, versiones, _, guardados = _cargar(mes, None, None, None)
+    pedidas = set(fila_ids)
+    total = filas_tocadas = omitidas = 0
+    for key, fila in filas.items():
+        if f"{key[0]}|{key[1]}|{key[2] or ''}" not in pedidas:
+            continue
+        plan = _lote(fila, ini, fin)
+        if not plan:
+            continue
+        doc = guardados.get(key) or DocFila()
+        fotos = {pid: fila.foto(pid) for pid in plan}
+        ahora = ahora_iso()
+        try:
+            _escribir(
+                mes, key, doc, usuario, "consolidar_lote", pago_id=plan[0],
+                consolidados={**doc.consolidados, **fotos},
+                consolidados_info={**doc.consolidados_info, **{pid: {"por": usuario, "ts": ahora} for pid in plan}},
+                detalle={"pagos": ",".join(plan)},
+            )
+        except ConflictoVersion:
+            omitidas += 1  # otra persona tocó esa fila: se deja como está
+            continue
+        total += len(plan)
+        filas_tocadas += 1
+    return {"consolidados": total, "filas": filas_tocadas, "omitidas": omitidas}
+
+
+def fijar_ventana(*, mes, key, pago_id, ini: date, fin: date, version, usuario) -> dict:
+    """Da una ventana a un pago cuyo texto no la trae (o corrige la que se le dio antes)."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    pago = _pago(fila, pago_id)
+    if pago.estado == CONSOLIDADO:
+        raise ErrorCorte("corte_congelado", "El pago está consolidado.")
+    if pago.ini_default is not None or pago.fin_default is not None:
+        raise ErrorCorte("tiene_ventana", "Este pago ya tiene ventana en el texto: muévela con sus cortes.")
+    if ini > fin:
+        raise ErrorCorte("ventana_invalida", "El inicio no puede ser posterior al fin.")
+    overrides = {k: dict(v) for k, v in doc.overrides.items()}
+    overrides[pago_id] = {"ini": ini, "fin": fin}
+    return _guardar(
+        mes, key, doc, usuario, "fijar_ventana", pago_id=pago_id, overrides=overrides,
+        detalle={"ini": ini.isoformat(), "fin": fin.isoformat()},
+    )
+
+
+def quitar_huerfano(*, mes, key, pago_id, version, usuario) -> dict:
+    """Borra el ajuste o la foto de un documento que ya no está en SAP."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    if pago_id in {p.pago_id for p in fila.pagos}:
+        raise ErrorCorte("no_huerfano", "Ese documento sigue en SAP.")
+    return _guardar(
+        mes, key, doc, usuario, "quitar_huerfano", pago_id=pago_id,
+        overrides={k: v for k, v in doc.overrides.items() if k != pago_id},
+        descartadas={k: v for k, v in doc.descartadas.items() if k != pago_id},
+        consolidados={k: v for k, v in doc.consolidados.items() if k != pago_id},
+        consolidados_info={k: v for k, v in doc.consolidados_info.items() if k != pago_id},
+    )

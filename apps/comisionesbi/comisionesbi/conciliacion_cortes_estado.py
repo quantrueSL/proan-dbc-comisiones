@@ -64,6 +64,8 @@ class DocFila:
     overrides: dict[str, dict[str, date]] = field(default_factory=dict)
     descartadas: dict[str, dict] = field(default_factory=dict)
     consolidados: dict[str, Foto] = field(default_factory=dict)
+    # Quién consolidó cada pago y cuándo: {pago_id: {"por": usuario, "ts": iso}}.
+    consolidados_info: dict[str, dict] = field(default_factory=dict)
 
     def a_estado(self) -> EstadoFila:
         return EstadoFila(
@@ -80,7 +82,13 @@ class DocFila:
             "overrides": {k: {b: f.isoformat() for b, f in v.items()} for k, v in self.overrides.items()},
             "descartadas": self.descartadas,
             "consolidados": {
-                k: {"ini": f.ini.isoformat(), "fin": f.fin.isoformat(), "pagado": f.pagado, "calculado": f.calculado}
+                k: {
+                    "ini": f.ini.isoformat(),
+                    "fin": f.fin.isoformat(),
+                    "pagado": f.pagado,
+                    "calculado": f.calculado,
+                    **(self.consolidados_info.get(k) or {}),
+                }
                 for k, f in self.consolidados.items()
             },
         }
@@ -102,6 +110,10 @@ class DocFila:
                     float(v["pagado"]),
                     float(v["calculado"]),
                 )
+                for k, v in (datos.get("consolidados") or {}).items()
+            },
+            consolidados_info={
+                k: {c: v[c] for c in ("por", "ts") if v.get(c) is not None}
                 for k, v in (datos.get("consolidados") or {}).items()
             },
         )

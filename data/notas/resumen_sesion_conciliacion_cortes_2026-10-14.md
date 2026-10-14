@@ -74,3 +74,11 @@ resultados que la medición.
 6. **Preguntas al cliente:** quién puede reabrir, acuerdos especiales de los ~12 comisionistas
    concentrados, los dos LIFNR sin calculado.
 7. Correr los DDL de `D60` y repuntar constantes cuando se haga la migración.
+
+## Actualización posterior (mismo día)
+
+- **Rediseño aplicado:** tabla por comisionista (se abre por división), KPIs en cajitas, panel fijo con navegación entre pagos,
+  Huevo + Abarrotes de DBC como un solo pago, documento y texto de SAP bajo el nombre.
+- **Fase 5 hecha:** consolidar y reabrir (solo admin), aviso si los datos cambian después de consolidar, "Consolidar lo que cuadra"
+  en lote (izquierda a derecha, se detiene en el primer pago que no cuadra), ventana a mano para pagos sin texto legible y
+  limpieza de ajustes huérfanos. Quedan la Fase 6 (Excel) y la 7.

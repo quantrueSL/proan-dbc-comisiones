@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { CortesEstado, CortesFila, CortesPago, CortesSugerencia } from "@/types/comisiones";
 import {
+  agruparPorComisionista,
+  calculadoPorParte,
+  colaDePagos,
   cortesMovidos,
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
+  esPendiente,
   fechaConDia,
   filaTodoCuadra,
   filtrarFilas,
+  hayDrift,
   huecosDelMes,
   limitesDeCorte,
   moverCorteLocal,
@@ -17,9 +22,12 @@ import {
   pagosEnVista,
   posicionarPagos,
   rangoCorto,
+  resumenLote,
   semanasDelMes,
+  siguientePendiente,
   textoDiferencia,
-  totalesCortes
+  totalesCortes,
+  totalesPorColumna
 } from "./cortes-logica";
 
 function pago(id: string, ini: string | null, fin: string | null, estado: CortesEstado = "ok", extra: Partial<CortesPago> = {}): CortesPago {
@@ -296,5 +304,102 @@ describe("mover un corte en la vista previa", () => {
   it("límites: el pago de la izquierda conserva un día y el de la derecha también", () => {
     expect(limitesDeCorte(f, "a")).toEqual({ min: "2026-07-04", max: "2026-07-16" });
     expect(limitesDeCorte(f, "b")).toBeNull();
+  });
+});
+
+
+describe("tabla por comisionista", () => {
+  const semanas = semanasDelMes("2026-07"); // 27 jun a 3 jul, 4 a 10 jul, ...
+
+  it("agrupa las filas de un mismo comisionista y conserva el orden", () => {
+    const a1 = fila("1", [pago("a", "2026-07-04", "2026-07-10")]);
+    const a2 = { ...fila("2", [pago("b", "2026-07-04", "2026-07-10")]), comisionista_id: a1.comisionista_id, comisionista: a1.comisionista };
+    const otro = fila("3", [pago("c", "2026-07-04", "2026-07-10")]);
+    const grupos = agruparPorComisionista([a1, a2, otro]);
+    expect(grupos.map((g) => g.filas.length)).toEqual([2, 1]);
+    expect(grupos[0].nombre).toBe("Comisionista 1");
+  });
+
+  it("un comisionista con filas en DBC y en PAN es un solo grupo", () => {
+    const dbc = fila("1", [pago("a", "2026-07-04", "2026-07-10")]);
+    const pan = { ...fila("2", [pago("b", "2026-07-04", "2026-07-10")]), sociedad: "PAN", comisionista_id: dbc.comisionista_id };
+    const grupos = agruparPorComisionista([dbc, pan]);
+    expect(grupos).toHaveLength(1);
+    expect(grupos[0].filas.map((f) => f.sociedad)).toEqual(["DBC", "PAN"]);
+  });
+
+  it("el total de una columna suma pagado y calculado de sus divisiones; el pago acumulado cuenta donde termina", () => {
+    const h = fila("1", [
+      pago("a", "2026-06-27", "2026-07-10", "sin", { pagado: 3000, calculado: 2500, diferencia: -500 }),
+      pago("b", "2026-07-11", "2026-07-17", "ok")
+    ]);
+    const l = fila("2", [pago("c", "2026-07-04", "2026-07-10", "ok", { pagado: 400, calculado: 400 })]);
+    const t = totalesPorColumna([h, l], semanas);
+    expect(t[0]).toEqual({ n: 0, pagado: 0, calculado: 0 });
+    expect(t[1]).toEqual({ n: 2, pagado: 3400, calculado: 2900 });
+    expect(t[2]).toEqual({ n: 1, pagado: 1000, calculado: 1000 });
+    expect(t[semanas.length].n).toBe(0);
+  });
+
+  it("los pagos sin ventana suman su pagado en la última columna", () => {
+    const f = fila("1", [pago("s", null, null, "sinv", { pagado: 700, calculado: null, diferencia: null })]);
+    const t = totalesPorColumna([f], semanas);
+    expect(t[semanas.length]).toEqual({ n: 1, pagado: 700, calculado: 0 });
+  });
+
+  it("pendiente es una sugerencia por revisar o un pago sin explicación", () => {
+    expect(esPendiente(pago("a", "2026-07-04", "2026-07-10", "sug"))).toBe(true);
+    expect(esPendiente(pago("a", "2026-07-04", "2026-07-10", "sin"))).toBe(true);
+    expect(esPendiente(pago("a", "2026-07-04", "2026-07-10", "ok"))).toBe(false);
+    expect(esPendiente(pago("a", "2026-07-04", "2026-07-10", "cons"))).toBe(false);
+  });
+
+  it("la cola recorre comisionista por comisionista y semana por semana, y el siguiente pendiente da la vuelta", () => {
+    const f1 = fila("1", [pago("b", "2026-07-11", "2026-07-17", "ok"), pago("a", "2026-07-04", "2026-07-10", "sug")]);
+    const f2 = fila("2", [pago("c", "2026-07-04", "2026-07-10", "sin")]);
+    const cola = colaDePagos(agruparPorComisionista([f1, f2]), semanas);
+    expect(cola.map((r) => r.pagoId)).toEqual(["a", "b", "c"]);
+    const todos = [f1, f2];
+    const pendiente = (r: { filaId: string; pagoId: string }) =>
+      esPendiente(todos.find((f) => f.fila_id === r.filaId)!.pagos.find((p) => p.pago_id === r.pagoId)!);
+    expect(siguientePendiente(cola, { filaId: "1", pagoId: "a" }, pendiente)?.pagoId).toBe("c");
+    expect(siguientePendiente(cola, { filaId: "2", pagoId: "c" }, pendiente)?.pagoId).toBe("a");
+    expect(siguientePendiente(cola, null, pendiente)?.pagoId).toBe("a");
+    expect(siguientePendiente(cola, null, () => false)).toBeNull();
+  });
+
+  it("filtrar por Abarrotes deja pasar la fila de Huevo que se paga junto con Abarrotes", () => {
+    const h = fila("1", [pago("a", "2026-07-04", "2026-07-10")], { junta_con: ["A"] });
+    const bo = { ...fila("2", [pago("b", "2026-07-04", "2026-07-10")]), division_code: "BO" };
+    const visibles = filtrarFilas([h, bo], { division: "A", comisionistaId: "", soloAccion: false });
+    expect(visibles.map((f) => f.fila_id)).toEqual(["1"]);
+  });
+
+  it("el desglose por división suma cada origen dentro de la ventana del pago", () => {
+    const partes: Record<string, [string, number][]> = {
+      H: [["2026-07-03", 100], ["2026-07-04", 200], ["2026-07-10", 50], ["2026-07-11", 999]],
+      A: [["2026-07-04", 10.555], ["2026-07-12", 7]]
+    };
+    expect(calculadoPorParte(partes, "2026-07-04", "2026-07-10")).toEqual({ H: 250, A: 10.56 });
+    expect(calculadoPorParte(undefined, "2026-07-04", "2026-07-10")).toEqual({});
+  });
+});
+
+
+describe("consolidar", () => {
+  it("un consolidado avisa cuando cambió el calculado o el pago en SAP, y los demás estados no", () => {
+    expect(hayDrift(pago("a", "2026-07-04", "2026-07-10", "cons", { drift: 0, drift_pagado: 0 }))).toBe(false);
+    expect(hayDrift(pago("a", "2026-07-04", "2026-07-10", "cons", { drift: 250.5, drift_pagado: 0 }))).toBe(true);
+    expect(hayDrift(pago("a", "2026-07-04", "2026-07-10", "cons", { drift: 0, drift_pagado: -80 }))).toBe(true);
+    expect(hayDrift(pago("a", "2026-07-04", "2026-07-10", "cons", { drift: 0.5 }))).toBe(false);
+    expect(hayDrift(pago("a", "2026-07-04", "2026-07-10", "ok", { drift: 900 }))).toBe(false);
+  });
+
+  it("el lote suma los pagos que el servidor consolidaría y cuenta las filas que tienen alguno", () => {
+    const a = fila("1", [pago("a", "2026-07-04", "2026-07-10")], { lote: ["a", "b"] });
+    const b = fila("2", [pago("c", "2026-07-04", "2026-07-10")], { lote: [] });
+    const c = fila("3", [pago("d", "2026-07-04", "2026-07-10")]);
+    expect(resumenLote([a, b, c])).toEqual({ pagos: 2, filas: 1 });
+    expect(resumenLote([])).toEqual({ pagos: 0, filas: 0 });
   });
 });

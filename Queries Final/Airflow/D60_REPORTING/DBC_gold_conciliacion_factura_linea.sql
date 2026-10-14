@@ -157,7 +157,9 @@ LEFT JOIN comisionista_oficina co
 LEFT JOIN comisionista_oficina_division cod
        ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
       AND cod.division = t.division
-WHERE t.billing_date >= ventana_desde;   -- <- alcance incremental
+-- Venta excluida (México, 0130, comisionistas de baja; cliente 2026-10-14) no entra a la conciliación.
+WHERE t.billing_date >= ventana_desde   -- <- alcance incremental
+  AND t.status != 'EXCLUIDA';
 
 ASSERT (
   SELECT COUNT(*) FROM `proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`
