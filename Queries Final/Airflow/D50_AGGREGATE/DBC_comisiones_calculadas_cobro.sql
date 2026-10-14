@@ -496,7 +496,14 @@ facturas AS (
     )
     AND f.sales_division IN ('H','BO','IA','A','L')
     AND f.document_category = 'M'
-    AND f.billing_date >= ventana_desde   -- <- alcance incremental
+    -- SUELO DEL HISTÓRICO (2026-10-13): el gemelo completo lee desde 2026-01-01, no
+    -- desde la ventana. Con `ventana_desde` a secas, hasta enero de 2027 la ventana
+    -- (12 meses) arranca ANTES de ese suelo y se colaban oct-dic 2025: 1.378.814
+    -- líneas con 0% de cobro (la lectura de BSAD también empieza el 2026-01-01, así
+    -- que esos meses salían como "devengado sin cobrar"). El DELETE sigue usando
+    -- `ventana_desde` a propósito: así la corrida que despliegue este arreglo
+    -- también borra esas filas ya coladas, sin limpieza manual.
+    AND f.billing_date >= GREATEST(ventana_desde, DATE '2026-01-01')   -- <- alcance incremental
     AND f.billing_date <= CURRENT_DATE()
     AND f.sales_office  NOT IN ('0001', '0174', '0175', '0181')
     AND f.storage_location NOT IN ('BO28','H793','BO01','H723')

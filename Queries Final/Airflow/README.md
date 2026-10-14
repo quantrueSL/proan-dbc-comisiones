@@ -50,7 +50,7 @@ ASSERT (SELECT COUNT(*) FROM `proan-quantrue.<dataset>.<TABLA>`
 
 ## Reglas que no se negocian
 
-1. **`ventana_desde` vale lo mismo en los 7 archivos.** Si el gold usa una ventana más corta
+1. **`ventana_desde` vale lo mismo en los 8 archivos.** Si el gold usa una ventana más corta
    que la silver, conserva filas que la silver ya no tiene y las dos capas se separan sin que
    nadie lo note.
 2. **`DBC_gold_conciliacion_producto_diario` corre después de `DBC_gold_conciliacion_factura_linea`**,

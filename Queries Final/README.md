@@ -37,10 +37,10 @@ Queries Final/
 ├─ Historico/
 │  ├─ D20_DIMENSION/     dm_DBC_base_comision_v1
 │  ├─ D50_AGGREGATE/     v1_flujo_producto_dbc · DBC_silver_flujo_producto · DBC_comisiones_calculadas_cobro
-│  └─ D60_REPORTING/     5 gold + dm_DBC_periodo_pago
+│  └─ D60_REPORTING/     6 gold + dm_DBC_periodo_pago
 └─ Airflow/
    ├─ D50_AGGREGATE/     2 gemelos
-   └─ D60_REPORTING/     5 gemelos
+   └─ D60_REPORTING/     6 gemelos
 ```
 
 **`Airflow/` no tiene `D20_DIMENSION`** y es correcto: de esa capa, dos tablas
@@ -50,7 +50,7 @@ dimensiones pasa a construirse desde SAP, ahí se crea la carpeta.
 
 ## Inventario y patrón de carga
 
-`ventana_desde` es una `DECLARE` con **el mismo valor en los 7 archivos de Airflow**:
+`ventana_desde` es una `DECLARE` con **el mismo valor en los 8 archivos de Airflow**:
 los últimos 12 meses completos.
 
 | Histórico | Airflow | partición | ventana |
@@ -64,6 +64,7 @@ los últimos 12 meses completos.
 | `D60/DBC_gold_conciliacion_factura_linea.sql` | ✔ | `fecha` | `>= ventana_desde` |
 | `D60/DBC_gold_conciliacion_producto_diario.sql` | ✔ | `fecha` | `>= ventana_desde` |
 | `D60/DBC_gold_conciliacion_pago_semanal.sql` | ✔ | `periodo` | `>= ventana_desde` |
+| `D60/DBC_gold_conciliacion_pago_documento.sql` | ✔ | `fecha_pago` | `>= ventana_desde` |
 | `D60/dm_DBC_periodo_pago.sql` | — | vista | — |
 
 **Por qué 12 meses y no 3.** El cobro llega tarde: medido sobre las compensaciones de 2026,
@@ -90,6 +91,7 @@ refrescar a diario: basta con que el DDL se haya corrido una vez.
 3  gold (en paralelo)      DBC_gold_comision_diaria_v2          ← silver comisiones
                            DBC_gold_conciliacion_factura_linea  ← silver comisiones
                            DBC_gold_conciliacion_pago_semanal   ← silver comisiones + BSAK
+                           DBC_gold_conciliacion_pago_documento ← solo BSAK (pestaña de cortes)
                            DBC_gold_flujo_producto_diario       ← silver flujo
 
 4  gold ← gold             DBC_gold_conciliacion_producto_diario ← gold_conciliacion_factura_linea
