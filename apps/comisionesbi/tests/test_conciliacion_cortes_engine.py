@@ -19,6 +19,7 @@ from comisionesbi.conciliacion_cortes_engine import (
     agrupar_pagos,
     construir_filas,
     resolver_fila,
+    ventana_estandar,
 )
 
 D0 = date(2026, 6, 20)  # sábado; ninguna ventana de estas pruebas termina en fin de mes
@@ -171,7 +172,7 @@ def test_los_dias_sin_cobros_no_crean_ambiguedad():
     montos[0:8] = [1000, 2000, 3000, 0, 4000, 0, 500, 900]  # índice 6 = 500; 7 = 900
     # pago A: 0..3 (texto); el real cubre hasta 5, pero el día 5 no tiene cobros
     pagados = [suma(montos, 0, 5), suma(montos, 6, 7)]
-    pagos = agrupar_pagos(docs([(0, 3), (4, 7)], pagados))[KEY]
+    pagos = agrupar_pagos(docs([(0, 3), (4, 7)], pagados), estandar=False)[KEY]
     fr = resolver_fila(KEY, pagos, serie(montos))
     s = fr.pagos[0].sugerencia
     assert s is not None
@@ -252,7 +253,7 @@ def test_plan_de_lote_va_de_izquierda_a_derecha_y_se_detiene_en_el_primero_que_n
 
 
 def test_hueco_entre_pagos_se_reporta_con_sus_cobros_y_no_hay_corte_compartido():
-    pagos = agrupar_pagos(docs([(0, 6), (10, 13)], [suma(MONTOS, 0, 6), suma(MONTOS, 10, 13)]))[KEY]
+    pagos = agrupar_pagos(docs([(0, 6), (10, 13)], [suma(MONTOS, 0, 6), suma(MONTOS, 10, 13)]), estandar=False)[KEY]
     fr = resolver_fila(KEY, pagos, serie())
     (h,) = fr.huecos
     assert (h.ini, h.fin) == (d(7), d(9))
@@ -261,7 +262,7 @@ def test_hueco_entre_pagos_se_reporta_con_sus_cobros_y_no_hay_corte_compartido()
 
 
 def test_traslape_se_reporta_y_no_bloquea():
-    pagos = agrupar_pagos(docs([(0, 8), (6, 13)], [suma(MONTOS, 0, 8), suma(MONTOS, 6, 13)]))[KEY]
+    pagos = agrupar_pagos(docs([(0, 8), (6, 13)], [suma(MONTOS, 0, 8), suma(MONTOS, 6, 13)]), estandar=False)[KEY]
     fr = resolver_fila(KEY, pagos, serie())
     (t,) = fr.traslapes
     assert (t.ini, t.fin) == (d(6), d(8))
@@ -334,7 +335,7 @@ def test_el_ultimo_dia_del_mes_sale_del_pago_que_termina_ese_dia_y_queda_como_hu
         DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 7, 1), date(2026, 7, 3), 60.0),
     ]
     dias = {base + timedelta(days=i): 20.0 for i in range(9)}  # 20 por día del 25 jun al 3 jul
-    pagos = agrupar_pagos(ds)[("DBC", "X", "H")]
+    pagos = agrupar_pagos(ds, estandar=False)[("DBC", "X", "H")]
     assert [(p.ini, p.fin) for p in pagos] == [(date(2026, 6, 25), date(2026, 6, 29)), (date(2026, 7, 1), date(2026, 7, 3))]
     fr = resolver_fila(("DBC", "X", "H"), pagos, SerieDiaria(dias))
     assert fr.pagos[0].calculado == 100.0 and fr.pagos[0].estado == OK  # 5 días x 20, sin el 30
@@ -355,6 +356,61 @@ def test_el_cierre_de_mes_se_puede_apagar_y_no_toca_ventanas_de_un_dia_ni_las_qu
 
 
 def test_un_hueco_de_un_dia_que_no_es_fin_de_mes_no_es_cierre():
-    pagos = agrupar_pagos(docs([(0, 6), (8, 13)], [suma(MONTOS, 0, 6), suma(MONTOS, 8, 13)]))[KEY]
+    pagos = agrupar_pagos(docs([(0, 6), (8, 13)], [suma(MONTOS, 0, 6), suma(MONTOS, 8, 13)]), estandar=False)[KEY]
     fr = resolver_fila(KEY, pagos, serie())
     assert fr.huecos[0].cierre is False
+
+
+# ─── Ventanas estándar: sábado-viernes y fin de mes, sin traslapes ───────
+
+
+def test_la_ventana_del_texto_se_acomoda_a_sabado_viernes():
+    # "5 al 12 sep" (sáb a sáb) pasa a sáb 5 a vie 11; "11 al 18" arranca el sábado 12
+    assert ventana_estandar(date(2026, 9, 5), date(2026, 9, 12)) == (date(2026, 9, 5), date(2026, 9, 11))
+    assert ventana_estandar(date(2026, 9, 11), date(2026, 9, 18)) == (date(2026, 9, 12), date(2026, 9, 18))
+    # lo que ya es sáb-vie no cambia
+    assert ventana_estandar(date(2026, 9, 12), date(2026, 9, 18)) == (date(2026, 9, 12), date(2026, 9, 18))
+
+
+def test_el_cambio_de_mes_tambien_corta_el_tramo():
+    assert ventana_estandar(date(2026, 9, 26), date(2026, 9, 30)) == (date(2026, 9, 26), date(2026, 9, 30))
+    assert ventana_estandar(date(2026, 10, 1), date(2026, 10, 2)) == (date(2026, 10, 1), date(2026, 10, 2))
+    # un acumulado de varias semanas conserva su largo
+    assert ventana_estandar(date(2026, 8, 1), date(2026, 8, 31)) == (date(2026, 8, 1), date(2026, 8, 31))
+
+
+def test_un_texto_de_un_solo_dia_suelto_se_deja_como_viene():
+    # el 30 sep (miércoles) quedaría con inicio el 1 oct: al revés, así que no se toca
+    assert ventana_estandar(date(2026, 9, 30), date(2026, 9, 30)) == (date(2026, 9, 30), date(2026, 9, 30))
+
+
+def test_dos_pagos_que_el_texto_traslapa_quedan_contiguos_y_sin_traslape():
+    ds = [
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 9, 5), date(2026, 9, 12), 100.0),
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 9, 12), date(2026, 9, 18), 100.0),
+    ]
+    pagos = agrupar_pagos(ds)[("DBC", "X", "H")]
+    assert [(p.ini, p.fin) for p in pagos] == [(date(2026, 9, 5), date(2026, 9, 11)), (date(2026, 9, 12), date(2026, 9, 18))]
+    fr = resolver_fila(("DBC", "X", "H"), pagos, SerieDiaria({}))
+    assert fr.traslapes == [] and fr.huecos == [] and len(fr.cortes) == 1
+    # y con el texto tal cual, sí se traslapan (el modo anterior sigue disponible)
+    crudos = agrupar_pagos(ds, estandar=False)[("DBC", "X", "H")]
+    assert [(p.ini, p.fin) for p in crudos] == [(date(2026, 9, 5), date(2026, 9, 12)), (date(2026, 9, 12), date(2026, 9, 18))]
+
+
+def test_dos_documentos_que_quedan_en_la_misma_ventana_son_un_solo_pago():
+    ds = [
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 9, 5), date(2026, 9, 11), 60.0),
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 9, 5), date(2026, 9, 12), 40.0),
+    ]
+    (pago,) = agrupar_pagos(ds)[("DBC", "X", "H")]
+    assert pago.pagado == 100.0 and pago.pago_id == "DBC|2026|0000000001" and len(pago.docs) == 2
+
+
+def test_un_pago_contenido_en_otro_no_se_recorta():
+    ds = [
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 9, 5), date(2026, 9, 25), 300.0),
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 9, 12), date(2026, 9, 18), 100.0),
+    ]
+    pagos = agrupar_pagos(ds)[("DBC", "X", "H")]
+    assert [(p.ini, p.fin) for p in pagos] == [(date(2026, 9, 5), date(2026, 9, 25)), (date(2026, 9, 12), date(2026, 9, 18))]

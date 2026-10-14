@@ -3,7 +3,7 @@
 // Panel de un pago: línea de tiempo con los cortes, sugerencia o advertencia y,
 // aparte, el detalle por producto de su ventana. Quien tiene permiso puede mover
 // un corte con las flechas (los clics seguidos se juntan en un solo guardado),
-// aplicar o descartar la sugerencia y devolver el pago a la ventana del texto.
+// aplicar o descartar la sugerencia y devolver el pago a su ventana estándar.
 // Arriba: cifras del pago y navegación entre pagos (anterior, siguiente, siguiente
 // pendiente). Consolidar congela el pago y sus dos cortes; reabrirlo pide confirmar,
 // porque cambia lo que ya se reportó. A un pago sin ventana se le fija a mano.
@@ -223,7 +223,7 @@ function describirEvento(e: CortesEvento): string {
     case "recuperar_sugerencia":
       return "recuperó la sugerencia";
     case "restablecer_pago":
-      return "devolvió un pago a la ventana del texto";
+      return "devolvió un pago a su ventana estándar";
     default:
       return e.tipo;
   }
@@ -790,7 +790,7 @@ export function CortesPanel({
                           onClick={() => void editar("restablecer", { pago_id: pago.pago_id })}
                           type="button"
                         >
-                          Volver a la ventana del texto
+                          Volver a la ventana estándar
                         </button>
                       ) : null}
                     </div>

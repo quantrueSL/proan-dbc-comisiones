@@ -160,12 +160,61 @@ def aplicar_cierre_de_mes(pagos: list[Pago]) -> list[Pago]:
     return salida
 
 
-def agrupar_pagos(docs: Iterable[DocPago], cierre_de_mes: bool = True) -> dict[FilaKey, list[Pago]]:
-    """Agrupa documentos en pagos por fila y ventana; los sin ventana quedan sueltos."""
+def _es_inicio_de_tramo(d: date) -> bool:
+    return d.weekday() == 5 or d.day == 1  # sábado, o primer día del mes
+
+
+def _es_fin_de_tramo(d: date) -> bool:
+    return d.weekday() == 4 or _es_fin_de_mes(d)  # viernes, o último día del mes
+
+
+def _tramo_mas_cercano(d: date, cumple) -> date:
+    """El día más cercano a `d` que cumple `cumple`; si hay dos a la misma distancia, el anterior."""
+    for k in range(0, 8):
+        for candidato in (d - timedelta(days=k), d + timedelta(days=k)):
+            if cumple(candidato):
+                return candidato
+    return d
+
+
+def ventana_estandar(desde: date, hasta: date) -> tuple[date, date]:
+    """La ventana del texto acomodada a las semanas sábado-viernes y al fin de mes.
+
+    El texto de SAP trae ventanas que se traslapan o se corren un día ("5 al 12" y "12 al 18"); la regla del
+    negocio es la semana sábado a viernes, cortada en el cambio de mes. Cada borde se lleva al inicio o fin de
+    tramo más cercano. Si así la ventana quedara al revés (un texto de un solo día suelto), se deja como viene.
+    """
+    ini = _tramo_mas_cercano(desde, _es_inicio_de_tramo)
+    fin = _tramo_mas_cercano(hasta, _es_fin_de_tramo)
+    return (ini, fin) if ini <= fin else (desde, hasta)
+
+
+def _sin_traslapes(pagos: list[Pago]) -> list[Pago]:
+    """Si un pago empieza antes de que acabe el anterior, empieza el día siguiente (los pagos ya vienen ordenados)."""
+    salida: list[Pago] = []
+    for p in pagos:
+        previo = next((q for q in reversed(salida) if q.ini is not None), None)
+        if previo is not None and p.ini is not None and p.ini <= previo.fin < p.fin:
+            p = replace(p, ini=previo.fin + DIA)
+        salida.append(p)
+    return salida
+
+
+def agrupar_pagos(
+    docs: Iterable[DocPago], cierre_de_mes: bool = True, estandar: bool = True
+) -> dict[FilaKey, list[Pago]]:
+    """Agrupa documentos en pagos por fila y ventana; los sin ventana quedan sueltos.
+
+    Con `estandar` la ventana de cada pago es la del texto acomodada a sábado-viernes y fin de mes
+    (`ventana_estandar`) y los pagos no se traslapan; dos documentos que quedan en la misma ventana son un pago.
+    """
     por_fila: dict[FilaKey, dict[tuple, list[DocPago]]] = defaultdict(lambda: defaultdict(list))
     for d in docs:
         llave = (d.sociedad, d.comisionista_id, d.division_code)
-        grupo = (d.desde, d.hasta) if d.desde and d.hasta else ("sin", d.doc_id)
+        if d.desde and d.hasta:
+            grupo = ventana_estandar(d.desde, d.hasta) if estandar else (d.desde, d.hasta)
+        else:
+            grupo = ("sin", d.doc_id)
         por_fila[llave][grupo].append(d)
 
     out: dict[FilaKey, list[Pago]] = {}
@@ -187,6 +236,8 @@ def agrupar_pagos(docs: Iterable[DocPago], cierre_de_mes: bool = True) -> dict[F
                 )
             )
         pagos.sort(key=lambda p: (p.ini is None, p.ini or date.min, p.fin or date.min, p.pago_id))
+        if estandar:
+            pagos = _sin_traslapes(pagos)
         out[llave] = aplicar_cierre_de_mes(pagos) if cierre_de_mes else pagos
     return out
 
@@ -574,6 +625,7 @@ def construir_filas(
     estados: Mapping[FilaKey, EstadoFila] | None = None,
     sugerir_en: tuple[date, date] | None = None,
     cierre_de_mes: bool = True,
+    estandar: bool = True,
 ) -> dict[FilaKey, FilaResuelta]:
     """Resuelve todas las filas. `diario`: dicts con sociedad, comisionista_id, division_code, fecha, comision."""
     dias: dict[FilaKey, dict[date, float]] = defaultdict(dict)
@@ -583,6 +635,6 @@ def construir_filas(
 
     estados = estados or {}
     out = {}
-    for key, pagos in agrupar_pagos(docs, cierre_de_mes).items():
+    for key, pagos in agrupar_pagos(docs, cierre_de_mes, estandar).items():
         out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en)
     return out

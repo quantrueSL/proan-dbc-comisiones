@@ -168,3 +168,46 @@ ventanas; ninguna cruza el fin de mes por dentro, todas están cortadas ahí).
   sin explicación 2,765 -> 2,779. La regla explica 232 de las 443 sugerencias de borde de la sección 3.
 - Pendiente: asignar días sueltos a un pago que no sea contiguo (para mandar el día de cierre al pago
   correcto cuando se sepa cuál es). Hoy una ventana es un rango continuo.
+
+## 8. Ventanas estándar (sábado-viernes y fin de mes)
+
+Decisión de Silvana: la ventana por defecto de un pago no es la del texto tal cual (que trae cosas como "5 al 12" y "12 al 18")
+sino la semana sábado-viernes, cortada en el cambio de mes. Cada borde del texto se lleva al inicio (sábado o día 1) o fin
+(viernes o último día) de tramo más cercano; si hay empate, al anterior. Un texto de un solo día suelto que quedaría al revés se
+deja como viene. Después, si un pago empieza antes de que acabe el anterior, empieza el día siguiente.
+
+Sobre ene–sep 2026 (5,021 pagos, con la regla del último día del mes): cuadran 1,290 → 1,316, con sugerencia 211 → 188,
+sin explicación 2,779 → 2,776, y los traslapes pasan de 56 a 0. No se unió ningún pago (5,021 antes y después).
+
+## 9. Último día con cobros: ¿cierra mejor moviéndolo al pago que indica el análisis?
+
+Se simuló, sobre ene–sep 2026 con ventanas estándar, tres reglas: S0 sin regla, S1 la actual (último día del calendario fuera de su pago, sin
+destino) y S2 el último día con cobros de cada mes fuera de su pago y sumado al pago de destino de la tabla del análisis de Silvana.
+
+- Pagos que cuadran (4,542): S0 1,192 · S1 1,411 · S2 1,441 (+30 sobre la actual).
+- **Sacar el día de su pago funciona todos los meses:** arregla 21, 12, 53, 42, 28, 33 y 37 pagos (ene, feb, mar, abr, jun, jul, ago)
+  y rompe 2 o menos por mes.
+- **Sumarlo al destino funciona en parte** (arregla / rompe en el pago de destino): abril, 3.º pago, +23/−9; junio, 1.º, +27/−4;
+  julio, 3.º, +17/−11; agosto, 2.º, +11/−19; enero, 1.º, +11/−21; febrero, 1.º, +9/−22; marzo, 1.º, +10/−25; mayo (30 may), 2.º, +9/−20.
+  Aplicarlo a todos empeora los pagos de ene, feb, mar y ago, que cuadraban sin el día.
+- En mayo el último día con cobros es el domingo 31 ($74K), no el sábado 30 ($444K) del análisis.
+- Conclusión: la exclusión sí se sostiene; el destino no es igual para todos los comisionistas. Mejor como sugerencia por pago que como regla.
+
+## 10. Dónde se pagó lo cobrado el último día (residuos por comisionista)
+
+Método: solo casos donde el pago de la semana del último día cuadra SIN ese día (ahí se sabe que salió de su semana). Se busca en los
+pagos siguientes (hasta 6) uno cuyo residuo (pagado − calculado) sea igual a lo cobrado ese día (±$1).
+
+| Mes | Casos claros | Exacto en el pago (k) | Solo una parte | Sobrante mayor al día |
+|---|---|---|---|---|
+| Ene | 20 | 10 (k=1) | 6 | 2 |
+| Feb | 12 | 6 (k=1) | 4 | 1 |
+| Mar | 50 | 7 (k=1), 3 (k=2) | 9 | 28 |
+| Abr | 42 | 23 (k=3), 6 (k=2) | 8 | 2 |
+| Jun | 28 | 22 (k=1) | 2 | 2 |
+| Jul | 33 | 15 (k=3), 2 (k=2) | 10 | 4 |
+| Ago | 36 | 11 (k=2) | 3 | 16 |
+
+El destino por mes coincide con la tabla del análisis (1.º, 1.º, 1.º, 3.º, —, 1.º, 3.º, 2.º). Los pagos de destino que "se rompían" al sumar
+el día a todos son comisionistas cuyo día NO salió de su semana: el movimiento es por comisionista, no global. Mayo no se pudo medir
+(sábado 30 sin casos claros). Casos sin pago de origen en mayo: 79.
