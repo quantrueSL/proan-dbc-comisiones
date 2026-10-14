@@ -15,6 +15,7 @@ type ShellFeatures = {
   flujoProducto: { enabled: boolean };
   comisiones: { enabled: boolean };
   conciliacion: { enabled: boolean };
+  conciliacionCortes: { enabled: boolean };
 };
 
 type ProanAuthenticatedShellProps = {
@@ -28,7 +29,7 @@ type ProanAuthenticatedShellProps = {
 // y conciliación documental (estas dos con el motor todavía bloqueado — ver
 // comisiones_engine.py / conciliacion_engine.py — así que la pantalla muestra
 // una vista previa de ejemplo mientras tanto).
-type NavKey = "flujoProducto" | "comisiones" | "conciliacion";
+type NavKey = "flujoProducto" | "comisiones" | "conciliacion" | "conciliacionCortes";
 type NavItem = {
   href: string;
   key: string;
@@ -38,7 +39,8 @@ type NavItem = {
 const NAV_ITEMS: Record<NavKey, NavItem> = {
   flujoProducto: { href: "/flujo-producto", key: "flujoProducto", label: "Flujo de producto" },
   comisiones: { href: "/comisiones", key: "comisiones", label: "Comisiones" },
-  conciliacion: { href: "/conciliacion", key: "conciliacion", label: "Conciliación" }
+  conciliacion: { href: "/conciliacion", key: "conciliacion", label: "Conciliación" },
+  conciliacionCortes: { href: "/conciliacion-cortes", key: "conciliacionCortes", label: "Conciliación por cortes" }
 };
 
 // El manual abre la barra, antes que los módulos: los datos de esta herramienta

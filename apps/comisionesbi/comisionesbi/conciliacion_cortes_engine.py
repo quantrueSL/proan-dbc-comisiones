@@ -368,7 +368,10 @@ def resolver_fila(
     pagos: list[Pago],
     serie: SerieDiaria,
     estado: EstadoFila | None = None,
+    sugerir_en: tuple[date, date] | None = None,
 ) -> FilaResuelta:
+    """`sugerir_en`: si se da, solo se buscan sugerencias en los pagos que tocan ese rango; los demás
+    (vecinos cargados de margen) quedan como "sin explicación" sin gastar la búsqueda."""
     estado = estado or EstadoFila()
     vs: list[_V] = []
     sin_ventana: list[PagoResuelto] = []
@@ -406,7 +409,8 @@ def resolver_fila(
             r.estado = CONSOLIDADO
             r.drift = round(serie.suma(v.ini, v.fin) - (v.frozen_calc or 0.0), 2)
         elif abs(dif) > TOLERANCIA:
-            r.sugerencia = None if v.pago_id in ctx.descartadas else _mejor_sugerencia(ctx, i)
+            fuera = sugerir_en is not None and not (v.ini <= sugerir_en[1] and v.fin >= sugerir_en[0])
+            r.sugerencia = None if fuera or v.pago_id in ctx.descartadas else _mejor_sugerencia(ctx, i)
             r.estado = SUGERENCIA if r.sugerencia else SIN_EXPLICACION
         resueltos.append(r)
 
@@ -534,6 +538,7 @@ def construir_filas(
     docs: Iterable[DocPago],
     diario: Iterable[Mapping],
     estados: Mapping[FilaKey, EstadoFila] | None = None,
+    sugerir_en: tuple[date, date] | None = None,
 ) -> dict[FilaKey, FilaResuelta]:
     """Resuelve todas las filas. `diario`: dicts con sociedad, comisionista_id, division_code, fecha, comision."""
     dias: dict[FilaKey, dict[date, float]] = defaultdict(dict)
@@ -544,5 +549,5 @@ def construir_filas(
     estados = estados or {}
     out = {}
     for key, pagos in agrupar_pagos(docs).items():
-        out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key))
+        out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en)
     return out

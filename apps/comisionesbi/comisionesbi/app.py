@@ -6,10 +6,11 @@ from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from comisionesbi.catalog_engine import catalog as build_catalog
 from comisionesbi.comisiones_engine import build_report
+from comisionesbi.conciliacion_cortes_service import build_detalle, build_fila, build_mes
 from comisionesbi.conciliacion_engine import build_conciliacion, detalle_diario, detalle_factura
 from comisionesbi.db import BigQueryConfigError, BigQueryQueryError
 from comisionesbi.flujo_engine import build_flujo
@@ -92,6 +93,37 @@ class ReconciliationQuery(BaseModel):
     def _rango_coherente(self) -> "ReconciliationQuery":
         if self.start_date > self.end_date:
             raise ValueError("start_date no puede ser posterior a end_date.")
+        return self
+
+
+class CortesMesQuery(BaseModel):
+    """Mes en formato AAAA-MM; los demás filtros son opcionales (la pantalla filtra también en el cliente)."""
+
+    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    sociedad: str | None = None
+    division: str | None = None
+    comisionista_id: str | None = None
+
+
+class CortesFilaQuery(BaseModel):
+    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    sociedad: str
+    comisionista_id: str
+    # Los pagos cuyo texto no trae división reconocible quedan en una fila sin división.
+    division_code: str | None = None
+
+
+class CortesDetalleQuery(BaseModel):
+    sociedad: str
+    comisionista_id: str
+    division_code: str | None = None
+    ini: date
+    fin: date
+
+    @model_validator(mode="after")
+    def _rango_coherente(self) -> "CortesDetalleQuery":
+        if self.ini > self.fin:
+            raise ValueError("ini no puede ser posterior a fin.")
         return self
 
 
@@ -203,4 +235,41 @@ def post_reconciliation_factura(body: ReconciliationQuery) -> list[dict]:
         comisionista_id=body.comisionista_id,
         start_date=body.start_date,
         end_date=body.end_date,
+    )
+
+
+# ─── Conciliación por cortes (pestaña nueva, ver conciliacion_cortes_service.py) ───
+
+
+@app.post("/v1/comisionesbi/cortes/mes")
+def post_cortes_mes(body: CortesMesQuery) -> dict:
+    """La lista del mes: pagos por sociedad × comisionista × división con su estado y sugerencia."""
+    return build_mes(
+        mes=body.mes,
+        sociedad=body.sociedad,
+        division=body.division,
+        comisionista_id=body.comisionista_id,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/fila")
+def post_cortes_fila(body: CortesFilaQuery) -> dict:
+    """El panel de una fila: todos sus pagos cercanos al mes y sus cobros diarios."""
+    return build_fila(
+        mes=body.mes,
+        sociedad=body.sociedad,
+        comisionista_id=body.comisionista_id,
+        division_code=body.division_code,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/detalle")
+def post_cortes_detalle(body: CortesDetalleQuery) -> dict:
+    """Detalle por producto acotado a la ventana de un pago."""
+    return build_detalle(
+        sociedad=body.sociedad,
+        comisionista_id=body.comisionista_id,
+        division_code=body.division_code,
+        ini=body.ini,
+        fin=body.fin,
     )

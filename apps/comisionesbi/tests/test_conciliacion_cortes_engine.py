@@ -312,3 +312,11 @@ def test_construir_filas_suma_el_diario_por_fila_y_resuelve_cada_una():
     assert set(filas) == {KEY, otra}
     assert all(p.estado == OK for p in filas[KEY].pagos)
     assert filas[otra].pagos[0].estado == SIN_EXPLICACION and filas[otra].pagos[0].sin_calculo
+
+
+def test_sugerir_en_limita_la_busqueda_a_los_pagos_del_rango():
+    pagados = [suma(MONTOS, a, b) for a, b in [(0, 5), (6, 12), (13, 19), (20, 26), (27, 34)]]
+    pagos = agrupar_pagos(docs(SEMANAS, pagados))[KEY]
+    fr = resolver_fila(KEY, pagos, serie(), sugerir_en=(d(0), d(6)))
+    assert fr.pagos[0].estado == SUGERENCIA  # toca el rango
+    assert fr.pagos[3].sugerencia is None and fr.pagos[3].estado == SIN_EXPLICACION  # fuera del rango

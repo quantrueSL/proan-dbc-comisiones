@@ -455,3 +455,133 @@ export const EMPTY_CONCILIACION: ConciliacionResponse = {
   detalle: [],
   pago_semanal: []
 };
+
+// ---------------------------------------------------------------------------
+// Conciliación por cortes (pestaña nueva) -- ver conciliacion_cortes_service.py
+// ---------------------------------------------------------------------------
+// Un pago se identifica por su documento de SAP (`pago_id`), no por el texto.
+// Su ventana (`ini`-`fin`) es la que propone el texto del pago hasta que el
+// usuario la ajuste; el borde compartido de dos pagos contiguos es un "corte".
+
+export type CortesEstado = "ok" | "sug" | "sin" | "sinv" | "cons";
+
+export type CortesCambioBorde = { pago_id: string; borde: "ini" | "fin"; de: string; a: string };
+
+export type CortesAfectado = {
+  pago_id: string;
+  ini_antes: string;
+  fin_antes: string;
+  ini_despues: string;
+  fin_despues: string;
+  diferencia_antes: number;
+  diferencia_despues: number;
+};
+
+export type CortesSugerencia = {
+  tipo: string;
+  pago_id: string;
+  /** Todas las opciones exactas dejan igual a los pagos vecinos. */
+  unica: boolean;
+  n_opciones: number;
+  cambios: CortesCambioBorde[];
+  afectados: CortesAfectado[];
+};
+
+export type CortesPago = {
+  pago_id: string;
+  /** Documentos de SAP que forman el pago (casi siempre uno). */
+  docs: string[];
+  /** `null` en un pago sin ventana legible en el texto. */
+  ini: string | null;
+  fin: string | null;
+  ini_default: string | null;
+  fin_default: string | null;
+  pagado: number;
+  calculado: number | null;
+  /** Calculado − pagado. */
+  diferencia: number | null;
+  estado: CortesEstado;
+  sin_calculo: boolean;
+  /** Consolidado: calculado de hoy − calculado congelado. */
+  drift: number | null;
+  ajustado: boolean;
+  sugerencia: CortesSugerencia | null;
+};
+
+export type CortesHueco = { ini: string; fin: string; comision: number; despues_de: string; antes_de: string };
+export type CortesTraslape = { ini: string; fin: string; pagos: [string, string] };
+export type CortesCorte = { izq: string; der: string; fecha: string; congelado: boolean };
+
+export type CortesFila = {
+  fila_id: string;
+  sociedad: string;
+  comisionista_id: string;
+  comisionista: string | null;
+  division_code: string | null;
+  pagos: CortesPago[];
+  huecos: CortesHueco[];
+  traslapes: CortesTraslape[];
+  cortes: CortesCorte[];
+};
+
+export type CortesMesFilters = {
+  /** `AAAA-MM`. */
+  mes: string;
+  sociedad?: string | null;
+  division?: string | null;
+  comisionista_id?: string | null;
+};
+
+export type CortesMesResponse = {
+  mes: string;
+  desde: string;
+  hasta: string;
+  cobertura: { desde?: string; hasta?: string } | null;
+  filas: CortesFila[];
+};
+
+export type CortesFilaFilters = {
+  mes: string;
+  sociedad: string;
+  comisionista_id: string;
+  division_code: string | null;
+};
+
+export type CortesFilaResponse = {
+  mes: string;
+  fila: CortesFila | null;
+  /** [fecha ISO, comisión del día]. */
+  dias: [string, number][];
+};
+
+export type CortesDetalleFilters = {
+  sociedad: string;
+  comisionista_id: string;
+  division_code: string | null;
+  ini: string;
+  fin: string;
+};
+
+export type CortesDetalleRow = {
+  cedis: string | null;
+  oficina: string | null;
+  tipo_venta: string | null;
+  matnr: string;
+  descripcion: string | null;
+  unidad_venta: string | null;
+  unidad_tarifa: string | null;
+  tarifa: number | null;
+  num_lineas: number;
+  cantidad_venta_total: number | null;
+  monto_total: number;
+  cantidad_base_total: number | null;
+  comision_total: number;
+  lineas_sin_comision: number;
+};
+
+export type CortesDetalleResponse = {
+  ini: string;
+  fin: string;
+  filas: CortesDetalleRow[];
+  comision_total: number;
+};

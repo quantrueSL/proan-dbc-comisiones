@@ -5,6 +5,12 @@
 import { getComisionesbiServiceUrl } from "@/lib/env";
 import type {
   ComisionesCatalog,
+  CortesDetalleFilters,
+  CortesDetalleResponse,
+  CortesFilaFilters,
+  CortesFilaResponse,
+  CortesMesFilters,
+  CortesMesResponse,
   ConciliacionDiarioRow,
   ConciliacionFacturaRow,
   ConciliacionFilters,
@@ -99,4 +105,21 @@ export async function getComisionesReconciliationFactura(filters: ConciliacionFi
     method: "POST",
     body: filters
   });
+}
+
+// ── Conciliación por cortes (pestaña nueva) ─────────────────────────────────
+
+/** La lista del mes: pagos por comisionista y división con su estado y sugerencia. */
+export async function getCortesMes(filters: CortesMesFilters): Promise<CortesMesResponse> {
+  return comisionesbiFetchJson<CortesMesResponse>("/v1/comisionesbi/cortes/mes", { method: "POST", body: filters });
+}
+
+/** El panel de un pago: todos los pagos cercanos de su fila y los cobros diarios. */
+export async function getCortesFila(filters: CortesFilaFilters): Promise<CortesFilaResponse> {
+  return comisionesbiFetchJson<CortesFilaResponse>("/v1/comisionesbi/cortes/fila", { method: "POST", body: filters });
+}
+
+/** Detalle por producto acotado a la ventana de un pago. */
+export async function getCortesDetalle(filters: CortesDetalleFilters): Promise<CortesDetalleResponse> {
+  return comisionesbiFetchJson<CortesDetalleResponse>("/v1/comisionesbi/cortes/detalle", { method: "POST", body: filters });
 }
