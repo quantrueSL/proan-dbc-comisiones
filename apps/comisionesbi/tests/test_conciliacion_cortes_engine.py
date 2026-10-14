@@ -21,7 +21,7 @@ from comisionesbi.conciliacion_cortes_engine import (
     resolver_fila,
 )
 
-D0 = date(2026, 6, 27)  # sábado
+D0 = date(2026, 6, 20)  # sábado; ninguna ventana de estas pruebas termina en fin de mes
 KEY = ("DBC", "0000001000", "H")
 
 # 35 días; los domingos (índice 1, 8, 15...) sin cobros, como en la realidad.
@@ -204,6 +204,7 @@ def test_sugerencia_descartada_deja_el_pago_sin_explicacion():
     pid = fr.pagos[0].pago_id
     fr2 = fila_con_cortes_reales([5, 12, 19, 26], estado=EstadoFila(descartadas={pid}))
     assert fr2.pagos[0].estado == SIN_EXPLICACION and fr2.pagos[0].sugerencia is None
+    assert fr2.pagos[0].descartada is True and fr.pagos[0].descartada is False
 
 
 # ─── Consolidado ─────────────────────────────────────────────────────────
@@ -320,3 +321,40 @@ def test_sugerir_en_limita_la_busqueda_a_los_pagos_del_rango():
     fr = resolver_fila(KEY, pagos, serie(), sugerir_en=(d(0), d(6)))
     assert fr.pagos[0].estado == SUGERENCIA  # toca el rango
     assert fr.pagos[3].sugerencia is None and fr.pagos[3].estado == SIN_EXPLICACION  # fuera del rango
+
+
+# ─── Cierre de mes ───────────────────────────────────────────────────────
+
+
+def test_el_ultimo_dia_del_mes_sale_del_pago_que_termina_ese_dia_y_queda_como_hueco_de_cierre():
+    # 25 jun a 30 jun, y el siguiente pago arranca el 1 jul
+    base = date(2026, 6, 25)
+    ds = [
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", base, date(2026, 6, 30), 100.0),
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 7, 1), date(2026, 7, 3), 60.0),
+    ]
+    dias = {base + timedelta(days=i): 20.0 for i in range(9)}  # 20 por día del 25 jun al 3 jul
+    pagos = agrupar_pagos(ds)[("DBC", "X", "H")]
+    assert [(p.ini, p.fin) for p in pagos] == [(date(2026, 6, 25), date(2026, 6, 29)), (date(2026, 7, 1), date(2026, 7, 3))]
+    fr = resolver_fila(("DBC", "X", "H"), pagos, SerieDiaria(dias))
+    assert fr.pagos[0].calculado == 100.0 and fr.pagos[0].estado == OK  # 5 días x 20, sin el 30
+    assert fr.pagos[1].calculado == 60.0 and fr.pagos[1].estado == OK  # no se lleva el día de cierre
+    (h,) = fr.huecos
+    assert (h.ini, h.fin, h.comision, h.cierre) == (date(2026, 6, 30), date(2026, 6, 30), 20.0, True)
+    assert fr.cortes == []  # ya no comparten un corte
+
+
+def test_el_cierre_de_mes_se_puede_apagar_y_no_toca_ventanas_de_un_dia_ni_las_que_no_terminan_en_fin_de_mes():
+    ds = [DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 6, 30), date(2026, 6, 30), 10.0)]
+    assert agrupar_pagos(ds)[("DBC", "X", "H")][0].fin == date(2026, 6, 30)  # una sola jornada: no se acorta
+    ds = [DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 6, 23), date(2026, 6, 30), 10.0)]
+    assert agrupar_pagos(ds)[("DBC", "X", "H")][0].fin == date(2026, 6, 29)
+    assert agrupar_pagos(ds, cierre_de_mes=False)[("DBC", "X", "H")][0].fin == date(2026, 6, 30)
+    medio = [DocPago("DBC|2026|0000000003", "DBC", "X", "H", date(2026, 6, 23), date(2026, 6, 26), 10.0)]
+    assert agrupar_pagos(medio)[("DBC", "X", "H")][0].fin == date(2026, 6, 26)
+
+
+def test_un_hueco_de_un_dia_que_no_es_fin_de_mes_no_es_cierre():
+    pagos = agrupar_pagos(docs([(0, 6), (8, 13)], [suma(MONTOS, 0, 6), suma(MONTOS, 8, 13)]))[KEY]
+    fr = resolver_fila(KEY, pagos, serie())
+    assert fr.huecos[0].cierre is False

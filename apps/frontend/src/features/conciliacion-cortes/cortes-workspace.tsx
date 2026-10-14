@@ -30,6 +30,8 @@ type Props = {
   initialResponse: CortesMesResponse | null;
   mesInicial: string;
   meses: string[];
+  /** Solo el rol con permiso mueve cortes y aplica sugerencias; el resto ve. */
+  puedeEditar: boolean;
 };
 
 type Seleccion = { filaId: string; pagoId: string };
@@ -42,7 +44,7 @@ function etiquetaDivision(fila: DivisionRow): { codigo: string; nombre: string }
   return { codigo, nombre: nombre === null || nombre === undefined ? codigo : String(nombre) };
 }
 
-export function CortesWorkspace({ initialCatalog, initialError, initialResponse, mesInicial, meses }: Props) {
+export function CortesWorkspace({ initialCatalog, initialError, initialResponse, mesInicial, meses, puedeEditar }: Props) {
   const [mes, setMes] = useState(mesInicial);
   const [respuesta, setRespuesta] = useState(initialResponse);
   const [error, setError] = useState(initialError);
@@ -109,6 +111,14 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
 
   function elegir(fila: CortesFila, pagoId: string) {
     setSeleccion({ filaId: fila.fila_id, pagoId });
+  }
+
+  // Una edición devuelve la fila completa del rango cargado; la lista solo enseña los pagos que tocan el mes.
+  function reemplazarFila(nueva: CortesFila) {
+    const pagos = nueva.pagos.filter((p) => p.estado === "sinv" || (p.ini !== null && p.fin !== null && p.ini <= hasta && p.fin >= desde));
+    setRespuesta((actual) =>
+      actual ? { ...actual, filas: actual.filas.map((f) => (f.fila_id === nueva.fila_id ? { ...nueva, pagos } : f)) } : actual
+    );
   }
 
   return (
@@ -197,6 +207,11 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             </dt>
             <dd>{totales.sinPago.n}</dd>
             <small>{pesos(totales.sinPago.comision)} de comisión</small>
+            {totales.cierre.n ? (
+              <small title="Lo cobrado el último día del mes va con el pago de la semana siguiente">
+                Cierre de mes: {pesos(totales.cierre.comision)}
+              </small>
+            ) : null}
           </div>
         </dl>
       </section>
@@ -312,7 +327,9 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             filaResumen={filaSeleccionada}
             mes={mes}
             onCerrar={() => setSeleccion(null)}
+            onFilaActualizada={reemplazarFila}
             pagoId={seleccion.pagoId}
+            puedeEditar={puedeEditar}
           />
         ) : null}
       </div>

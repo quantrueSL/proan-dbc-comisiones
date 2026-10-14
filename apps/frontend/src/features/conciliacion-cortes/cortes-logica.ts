@@ -160,8 +160,10 @@ export type TotalEstado = { n: number; pagado: number; calculado: number; difAbs
 
 export type TotalesCortes = {
   porEstado: Record<CortesEstado, TotalEstado>;
-  /** Cobros que ningún pago cubre (huecos entre pagos con comisión), dentro del mes. */
+  /** Cobros que ningún pago cubre (huecos entre pagos con comisión), dentro del mes. No incluye el cierre de mes. */
   sinPago: { n: number; comision: number };
+  /** Lo cobrado el último día del mes, que va con el pago de la semana siguiente. */
+  cierre: { n: number; comision: number };
   totalPagos: number;
 };
 
@@ -181,6 +183,7 @@ export function totalesCortes(filas: CortesFila[], desde: string, hasta: string)
     cons: vacio()
   };
   const sinPago = { n: 0, comision: 0 };
+  const cierre = { n: 0, comision: 0 };
   let totalPagos = 0;
   for (const fila of filas) {
     for (const p of fila.pagos) {
@@ -193,17 +196,18 @@ export function totalesCortes(filas: CortesFila[], desde: string, hasta: string)
     }
     for (const h of fila.huecos) {
       if (h.comision > 0 && huecoToca(h, desde, hasta)) {
-        sinPago.n += 1;
-        sinPago.comision += h.comision;
+        const destino = h.cierre ? cierre : sinPago;
+        destino.n += 1;
+        destino.comision += h.comision;
       }
     }
   }
-  return { porEstado, sinPago, totalPagos };
+  return { porEstado, sinPago, cierre, totalPagos };
 }
 
 /** Cobros sin pago de una fila dentro del mes (para el aviso junto a su nombre). */
 export function huecosDelMes(fila: CortesFila, desde: string, hasta: string): { n: number; comision: number } {
-  const hs = fila.huecos.filter((h) => h.comision > 0 && huecoToca(h, desde, hasta));
+  const hs = fila.huecos.filter((h) => h.comision > 0 && !h.cierre && huecoToca(h, desde, hasta));
   return { n: hs.length, comision: hs.reduce((s, h) => s + h.comision, 0) };
 }
 
@@ -226,8 +230,8 @@ export function pagosEnVista(fila: CortesFila, pagoId: string, contexto: number)
 
 export type ElementoLinea =
   | { tipo: "pago"; pago: CortesPago }
-  | { tipo: "corte"; fecha: string; congelado: boolean }
-  | { tipo: "hueco"; ini: string; fin: string; comision: number }
+  | { tipo: "corte"; izq: string; fecha: string; congelado: boolean }
+  | { tipo: "hueco"; ini: string; fin: string; comision: number; cierre: boolean }
   | { tipo: "traslape"; ini: string; fin: string };
 
 /** Pagos en vista con lo que hay entre cada par: un corte compartido, un hueco o un traslape. */
@@ -239,12 +243,12 @@ export function elementosDeLinea(fila: CortesFila, vista: CortesPago[]): Element
     if (!sig) return;
     const corte = fila.cortes.find((c) => c.izq === pago.pago_id && c.der === sig.pago_id);
     if (corte) {
-      salida.push({ tipo: "corte", fecha: corte.fecha, congelado: corte.congelado });
+      salida.push({ tipo: "corte", izq: corte.izq, fecha: corte.fecha, congelado: corte.congelado });
       return;
     }
     const hueco = fila.huecos.find((h) => h.despues_de === pago.pago_id && h.antes_de === sig.pago_id);
     if (hueco) {
-      salida.push({ tipo: "hueco", ini: hueco.ini, fin: hueco.fin, comision: hueco.comision });
+      salida.push({ tipo: "hueco", ini: hueco.ini, fin: hueco.fin, comision: hueco.comision, cierre: hueco.cierre });
       return;
     }
     const traslape = fila.traslapes.find((t) => t.pagos[0] === pago.pago_id && t.pagos[1] === sig.pago_id);
@@ -340,4 +344,56 @@ const MESES_LARGOS = [
 export function etiquetaMes(mes: string): string {
   const [a, m] = mes.split("-").map(Number);
   return `${MESES_LARGOS[m - 1]} ${a}`;
+}
+
+// ─── Mover un corte (vista previa local) ─────────────────────────────────
+
+function sumaDias(dias: Map<string, number>, ini: string, fin: string): number {
+  let total = 0;
+  for (let d = ini; d <= fin; d = sumarDias(d, 1)) total += dias.get(d) ?? 0;
+  return total;
+}
+
+/** Fechas entre las que puede quedar el corte de un pago con el siguiente (último día del pago de la izquierda). */
+export function limitesDeCorte(fila: CortesFila, izqId: string): { min: string; max: string } | null {
+  const corte = fila.cortes.find((c) => c.izq === izqId);
+  const izq = fila.pagos.find((p) => p.pago_id === izqId);
+  const der = corte ? fila.pagos.find((p) => p.pago_id === corte.der) : undefined;
+  if (!corte || !izq?.ini || !der?.fin) return null;
+  return { min: izq.ini, max: sumarDias(der.fin, -1) };
+}
+
+/**
+ * La fila con el corte de `izqId` en `fecha`, recalculando al momento los dos pagos que toca con los
+ * cobros diarios ya cargados. Es solo una vista previa mientras la persona mueve el corte: lo que
+ * manda es lo que devuelve el servidor al guardar. Sin sugerencia (aún no se evaluó) y con "cuadra"
+ * o "sin explicación" según la diferencia.
+ */
+export function moverCorteLocal(fila: CortesFila, dias: Map<string, number>, izqId: string, fecha: string): CortesFila {
+  const corte = fila.cortes.find((c) => c.izq === izqId);
+  if (!corte) return fila;
+  const recalcula = (p: CortesPago, ini: string, fin: string): CortesPago => {
+    const calculado = Math.round(sumaDias(dias, ini, fin) * 100) / 100;
+    const diferencia = Math.round((calculado - p.pagado) * 100) / 100;
+    return {
+      ...p,
+      ini,
+      fin,
+      calculado,
+      diferencia,
+      sin_calculo: calculado === 0,
+      estado: Math.abs(diferencia) <= 1 ? "ok" : "sin",
+      sugerencia: null,
+      ajustado: true
+    };
+  };
+  return {
+    ...fila,
+    pagos: fila.pagos.map((p) => {
+      if (p.pago_id === corte.izq && p.ini) return recalcula(p, p.ini, fecha);
+      if (p.pago_id === corte.der && p.fin) return recalcula(p, sumarDias(fecha, 1), p.fin);
+      return p;
+    }),
+    cortes: fila.cortes.map((c) => (c.izq === izqId ? { ...c, fecha } : c))
+  };
 }

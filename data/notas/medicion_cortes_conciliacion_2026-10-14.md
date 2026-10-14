@@ -149,3 +149,22 @@ Lo que sí se ve:
 
 Lectura: no es desfase, ventana, documento suelto ni producto. Se parece más a comportamiento propio de
 cada comisionista (acuerdos o ajustes manuales). No se puede cerrar solo con datos de BigQuery.
+
+## 7. Regla de cierre: el último día del mes va con el pago de la semana siguiente
+
+Dicha por Silvana el 14-oct (el cierre se hace durante ese día y no alcanza a entrar en la misma
+semana). Se midió sobre los pagos de ene-sep cuyas ventanas terminan en fin de mes (1,131 de las 5,001
+ventanas; ninguna cruza el fin de mes por dentro, todas están cortadas ahí).
+
+- Con cobros el último día: 740 pagos. Con ese día dentro del pago cuadran 7 (1%); sin él, 225 (31%).
+  La regla se sostiene para el pago que termina en fin de mes.
+- A qué pago va ese día NO se sostiene con los datos. Sumarlo al pago siguiente (1.º, 2.º, 3.º o 4.º)
+  mejora 55, 24, 40 y 0 pagos y empeora 224, 266, 262 y 89. Dárselo al pago que arranca el día 1 rompe 211
+  pagos que ya cuadraban. Puede ser distinto por comisionista, o que ese día se pague fuera de estas ventanas.
+- Decisión: el pago que termina en fin de mes pasa a terminar un día antes (parte de la ventana por
+  defecto) y ese día queda como un hueco de un día marcado `cierre`, sin asignar. La pantalla lo enseña
+  aparte ("Cierre de mes") y no lo cuenta como cobros sin pago.
+- Efecto sobre el motor, mismas filas: cuadran 1,072 -> 1,290 (de 4,280); con sugerencia de borde 443 -> 211;
+  sin explicación 2,765 -> 2,779. La regla explica 232 de las 443 sugerencias de borde de la sección 3.
+- Pendiente: asignar días sueltos a un pago que no sea contiguo (para mandar el día de cierre al pago
+  correcto cuando se sepa cuál es). Hoy una ventana es un rango continuo.

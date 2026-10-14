@@ -1,15 +1,19 @@
 "use client";
 
 // Panel de un pago: línea de tiempo con los cortes, sugerencia o advertencia y,
-// aparte, el detalle por producto de su ventana. Solo lectura (fase 3): los
-// botones de aplicar y consolidar están deshabilitados hasta que exista el
-// estado guardado (Firestore).
+// aparte, el detalle por producto de su ventana. Quien tiene permiso puede mover
+// un corte con las flechas (los clics seguidos se juntan en un solo guardado),
+// aplicar o descartar la sugerencia y devolver el pago a la ventana del texto.
+// Consolidar llega en la siguiente fase.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CortesAccion,
   CortesDetalleResponse,
+  CortesEvento,
   CortesFila,
   CortesFilaResponse,
+  CortesHistorialResponse,
   CortesPago
 } from "@/types/comisiones";
 import {
@@ -20,6 +24,8 @@ import {
   elementosDeLinea,
   fechaConDia,
   fechaCorta,
+  limitesDeCorte,
+  moverCorteLocal,
   nombreComisionista,
   pagosEnVista,
   pesos,
@@ -32,10 +38,14 @@ type Props = {
   mes: string;
   filaResumen: CortesFila;
   pagoId: string;
+  puedeEditar: boolean;
   onCerrar: () => void;
+  /** La fila ya guardada: la lista del mes se actualiza con ella. */
+  onFilaActualizada: (fila: CortesFila) => void;
 };
 
 const numero = new Intl.NumberFormat("es-MX", { maximumFractionDigits: 2 });
+const PAUSA_PARA_GUARDAR_MS = 700;
 
 async function pedir<T>(ruta: string, cuerpo: unknown): Promise<T> {
   const res = await fetch(ruta, {
@@ -73,13 +83,56 @@ function Cifras({ pago }: { pago: CortesPago }) {
   );
 }
 
-export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
+const formatoMomento = new Intl.DateTimeFormat("es-MX", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "America/Mexico_City"
+});
+
+function describirEvento(e: CortesEvento): string {
+  const fecha = e.detalle?.fecha ? fechaConDia(e.detalle.fecha) : "";
+  switch (e.tipo) {
+    case "mover_corte":
+      return `movió un corte al ${fecha}`;
+    case "mover_borde":
+      return `movió el ${e.detalle?.borde === "ini" ? "inicio" : "fin"} de un pago al ${fecha}`;
+    case "aplicar_sugerencia":
+      return "aplicó la sugerencia";
+    case "descartar_sugerencia":
+      return "descartó la sugerencia";
+    case "recuperar_sugerencia":
+      return "recuperó la sugerencia";
+    case "restablecer_pago":
+      return "devolvió un pago a la ventana del texto";
+    default:
+      return e.tipo;
+  }
+}
+
+export function CortesPanel({ mes, filaResumen, pagoId, puedeEditar, onCerrar, onFilaActualizada }: Props) {
   const [tab, setTab] = useState<"cortes" | "detalle">("cortes");
   const [contexto, setContexto] = useState(1);
   const [datos, setDatos] = useState<CortesFilaResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<CortesDetalleResponse | null>(null);
   const [detalleError, setDetalleError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
+  const [pendiente, setPendiente] = useState<{ izqId: string; fecha: string } | null>(null);
+  const [historial, setHistorial] = useState<CortesEvento[] | null>(null);
+  const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ultimaFecha = useRef<{ izqId: string; fecha: string } | null>(null);
+
+  const cargarFila = useCallback(async () => {
+    const r = await pedir<CortesFilaResponse>("/api/comisionesbi/cortes/fila", {
+      mes,
+      sociedad: filaResumen.sociedad,
+      comisionista_id: filaResumen.comisionista_id,
+      division_code: filaResumen.division_code
+    });
+    setDatos(r);
+    return r;
+  }, [mes, filaResumen.sociedad, filaResumen.comisionista_id, filaResumen.division_code]);
 
   // Cambió el pago: se vuelve a la pestaña de cortes y se vuelve a pedir la fila.
   useEffect(() => {
@@ -89,47 +142,136 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
     setDetalle(null);
     setError(null);
     setDetalleError(null);
-    pedir<CortesFilaResponse>("/api/comisionesbi/cortes/fila", {
-      mes,
-      sociedad: filaResumen.sociedad,
-      comisionista_id: filaResumen.comisionista_id,
-      division_code: filaResumen.division_code
-    })
-      .then((r) => vigente && setDatos(r))
-      .catch((e) => vigente && setError(e instanceof Error ? e.message : "No se pudo cargar el pago."));
+    setAviso(null);
+    setPendiente(null);
+    setHistorial(null);
+    cargarFila().catch((e) => vigente && setError(e instanceof Error ? e.message : "No se pudo cargar el pago."));
     return () => {
       vigente = false;
+      if (temporizador.current) clearTimeout(temporizador.current);
     };
-  }, [mes, filaResumen.fila_id, pagoId, filaResumen.sociedad, filaResumen.comisionista_id, filaResumen.division_code]);
+  }, [cargarFila, filaResumen.fila_id, pagoId]);
 
-  const fila = datos?.fila ?? null;
-  const pago = (fila ?? filaResumen).pagos.find((p) => p.pago_id === pagoId) ?? null;
+  const filaBase = datos?.fila ?? null;
   const dias = useMemo(() => new Map(datos?.dias ?? []), [datos]);
+  // Mientras hay un corte sin guardar se dibuja con la vista previa local.
+  const fila = useMemo(
+    () => (filaBase && pendiente ? moverCorteLocal(filaBase, dias, pendiente.izqId, pendiente.fecha) : filaBase),
+    [filaBase, dias, pendiente]
+  );
+  const pago = (fila ?? filaResumen).pagos.find((p) => p.pago_id === pagoId) ?? null;
 
-  // El detalle por producto se pide solo al abrir su pestaña.
+  // El detalle por producto se pide solo al abrir su pestaña (y otra vez si la ventana cambió).
+  const ventanaKey = pago?.ini && pago.fin ? `${pago.ini}|${pago.fin}` : null;
   useEffect(() => {
-    if (tab !== "detalle" || !pago || !pago.ini || !pago.fin || detalle) return;
+    setDetalle(null);
+    setDetalleError(null);
+  }, [ventanaKey]);
+  useEffect(() => {
+    if (tab !== "detalle" || !ventanaKey || detalle || pendiente) return;
+    const [ini, fin] = ventanaKey.split("|");
     let vigente = true;
     pedir<CortesDetalleResponse>("/api/comisionesbi/cortes/detalle", {
       sociedad: filaResumen.sociedad,
       comisionista_id: filaResumen.comisionista_id,
       division_code: filaResumen.division_code,
-      ini: pago.ini,
-      fin: pago.fin
+      ini,
+      fin
     })
       .then((r) => vigente && setDetalle(r))
       .catch((e) => vigente && setDetalleError(e instanceof Error ? e.message : "No se pudo cargar el detalle."));
     return () => {
       vigente = false;
     };
-  }, [tab, pago, detalle, filaResumen.sociedad, filaResumen.comisionista_id, filaResumen.division_code]);
+  }, [tab, ventanaKey, detalle, pendiente, filaResumen.sociedad, filaResumen.comisionista_id, filaResumen.division_code]);
+
+  async function editar(accion: CortesAccion, extra: Record<string, unknown>): Promise<boolean> {
+    if (!filaBase) return false;
+    setGuardando(true);
+    setAviso(null);
+    try {
+      const res = await fetch(`/api/comisionesbi/cortes/editar/${accion}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mes,
+          sociedad: filaResumen.sociedad,
+          comisionista_id: filaResumen.comisionista_id,
+          division_code: filaResumen.division_code,
+          version: filaBase.version,
+          ...extra
+        })
+      });
+      const payload = (await res.json().catch(() => null)) as (CortesFilaResponse & { detail?: string; codigo?: string }) | null;
+      if (res.ok && payload?.fila) {
+        setDatos(payload);
+        setHistorial(null);
+        onFilaActualizada(payload.fila);
+        return true;
+      }
+      if (res.status === 409 && payload?.codigo === "conflicto_version") {
+        setAviso("Otra persona cambió esta fila mientras la editabas. Se cargó lo último.");
+        const nueva = await cargarFila().catch(() => null);
+        if (nueva?.fila) onFilaActualizada(nueva.fila);
+      } else {
+        setAviso(payload?.detail || "No se pudo guardar el cambio.");
+      }
+      return false;
+    } catch {
+      setAviso("No se pudo guardar el cambio. Vuelve a intentarlo en unos instantes.");
+      return false;
+    } finally {
+      setPendiente(null);
+      ultimaFecha.current = null;
+      setGuardando(false);
+    }
+  }
+
+  // Un clic mueve el corte un día en la vista previa; cuando pasan 700 ms sin otro clic, se guarda UNA vez.
+  function moverCorte(izqId: string, delta: number) {
+    if (!filaBase || guardando) return;
+    const actual = ultimaFecha.current?.izqId === izqId ? ultimaFecha.current.fecha : filaBase.cortes.find((c) => c.izq === izqId)?.fecha;
+    const limites = limitesDeCorte(filaBase, izqId);
+    if (!actual || !limites) return;
+    const nueva = sumarDias(actual, delta);
+    if (nueva < limites.min || nueva > limites.max) return;
+    ultimaFecha.current = { izqId, fecha: nueva };
+    setPendiente({ izqId, fecha: nueva });
+    if (temporizador.current) clearTimeout(temporizador.current);
+    temporizador.current = setTimeout(() => {
+      const ultima = ultimaFecha.current;
+      const guardada = filaBase.cortes.find((c) => c.izq === izqId)?.fecha;
+      if (!ultima || ultima.fecha === guardada) {
+        ultimaFecha.current = null;
+        setPendiente(null);
+        return;
+      }
+      void editar("mover", { izq_pago_id: ultima.izqId, fecha: ultima.fecha });
+    }, PAUSA_PARA_GUARDAR_MS);
+  }
+
+  async function abrirHistorial(abierto: boolean) {
+    if (!abierto || historial) return;
+    try {
+      const r = await pedir<CortesHistorialResponse>("/api/comisionesbi/cortes/editar/historial", {
+        sociedad: filaResumen.sociedad,
+        comisionista_id: filaResumen.comisionista_id,
+        division_code: filaResumen.division_code,
+        limite: 20
+      });
+      setHistorial(r.eventos);
+    } catch {
+      setHistorial([]);
+    }
+  }
 
   if (!pago) return null;
   const sinVentana = pago.ini === null || pago.fin === null;
-  const sugerencia = pago.estado === "sug" ? pago.sugerencia : null;
+  const sugerencia = pago.estado === "sug" && !pendiente ? pago.sugerencia : null;
   const marcados = diasQueCambian(sugerencia);
   const vista = fila && !sinVentana ? pagosEnVista(fila, pago.pago_id, contexto) : [];
   const elementos = fila ? elementosDeLinea(fila, vista) : [];
+  const puedeActuar = puedeEditar && !guardando && !pendiente && !!filaBase;
 
   return (
     <section aria-label="Panel del pago" className="cortes-panel">
@@ -142,6 +284,8 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
           </p>
         </div>
         <div className="cortes-panel-cab-acc">
+          {pendiente ? <span className="cortes-estado-guardado">Cambio sin guardar…</span> : null}
+          {guardando ? <span className="cortes-estado-guardado">Guardando…</span> : null}
           <Pastilla estado={pago.estado} />
           <button aria-label="Cerrar el panel" className="cortes-cerrar" onClick={onCerrar} type="button">
             ×
@@ -157,6 +301,12 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
           Detalle por producto
         </button>
       </div>
+
+      {aviso ? (
+        <p className="cortes-aviso" role="alert">
+          {aviso}
+        </p>
+      ) : null}
 
       {tab === "detalle" ? (
         <div className="cortes-bloque">
@@ -222,8 +372,8 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                 <h3>Pago sin ventana</h3>
                 <p>
                   El texto de este pago no trae fechas que se puedan leer, así que no sabemos qué cobros cubre. Pagado{" "}
-                  {pesos(pago.pagado)}, documento {pago.docs.join(", ")}. Poder fijar su inicio y su fin llega con la
-                  edición de cortes.
+                  {pesos(pago.pagado)}, documento {pago.docs.join(", ")}. Poder fijar su inicio y su fin llega más
+                  adelante.
                 </p>
               </div>
             </div>
@@ -237,11 +387,38 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                       <div className="cortes-linea">
                         {elementos.map((el, i) => {
                           if (el.tipo === "corte") {
+                            const movible = puedeEditar && !el.congelado;
+                            const limites = filaBase ? limitesDeCorte(filaBase, el.izq) : null;
                             return (
                               <div className={`cortes-corte${el.congelado ? " is-congelado" : ""}`} key={`c${i}`}>
                                 <span>Corte</span>
                                 <b>{fechaConDia(el.fecha)}</b>
                                 {el.congelado ? <small>Congelado</small> : null}
+                                {movible ? (
+                                  <span className="cortes-corte-flechas">
+                                    <button
+                                      aria-label="Mover el corte un día antes"
+                                      disabled={guardando || !limites || el.fecha <= limites.min}
+                                      onClick={() => moverCorte(el.izq, -1)}
+                                      type="button"
+                                    >
+                                      ◀
+                                    </button>
+                                    <button
+                                      aria-label="Mover el corte un día después"
+                                      disabled={guardando || !limites || el.fecha >= limites.max}
+                                      onClick={() => moverCorte(el.izq, 1)}
+                                      type="button"
+                                    >
+                                      ▶
+                                    </button>
+                                  </span>
+                                ) : null}
+                                {sugerencia?.cambios.some((c) => c.borde === "fin" && c.pago_id === el.izq) ? (
+                                  <small className="cortes-sugerido">
+                                    Sugerido: {fechaConDia(sugerencia.cambios.find((c) => c.borde === "fin" && c.pago_id === el.izq)!.a)}
+                                  </small>
+                                ) : null}
                               </div>
                             );
                           }
@@ -258,10 +435,12 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                             const dd: string[] = [];
                             for (let d = el.ini; d <= el.fin; d = sumarDias(d, 1)) dd.push(d);
                             return (
-                              <div className="cortes-tramo is-hueco" key={`h${i}`}>
+                              <div className={`cortes-tramo is-hueco${el.cierre ? " is-cierre" : ""}`} key={`h${i}`}>
                                 <div className="cortes-tramo-cab">
-                                  <b>Sin pago</b>
-                                  <span className="cortes-pastilla is-sinv">Cobros sin pago</span>
+                                  <b>{el.cierre ? "Cierre de mes" : "Sin pago"}</b>
+                                  <span className={`cortes-pastilla ${el.cierre ? "is-cons" : "is-sinv"}`}>
+                                    {el.cierre ? "Va con el pago siguiente" : "Cobros sin pago"}
+                                  </span>
                                 </div>
                                 <dl className="cortes-cifras">
                                   <div>
@@ -315,6 +494,16 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                       <button className="cortes-boton" onClick={() => setContexto((c) => (c === 1 ? 2 : 1))} type="button">
                         {contexto === 1 ? "Ampliar contexto (±2 pagos)" : "Reducir contexto (±1 pago)"}
                       </button>
+                      {pago.ajustado && puedeEditar ? (
+                        <button
+                          className="cortes-boton"
+                          disabled={!puedeActuar}
+                          onClick={() => void editar("restablecer", { pago_id: pago.pago_id })}
+                          type="button"
+                        >
+                          Volver a la ventana del texto
+                        </button>
+                      ) : null}
                     </div>
                   </>
                 ) : null}
@@ -337,10 +526,7 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                         {sugerencia.unica ? "Única opción exacta" : "Varias opciones, la de menor cambio"}
                       </span>
                     </div>
-                    <h3>
-                      Sugerencia:{" "}
-                      {cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}
-                    </h3>
+                    <h3>Sugerencia: {cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}</h3>
                     <div className="cortes-antes-despues">
                       {sugerencia.afectados.map((a) => (
                         <div key={a.pago_id}>
@@ -351,33 +537,83 @@ export function CortesPanel({ mes, filaResumen, pagoId, onCerrar }: Props) {
                         </div>
                       ))}
                     </div>
-                    <div className="cortes-acciones">
-                      <button className="cortes-boton is-primario" disabled title="Disponible cuando se pueda guardar" type="button">
-                        Aplicar
-                      </button>
-                      <button className="cortes-boton" disabled title="Disponible cuando se pueda guardar" type="button">
-                        Descartar
-                      </button>
-                    </div>
+                    {puedeEditar ? (
+                      <div className="cortes-acciones">
+                        <button
+                          className="cortes-boton is-primario"
+                          disabled={!puedeActuar}
+                          onClick={() => void editar("aplicar", { pago_id: pago.pago_id, cambios: sugerencia.cambios })}
+                          type="button"
+                        >
+                          Aplicar
+                        </button>
+                        <button
+                          className="cortes-boton"
+                          disabled={!puedeActuar}
+                          onClick={() => void editar("descartar", { pago_id: pago.pago_id })}
+                          type="button"
+                        >
+                          Descartar
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
 
-              {pago.estado === "sin" && !pago.sin_calculo ? (
+              {pago.estado === "sin" && !pago.sin_calculo && !pendiente ? (
                 <div className="cortes-bloque">
                   <div className="cortes-caja is-error">
                     <h3>Sin explicación</h3>
-                    <p>Ningún ajuste de hasta 3 días en los cortes cuadra este pago.</p>
+                    <p>
+                      {pago.descartada
+                        ? "Descartaron la sugerencia de este pago."
+                        : "Ningún ajuste de hasta 3 días en los cortes cuadra este pago."}
+                    </p>
+                    {pago.descartada && puedeEditar ? (
+                      <div className="cortes-acciones">
+                        <button
+                          className="cortes-boton"
+                          disabled={!puedeActuar}
+                          onClick={() => void editar("recuperar", { pago_id: pago.pago_id })}
+                          type="button"
+                        >
+                          Recuperar la sugerencia
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
 
               <div className="cortes-bloque cortes-pie">
-                <button className="cortes-boton is-primario" disabled title="Disponible cuando se pueda guardar" type="button">
+                <button className="cortes-boton is-primario" disabled title="Disponible en la siguiente fase" type="button">
                   Consolidar este pago
                 </button>
-                <span>Vista de solo lectura: los cortes y la consolidación se habilitan en la siguiente fase.</span>
+                <span>
+                  {puedeEditar
+                    ? "Consolidar se habilita en la siguiente fase."
+                    : "Solo lectura: tu rol no puede editar los cortes."}
+                </span>
               </div>
+
+              <details className="cortes-historial" onToggle={(e) => void abrirHistorial((e.target as HTMLDetailsElement).open)}>
+                <summary>Historial de esta fila</summary>
+                {historial === null ? <p className="hydro-muted">Cargando…</p> : null}
+                {historial && !historial.length ? <p className="hydro-muted">Sin cambios todavía.</p> : null}
+                {historial?.length ? (
+                  <ul>
+                    {historial.map((e, i) => (
+                      <li key={`${e.ts}-${i}`}>
+                        <time>{e.ts ? formatoMomento.format(new Date(e.ts)) : "—"}</time>
+                        <span>
+                          {e.usuario ?? "—"} {describirEvento(e)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </details>
             </>
           )}
         </>

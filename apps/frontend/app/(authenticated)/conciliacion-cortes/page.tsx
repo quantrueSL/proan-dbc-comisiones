@@ -11,7 +11,7 @@ function fechaMexicoISO(): string {
 
 // Pestaña de pruebas de conciliación por cortes: convive con /conciliacion.
 export default async function ConciliacionCortesPage() {
-  requireSession();
+  const sesion = requireSession();
 
   const hoy = fechaMexicoISO();
   const mes = mesPorDefecto(hoy);
@@ -41,6 +41,7 @@ export default async function ConciliacionCortesPage() {
       initialResponse={response}
       mesInicial={mes}
       meses={meses}
+      puedeEditar={sesion.role === "admin"}
     />
   );
 }

@@ -504,11 +504,21 @@ export type CortesPago = {
   sin_calculo: boolean;
   /** Consolidado: calculado de hoy − calculado congelado. */
   drift: number | null;
+  /** La persona descartó la sugerencia de este pago. */
+  descartada: boolean;
   ajustado: boolean;
   sugerencia: CortesSugerencia | null;
 };
 
-export type CortesHueco = { ini: string; fin: string; comision: number; despues_de: string; antes_de: string };
+export type CortesHueco = {
+  ini: string;
+  fin: string;
+  comision: number;
+  despues_de: string;
+  antes_de: string;
+  /** El último día del mes: va con el pago de la semana siguiente (regla del cliente), no es un cobro olvidado. */
+  cierre: boolean;
+};
 export type CortesTraslape = { ini: string; fin: string; pagos: [string, string] };
 export type CortesCorte = { izq: string; der: string; fecha: string; congelado: boolean };
 
@@ -518,6 +528,8 @@ export type CortesFila = {
   comisionista_id: string;
   comisionista: string | null;
   division_code: string | null;
+  /** Versión guardada de la fila: toda edición dice cuál vio. */
+  version: number;
   pagos: CortesPago[];
   huecos: CortesHueco[];
   traslapes: CortesTraslape[];
@@ -585,3 +597,23 @@ export type CortesDetalleResponse = {
   filas: CortesDetalleRow[];
   comision_total: number;
 };
+
+/** Acciones de edición (ver `app/api/comisionesbi/cortes/editar/[accion]`). */
+export type CortesAccion = "mover" | "mover-borde" | "aplicar" | "descartar" | "recuperar" | "restablecer";
+
+export type CortesEvento = {
+  tipo: string;
+  usuario: string | null;
+  pago_id: string | null;
+  mes?: string;
+  version?: number;
+  ts: string | null;
+  detalle?: Record<string, string>;
+  antes?: Record<string, Record<string, string>>;
+  despues?: Record<string, Record<string, string>>;
+};
+
+export type CortesHistorialResponse = { eventos: CortesEvento[] };
+
+/** Error de una edición: `codigo` distingue el conflicto de versión del resto. */
+export type CortesErrorEdicion = { detail?: string; codigo?: string };

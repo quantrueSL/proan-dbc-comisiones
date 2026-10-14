@@ -4,12 +4,17 @@ import logging
 import os
 from datetime import date
 
-from fastapi import FastAPI, Request
+from typing import Literal
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from comisionesbi.catalog_engine import catalog as build_catalog
 from comisionesbi.comisiones_engine import build_report
+from comisionesbi import conciliacion_cortes_service as cortes
+from comisionesbi.conciliacion_cortes_engine import ErrorCorte
+from comisionesbi.conciliacion_cortes_estado import ConflictoVersion, FirestoreError
 from comisionesbi.conciliacion_cortes_service import build_detalle, build_fila, build_mes
 from comisionesbi.conciliacion_engine import build_conciliacion, detalle_diario, detalle_factura
 from comisionesbi.db import BigQueryConfigError, BigQueryQueryError
@@ -96,6 +101,34 @@ class ReconciliationQuery(BaseModel):
         return self
 
 
+# ─── Errores de la conciliación por cortes ───────────────────────────────
+
+
+@app.exception_handler(ErrorCorte)
+def handle_error_corte(request: Request, exc: ErrorCorte) -> JSONResponse:
+    # Un corte congelado es un conflicto con lo ya cerrado; el resto, una petición que no se puede cumplir.
+    estado = 409 if exc.codigo == "corte_congelado" else 422
+    return JSONResponse(status_code=estado, content={"detail": str(exc), "codigo": exc.codigo})
+
+
+@app.exception_handler(ConflictoVersion)
+def handle_conflicto_version(request: Request, exc: ConflictoVersion) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc), "codigo": exc.codigo})
+
+
+@app.exception_handler(FirestoreError)
+def handle_firestore_error(request: Request, exc: FirestoreError) -> JSONResponse:
+    log.error("503 en %s — %s", request.url.path, exc)
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+def editor(x_usuario: str | None = Header(default=None), x_rol: str | None = Header(default=None)) -> str:
+    """Quién edita. El sidecar no tiene URL pública: el frontend ya validó la sesión y reenvía usuario y rol."""
+    if x_rol != "admin":
+        raise HTTPException(status_code=403, detail="No tienes permiso para editar cortes.")
+    return (x_usuario or "").strip() or "desconocido"
+
+
 class CortesMesQuery(BaseModel):
     """Mes en formato AAAA-MM; los demás filtros son opcionales (la pantalla filtra también en el cliente)."""
 
@@ -111,6 +144,48 @@ class CortesFilaQuery(BaseModel):
     comisionista_id: str
     # Los pagos cuyo texto no trae división reconocible quedan en una fila sin división.
     division_code: str | None = None
+
+
+class CortesEdicion(CortesFilaQuery):
+    """Toda edición dice qué versión de la fila vio la persona (control de concurrencia)."""
+
+    version: int
+
+
+class CortesMoverBody(CortesEdicion):
+    izq_pago_id: str
+    # Último día del pago de la izquierda (el corte).
+    fecha: date
+
+
+class CortesMoverBordeBody(CortesEdicion):
+    pago_id: str
+    borde: Literal["ini", "fin"]
+    fecha: date
+
+
+class CortesCambioBody(BaseModel):
+    pago_id: str
+    borde: Literal["ini", "fin"]
+    de: date
+    a: date
+
+
+class CortesAplicarBody(CortesEdicion):
+    pago_id: str
+    # Los cambios que la persona vio; si la sugerencia ya es otra, se rechaza.
+    cambios: list[CortesCambioBody] | None = None
+
+
+class CortesPagoBody(CortesEdicion):
+    pago_id: str
+
+
+class CortesHistorialBody(BaseModel):
+    sociedad: str
+    comisionista_id: str
+    division_code: str | None = None
+    limite: int = Field(default=30, ge=1, le=200)
 
 
 class CortesDetalleQuery(BaseModel):
@@ -273,3 +348,62 @@ def post_cortes_detalle(body: CortesDetalleQuery) -> dict:
         ini=body.ini,
         fin=body.fin,
     )
+
+
+def _llave(body) -> tuple:
+    return (body.sociedad, body.comisionista_id, body.division_code)
+
+
+@app.post("/v1/comisionesbi/cortes/mover")
+def post_cortes_mover(body: CortesMoverBody, usuario: str = Depends(editor)) -> dict:
+    """Mueve el corte entre un pago y el siguiente."""
+    return cortes.mover_corte(
+        mes=body.mes, key=_llave(body), izq_pago_id=body.izq_pago_id, fecha=body.fecha,
+        version=body.version, usuario=usuario,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/mover-borde")
+def post_cortes_mover_borde(body: CortesMoverBordeBody, usuario: str = Depends(editor)) -> dict:
+    """Mueve un borde que no es un corte compartido (extremo de la fila, hueco o traslape)."""
+    return cortes.mover_borde(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, borde=body.borde, fecha=body.fecha,
+        version=body.version, usuario=usuario,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/sugerencia/aplicar")
+def post_cortes_aplicar(body: CortesAplicarBody, usuario: str = Depends(editor)) -> dict:
+    return cortes.aplicar_sugerencia(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id,
+        cambios_vistos=[c.model_dump() for c in body.cambios] if body.cambios is not None else None,
+        version=body.version, usuario=usuario,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/sugerencia/descartar")
+def post_cortes_descartar(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
+    return cortes.descartar_sugerencia(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/sugerencia/recuperar")
+def post_cortes_recuperar(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
+    return cortes.recuperar_sugerencia(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/restablecer")
+def post_cortes_restablecer(body: CortesPagoBody, usuario: str = Depends(editor)) -> dict:
+    """Vuelve la ventana de un pago a la que propone el texto."""
+    return cortes.restablecer_pago(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/historial")
+def post_cortes_historial(body: CortesHistorialBody) -> dict:
+    """Los últimos cambios de una fila (cualquier rol puede verlos)."""
+    return cortes.build_historial(key=_llave(body), limite=body.limite)

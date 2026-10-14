@@ -5,6 +5,7 @@
 import { getComisionesbiServiceUrl } from "@/lib/env";
 import type {
   ComisionesCatalog,
+  CortesAccion,
   CortesDetalleFilters,
   CortesDetalleResponse,
   CortesFilaFilters,
@@ -122,4 +123,52 @@ export async function getCortesFila(filters: CortesFilaFilters): Promise<CortesF
 /** Detalle por producto acotado a la ventana de un pago. */
 export async function getCortesDetalle(filters: CortesDetalleFilters): Promise<CortesDetalleResponse> {
   return comisionesbiFetchJson<CortesDetalleResponse>("/v1/comisionesbi/cortes/detalle", { method: "POST", body: filters });
+}
+
+// ── Edición de cortes ───────────────────────────────────────────────────────
+
+const RUTAS_EDICION: Record<CortesAccion | "historial", string> = {
+  mover: "/v1/comisionesbi/cortes/mover",
+  "mover-borde": "/v1/comisionesbi/cortes/mover-borde",
+  aplicar: "/v1/comisionesbi/cortes/sugerencia/aplicar",
+  descartar: "/v1/comisionesbi/cortes/sugerencia/descartar",
+  recuperar: "/v1/comisionesbi/cortes/sugerencia/recuperar",
+  restablecer: "/v1/comisionesbi/cortes/restablecer",
+  historial: "/v1/comisionesbi/cortes/historial"
+};
+
+export function esAccionDeEdicion(valor: string): valor is CortesAccion | "historial" {
+  return Object.prototype.hasOwnProperty.call(RUTAS_EDICION, valor);
+}
+
+/**
+ * Una edición (o la lectura del historial) tal cual la responde el backend: se devuelven estado y
+ * cuerpo sin tocar, porque el 409 de un conflicto de versión y el 422 de un corte inválido traen un
+ * mensaje que la pantalla tiene que poder mostrar (a diferencia de las lecturas, que lo ocultan).
+ * `usuario` y `rol` salen de la sesión del servidor, nunca del cuerpo de la petición.
+ */
+export async function postCortesEdicion(
+  accion: CortesAccion | "historial",
+  cuerpo: unknown,
+  sesion: { usuario: string; rol: string }
+): Promise<{ status: number; payload: unknown }> {
+  let response: Response;
+  try {
+    response = await fetch(`${getComisionesbiServiceUrl()}${RUTAS_EDICION[accion]}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-usuario": sesion.usuario, "x-rol": sesion.rol },
+      body: JSON.stringify(cuerpo),
+      cache: "no-store"
+    });
+  } catch {
+    throw new Error("comisionesbi: no se pudo contactar el servicio.");
+  }
+  const texto = await response.text();
+  let payload: unknown = null;
+  try {
+    payload = texto ? (JSON.parse(texto) as unknown) : null;
+  } catch {
+    payload = null;
+  }
+  return { status: response.status, payload };
 }

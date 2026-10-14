@@ -26,6 +26,7 @@ function pago(id: string, ini: string, fin: string, estado: CortesEstado, dif: n
     estado,
     sin_calculo: false,
     drift: null,
+    descartada: false,
     ajustado: false,
     sugerencia: null,
     ...extra
@@ -39,6 +40,7 @@ function fila(id: string, nombre: string | null, pagos: CortesPago[], extra: Par
     comisionista_id: id,
     comisionista: nombre,
     division_code: "H",
+    version: 0,
     pagos,
     huecos: [],
     traslapes: [],
@@ -62,7 +64,7 @@ const RESPUESTA: CortesMesResponse = {
       "0000014917",
       null,
       [pago("d", "2026-07-04", "2026-07-10", "sin", -2500), pago("e", "2026-07-11", "2026-07-17", "sinv", null, { ini: null, fin: null })],
-      { huecos: [{ ini: "2026-07-18", fin: "2026-07-20", comision: 1800, despues_de: "d", antes_de: "f" }] }
+      { huecos: [{ ini: "2026-07-18", fin: "2026-07-20", comision: 1800, despues_de: "d", antes_de: "f", cierre: false }] }
     )
   ]
 };
@@ -75,6 +77,7 @@ function pinta(respuesta: CortesMesResponse | null = RESPUESTA, error: string | 
       initialResponse={respuesta}
       mesInicial="2026-07"
       meses={["2026-07", "2026-06"]}
+      puedeEditar
     />
   );
 }
@@ -109,6 +112,21 @@ describe("CortesWorkspace", () => {
     expect(html).toContain("$20,000 calculado");
     expect(html).toContain("Cobros sin pago");
     expect(html).toContain("$1,800 de comisión");
+  });
+
+  it("lo cobrado el último día del mes se enseña aparte, no como cobros sin pago", () => {
+    const r: CortesMesResponse = {
+      ...RESPUESTA,
+      filas: [
+        fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-25", "2026-07-30", "ok", 0)], {
+          huecos: [{ ini: "2026-07-31", fin: "2026-07-31", comision: 4200, despues_de: "a", antes_de: "b", cierre: true }]
+        })
+      ]
+    };
+    const html = pinta(r);
+    expect(html).toContain("Cierre de mes: $4,200");
+    expect(html).toContain("$0 de comisión");
+    expect(html).not.toContain("Cobros sin pago:");
   });
 
   it("un comisionista sin nombre se muestra por su número, no vacío", () => {

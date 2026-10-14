@@ -19,6 +19,8 @@ MODELO
     como `traslapes`. Ninguno se bloquea (en los datos reales hay 6.6% de huecos
     y 1.2% de traslapes entre pagos consecutivos).
   - Un borde congelado (de un pago consolidado) no se sugiere ni se mueve.
+  - Cierre de mes: lo cobrado el último día de cada mes va con el pago siguiente (regla del
+    cliente); ver `aplicar_cierre_de_mes`. Se aplica a la ventana por defecto.
 
 SUGERENCIAS
   Cada generador recibe el contexto de una fila y el índice de un pago y
@@ -135,7 +137,30 @@ class Pago:
     pagado: float
 
 
-def agrupar_pagos(docs: Iterable[DocPago]) -> dict[FilaKey, list[Pago]]:
+def _es_fin_de_mes(d: date) -> bool:
+    return (d + DIA).month != d.month
+
+
+def aplicar_cierre_de_mes(pagos: list[Pago]) -> list[Pago]:
+    """Regla del cliente: lo cobrado el último día de cada mes no entra en el pago de esa semana.
+
+    El cierre se hace durante ese día y no alcanza a entrar; va con el pago de la semana siguiente. Un pago
+    cuya ventana termina en fin de mes pasa a terminar un día antes. Ese día queda como un hueco de un día
+    (`Hueco.cierre`) y no se le asigna a ningún pago por defecto: medido sobre 740 casos con cobros ese día,
+    sacarlo del pago deja cuadrando 225 pagos (de 7 a 232 de 734), pero ningún pago siguiente lo absorbe de
+    forma consistente (el 1.º, 2.º, 3.º o 4.º mejoran en 55, 24, 40 y 0 casos y empeoran en 224 a 266), así que
+    adivinar el destino rompe más de lo que arregla. Solo mueve extremos exactos: una ventana que cruza el fin
+    de mes por dentro no se toca (en los datos no hay ninguna). Es parte de la ventana por defecto.
+    """
+    salida = []
+    for p in pagos:
+        if p.ini and p.fin and _es_fin_de_mes(p.fin) and p.fin > p.ini:
+            p = replace(p, fin=p.fin - DIA)
+        salida.append(p)
+    return salida
+
+
+def agrupar_pagos(docs: Iterable[DocPago], cierre_de_mes: bool = True) -> dict[FilaKey, list[Pago]]:
     """Agrupa documentos en pagos por fila y ventana; los sin ventana quedan sueltos."""
     por_fila: dict[FilaKey, dict[tuple, list[DocPago]]] = defaultdict(lambda: defaultdict(list))
     for d in docs:
@@ -162,7 +187,7 @@ def agrupar_pagos(docs: Iterable[DocPago]) -> dict[FilaKey, list[Pago]]:
                 )
             )
         pagos.sort(key=lambda p: (p.ini is None, p.ini or date.min, p.fin or date.min, p.pago_id))
-        out[llave] = pagos
+        out[llave] = aplicar_cierre_de_mes(pagos) if cierre_de_mes else pagos
     return out
 
 
@@ -212,6 +237,7 @@ class PagoResuelto:
     estado: str
     sin_calculo: bool = False
     drift: float | None = None  # consolidado: calculado vivo - calculado congelado
+    descartada: bool = False  # la persona descartó la sugerencia de este pago
     sugerencia: Sugerencia | None = None
 
     @property
@@ -226,6 +252,8 @@ class Hueco:
     comision: float
     despues_de: str
     antes_de: str
+    # El último día del mes: va con el pago de la semana siguiente (regla del cliente), no es un cobro olvidado.
+    cierre: bool = False
 
 
 @dataclass(frozen=True)
@@ -404,6 +432,7 @@ def resolver_fila(
         r = PagoResuelto(
             v.pago_id, docs_de[v.pago_id], v.ini, v.fin, ini_d, fin_d, v.pagado,
             round(calculado, 2), round(dif, 2), OK, sin_calculo=calculado == 0,
+            descartada=v.pago_id in ctx.descartadas,
         )
         if v.cons:
             r.estado = CONSOLIDADO
@@ -418,7 +447,9 @@ def resolver_fila(
     for a, b in zip(vs, vs[1:]):
         if b.ini > a.fin + DIA:
             ini, fin = a.fin + DIA, b.ini - DIA
-            huecos.append(Hueco(ini, fin, round(serie.suma(ini, fin), 2), a.pago_id, b.pago_id))
+            huecos.append(
+                Hueco(ini, fin, round(serie.suma(ini, fin), 2), a.pago_id, b.pago_id, cierre=ini == fin and _es_fin_de_mes(ini))
+            )
         elif b.ini <= a.fin:
             traslapes.append(Traslape(b.ini, min(a.fin, b.fin), (a.pago_id, b.pago_id)))
         else:
@@ -539,6 +570,7 @@ def construir_filas(
     diario: Iterable[Mapping],
     estados: Mapping[FilaKey, EstadoFila] | None = None,
     sugerir_en: tuple[date, date] | None = None,
+    cierre_de_mes: bool = True,
 ) -> dict[FilaKey, FilaResuelta]:
     """Resuelve todas las filas. `diario`: dicts con sociedad, comisionista_id, division_code, fecha, comision."""
     dias: dict[FilaKey, dict[date, float]] = defaultdict(dict)
@@ -548,6 +580,6 @@ def construir_filas(
 
     estados = estados or {}
     out = {}
-    for key, pagos in agrupar_pagos(docs).items():
+    for key, pagos in agrupar_pagos(docs, cierre_de_mes).items():
         out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en)
     return out

@@ -6,7 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from comisionesbi import app as app_module
+from comisionesbi import conciliacion_cortes_estado as estado
 from comisionesbi import conciliacion_cortes_service as svc
+from comisionesbi.conciliacion_cortes_engine import ErrorCorte
+from comisionesbi.conciliacion_cortes_estado import ConflictoVersion
 
 client = TestClient(app_module.app)
 
@@ -73,6 +76,9 @@ def bq(monkeypatch):
 
     monkeypatch.setattr(svc, "run_query", fake)
     monkeypatch.setattr(svc, "cobertura", lambda: {"desde": "2026-01-02", "hasta": "2026-10-06"})
+    # Sin caché entre pruebas y con el estado guardado en memoria, no en Firestore.
+    svc._CACHE.clear()
+    monkeypatch.setattr(estado, "_store", estado.MemoriaStore())
     return llamadas
 
 
@@ -162,3 +168,129 @@ def test_endpoint_detalle_rechaza_un_rango_al_reves():
         json={"sociedad": "DBC", "comisionista_id": LIFNR, "ini": "2026-07-10", "fin": "2026-07-04"},
     )
     assert r.status_code == 422
+
+
+# ─── Ediciones guardadas ─────────────────────────────────────────────────
+
+KEY = ("DBC", LIFNR, "H")
+PAGO1 = "DBC|2026|0000000001"
+PAGO2 = "DBC|2026|0000000002"
+ADMIN = {"x-rol": "admin", "x-usuario": "ana@proan.com"}
+
+
+def _fila(vista):
+    return {p["pago_id"]: p for p in vista["fila"]["pagos"]}
+
+
+def test_aplicar_la_sugerencia_se_guarda_y_devuelve_la_fila_ya_actualizada(bq):
+    antes = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert antes["fila"]["version"] == 0 and _fila(antes)[PAGO1]["estado"] == "sug"
+
+    vista = svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+
+    assert vista["fila"]["version"] == 1
+    assert _fila(vista)[PAGO1]["estado"] == "ok" and _fila(vista)[PAGO2]["estado"] == "ok"
+    assert _fila(vista)[PAGO1]["fin"] == "2026-07-02" and _fila(vista)[PAGO1]["ajustado"] is True
+    assert _fila(vista)[PAGO1]["fin_default"] == "2026-07-03"
+    # y sobrevive: una lectura nueva ve lo mismo
+    de_nuevo = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert _fila(de_nuevo)[PAGO1]["fin"] == "2026-07-02"
+    # la lista del mes también lo refleja
+    mes = svc.build_mes(mes="2026-07")
+    assert {p["estado"] for p in mes["filas"][0]["pagos"] if p["ini"]} == {"ok"}
+
+
+def test_dos_ediciones_con_la_misma_version_chocan(bq):
+    svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    with pytest.raises(ConflictoVersion):
+        svc.descartar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, version=0, usuario="luis")
+
+
+def test_una_sugerencia_que_ya_es_otra_no_se_aplica(bq):
+    vista = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    vistos = list(_fila(vista)[PAGO1]["sugerencia"]["cambios"])
+    vistos[0] = {**vistos[0], "a": "2026-07-01"}
+    with pytest.raises(ErrorCorte) as e:
+        svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=vistos, version=0, usuario="ana")
+    assert e.value.codigo == "sugerencia_distinta"
+    # con los cambios tal cual los vio, sí
+    vistos_ok = _fila(vista)[PAGO1]["sugerencia"]["cambios"]
+    assert svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=vistos_ok, version=0, usuario="ana")
+
+
+def test_descartar_deja_el_pago_sin_explicacion_y_recuperar_la_devuelve(bq):
+    v = svc.descartar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, version=0, usuario="ana")
+    assert _fila(v)[PAGO1]["estado"] == "sin" and _fila(v)[PAGO1]["sugerencia"] is None
+    assert _fila(v)[PAGO1]["descartada"] is True
+    v = svc.recuperar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, version=1, usuario="ana")
+    assert _fila(v)[PAGO1]["estado"] == "sug" and v["fila"]["version"] == 2
+
+
+def test_mover_el_corte_a_mano_actualiza_los_dos_pagos_y_queda_en_el_historial(bq):
+    v = svc.mover_corte(mes="2026-07", key=KEY, izq_pago_id=PAGO1, fecha=date(2026, 7, 2), version=0, usuario="ana")
+    assert _fila(v)[PAGO1]["fin"] == "2026-07-02" and _fila(v)[PAGO2]["ini"] == "2026-07-03"
+    (evento,) = svc.build_historial(key=KEY)["eventos"]
+    assert evento["tipo"] == "mover_corte" and evento["usuario"] == "ana" and evento["pago_id"] == PAGO1
+    assert evento["antes"] == {} and evento["despues"][PAGO1] == {"fin": "2026-07-02"}
+
+
+def test_restablecer_devuelve_la_ventana_del_texto_en_los_dos_pagos(bq):
+    svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    v = svc.restablecer_pago(mes="2026-07", key=KEY, pago_id=PAGO1, version=1, usuario="ana")
+    assert _fila(v)[PAGO1]["fin"] == "2026-07-03" and _fila(v)[PAGO2]["ini"] == "2026-07-04"
+    assert not _fila(v)[PAGO1]["ajustado"] and not _fila(v)[PAGO2]["ajustado"]
+    assert estado.get_store().leer([KEY])[KEY].overrides == {}
+
+
+def test_un_corte_de_un_pago_consolidado_no_se_mueve(bq):
+    foto = estado.Foto(date(2026, 7, 4), date(2026, 7, 10), 100.0, 100.0)
+    estado.get_store().escribir(KEY, 0, estado.DocFila(consolidados={PAGO2: foto}), {"tipo": "prueba"})
+    with pytest.raises(ErrorCorte) as e:
+        svc.mover_corte(mes="2026-07", key=KEY, izq_pago_id=PAGO1, fecha=date(2026, 7, 2), version=1, usuario="ana")
+    assert e.value.codigo == "corte_congelado"
+
+
+def test_editar_un_pago_que_ya_no_existe_falla_con_claridad(bq):
+    with pytest.raises(ErrorCorte) as e:
+        svc.descartar_sugerencia(mes="2026-07", key=KEY, pago_id="DBC|2026|9999999999", version=0, usuario="ana")
+    assert e.value.codigo == "pago_inexistente"
+
+
+def test_la_lista_del_mes_trae_la_version_de_cada_fila(bq):
+    svc.descartar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, version=0, usuario="ana")
+    assert svc.build_mes(mes="2026-07")["filas"][0]["version"] == 1
+
+
+# ─── Endpoints de edición ────────────────────────────────────────────────
+
+CUERPO = {"mes": "2026-07", "sociedad": "DBC", "comisionista_id": LIFNR, "division_code": "H", "version": 0}
+
+
+def test_editar_sin_rol_de_administrador_es_403(bq):
+    r = client.post("/v1/comisionesbi/cortes/sugerencia/descartar", json={**CUERPO, "pago_id": PAGO1})
+    assert r.status_code == 403
+    r = client.post("/v1/comisionesbi/cortes/sugerencia/descartar", json={**CUERPO, "pago_id": PAGO1},
+                    headers={"x-rol": "viewer", "x-usuario": "x"})
+    assert r.status_code == 403
+
+
+def test_aplicar_por_la_api_devuelve_la_fila_y_un_segundo_intento_viejo_es_409(bq):
+    r = client.post("/v1/comisionesbi/cortes/sugerencia/aplicar", json={**CUERPO, "pago_id": PAGO1}, headers=ADMIN)
+    assert r.status_code == 200 and r.json()["fila"]["version"] == 1
+    r = client.post("/v1/comisionesbi/cortes/sugerencia/aplicar", json={**CUERPO, "pago_id": PAGO1}, headers=ADMIN)
+    assert r.status_code == 409 and r.json()["codigo"] == "conflicto_version"
+
+
+def test_mover_por_la_api_y_error_de_corte_invalido_es_422(bq):
+    r = client.post("/v1/comisionesbi/cortes/mover", json={**CUERPO, "izq_pago_id": PAGO1, "fecha": "2026-07-02"}, headers=ADMIN)
+    assert r.status_code == 200
+    r = client.post("/v1/comisionesbi/cortes/mover",
+                    json={**CUERPO, "version": 1, "izq_pago_id": PAGO1, "fecha": "2026-07-20"}, headers=ADMIN)
+    assert r.status_code == 422 and r.json()["codigo"] == "ventana_invalida"
+
+
+def test_el_historial_lo_puede_ver_cualquiera(bq):
+    client.post("/v1/comisionesbi/cortes/sugerencia/descartar", json={**CUERPO, "pago_id": PAGO1}, headers=ADMIN)
+    r = client.post("/v1/comisionesbi/cortes/historial",
+                    json={"sociedad": "DBC", "comisionista_id": LIFNR, "division_code": "H"})
+    assert r.status_code == 200 and r.json()["eventos"][0]["tipo"] == "descartar_sugerencia"

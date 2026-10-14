@@ -9,6 +9,8 @@ import {
   filaTodoCuadra,
   filtrarFilas,
   huecosDelMes,
+  limitesDeCorte,
+  moverCorteLocal,
   mesPorDefecto,
   mesesDisponibles,
   nombreComisionista,
@@ -34,6 +36,7 @@ function pago(id: string, ini: string | null, fin: string | null, estado: Cortes
     estado,
     sin_calculo: false,
     drift: null,
+    descartada: false,
     ajustado: false,
     sugerencia: null,
     ...extra
@@ -47,6 +50,7 @@ function fila(id: string, pagos: CortesPago[], extra: Partial<CortesFila> = {}):
     comisionista_id: `000${id}`,
     comisionista: `Comisionista ${id}`,
     division_code: "H",
+    version: 0,
     pagos,
     huecos: [],
     traslapes: [],
@@ -149,9 +153,9 @@ describe("filtros y totales", () => {
   it("totales por estado con calculado y diferencia absoluta, y cobros sin pago dentro del mes", () => {
     const conHueco = fila("4", [pago("d1", "2026-07-04", "2026-07-10", "sin", { diferencia: 250, calculado: 1250 })], {
       huecos: [
-        { ini: "2026-07-11", fin: "2026-07-13", comision: 900, despues_de: "d1", antes_de: "d2" },
-        { ini: "2026-09-01", fin: "2026-09-03", comision: 700, despues_de: "x", antes_de: "y" },
-        { ini: "2026-07-20", fin: "2026-07-21", comision: 0, despues_de: "x", antes_de: "y" }
+        { ini: "2026-07-11", fin: "2026-07-13", comision: 900, despues_de: "d1", antes_de: "d2", cierre: false },
+        { ini: "2026-09-01", fin: "2026-09-03", comision: 700, despues_de: "x", antes_de: "y", cierre: false },
+        { ini: "2026-07-20", fin: "2026-07-21", comision: 0, despues_de: "x", antes_de: "y", cierre: false }
       ]
     });
     const t = totalesCortes([a, b, c, conHueco], "2026-07-01", "2026-07-31");
@@ -160,7 +164,21 @@ describe("filtros y totales", () => {
     expect(t.porEstado.sin).toMatchObject({ n: 1, difAbs: 250 });
     expect(t.totalPagos).toBe(4);
     expect(t.sinPago).toEqual({ n: 1, comision: 900 });
+    expect(t.cierre).toEqual({ n: 0, comision: 0 });
     expect(huecosDelMes(conHueco, "2026-07-01", "2026-07-31")).toEqual({ n: 1, comision: 900 });
+  });
+
+  it("el último día del mes no cuenta como cobro sin pago: se suma aparte como cierre de mes", () => {
+    const f = fila("5", [pago("e1", "2026-07-04", "2026-07-10", "ok")], {
+      huecos: [
+        { ini: "2026-07-31", fin: "2026-07-31", comision: 500, despues_de: "e1", antes_de: "e2", cierre: true },
+        { ini: "2026-07-18", fin: "2026-07-19", comision: 300, despues_de: "e1", antes_de: "e2", cierre: false }
+      ]
+    });
+    const t = totalesCortes([f], "2026-07-01", "2026-07-31");
+    expect(t.sinPago).toEqual({ n: 1, comision: 300 });
+    expect(t.cierre).toEqual({ n: 1, comision: 500 });
+    expect(huecosDelMes(f, "2026-07-01", "2026-07-31")).toEqual({ n: 1, comision: 300 });
   });
 
   it("nombre: el del proveedor o su número sin ceros", () => {
@@ -176,7 +194,7 @@ describe("línea de tiempo", () => {
   const p4 = pago("p4", "2026-07-16", "2026-07-24");
   const f = fila("1", [p3, p1, p4, p2], {
     cortes: [{ izq: "p1", der: "p2", fecha: "2026-07-03", congelado: true }],
-    huecos: [{ ini: "2026-07-11", fin: "2026-07-13", comision: 800, despues_de: "p2", antes_de: "p3" }],
+    huecos: [{ ini: "2026-07-11", fin: "2026-07-13", comision: 800, despues_de: "p2", antes_de: "p3", cierre: false }],
     traslapes: [{ ini: "2026-07-16", fin: "2026-07-17", pagos: ["p3", "p4"] }]
   });
 
@@ -240,5 +258,43 @@ describe("línea de tiempo", () => {
 
   it("sin sugerencia no hay días marcados", () => {
     expect(diasQueCambian(null).size).toBe(0);
+  });
+});
+
+describe("mover un corte en la vista previa", () => {
+  const a = pago("a", "2026-07-04", "2026-07-10", "sin", { pagado: 1000, calculado: 1400, diferencia: 400 });
+  const b = pago("b", "2026-07-11", "2026-07-17", "sin", { pagado: 2000, calculado: 1600, diferencia: -400 });
+  const f = fila("1", [a, b], { cortes: [{ izq: "a", der: "b", fecha: "2026-07-10", congelado: false }] });
+  // el sábado 11 y el domingo 12 valen 200 y 200; el resto de los días no importa aquí
+  const dias = new Map<string, number>([
+    ["2026-07-10", 400],
+    ["2026-07-11", 400]
+  ]);
+  for (let d = 4; d <= 9; d++) dias.set(`2026-07-${String(d).padStart(2, "0")}`, 1000 / 6);
+  for (let d = 12; d <= 17; d++) dias.set(`2026-07-${d}`, 1600 / 6);
+
+  it("recalcula los dos pagos y deja en cero el que cuadra", () => {
+    // pasar el 10 al segundo pago: a = 4..9 = 1000, b = 10..17 = 400 + 400 + 1600 = 2400 (no cuadra)
+    const v = moverCorteLocal(f, dias, "a", "2026-07-09");
+    const va = v.pagos.find((p) => p.pago_id === "a")!;
+    const vb = v.pagos.find((p) => p.pago_id === "b")!;
+    expect(va.fin).toBe("2026-07-09");
+    expect(va.estado).toBe("ok");
+    expect(vb.ini).toBe("2026-07-10");
+    expect(vb.diferencia).toBe(400);
+    expect(vb.estado).toBe("sin");
+    expect(v.cortes[0].fecha).toBe("2026-07-09");
+    expect(va.ajustado).toBe(true);
+  });
+
+  it("no toca la fila original ni cortes que no existen", () => {
+    moverCorteLocal(f, dias, "a", "2026-07-09");
+    expect(f.pagos[0].fin).toBe("2026-07-10");
+    expect(moverCorteLocal(f, dias, "zzz", "2026-07-09")).toBe(f);
+  });
+
+  it("límites: el pago de la izquierda conserva un día y el de la derecha también", () => {
+    expect(limitesDeCorte(f, "a")).toEqual({ min: "2026-07-04", max: "2026-07-16" });
+    expect(limitesDeCorte(f, "b")).toBeNull();
   });
 });

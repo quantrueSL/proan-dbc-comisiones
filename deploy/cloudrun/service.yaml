@@ -115,6 +115,15 @@ spec:
             # ventana que COBERTURA_CACHE_TTL_SECONDS de Comisiones.
             - name: FLUJO_COBERTURA_CACHE_TTL_SECONDS
               value: "3600"
+            # Base de Firestore con las decisiones de la conciliación por cortes (ventanas
+            # ajustadas, sugerencias descartadas, historial). Región us-west4, modo nativo.
+            # La cuenta de servicio ya tiene acceso por `roles/editor`.
+            - name: CONCILIACION_FIRESTORE_DATABASE_ID
+              value: dbc-comisiones
+            # Caché de lo crudo de BigQuery para la pestaña de cortes: editar no vuelve a
+            # consultar. Corta a propósito: lo guardado por la gente no pasa por aquí.
+            - name: CORTES_CACHE_TTL_SECONDS
+              value: "120"
             - name: LOG_LEVEL
               value: INFO
           startupProbe:
