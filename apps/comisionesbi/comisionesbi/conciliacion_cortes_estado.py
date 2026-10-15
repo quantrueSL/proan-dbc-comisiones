@@ -12,6 +12,7 @@ Un documento por fila (sociedad × comisionista × división):
     version         int, sube en cada escritura (control optimista)
     overrides       {pago_id: {"ini": "AAAA-MM-DD", "fin": "AAAA-MM-DD"}}
     descartadas     {pago_id: {"por": usuario, "ts": iso}}
+    dias_asignados  {pago_id: ["AAAA-MM-DD", ...]}  días sueltos (cierre de mes) que se le suman a un pago
     consolidados    {pago_id: {"ini", "fin", "pagado", "calculado", "por", "ts"}}
     actualizado_por / actualizado_en
     eventos/{auto}  tipo, usuario, ts, pago_id, antes, despues (solo se agrega)
@@ -66,12 +67,14 @@ class DocFila:
     consolidados: dict[str, Foto] = field(default_factory=dict)
     # Quién consolidó cada pago y cuándo: {pago_id: {"por": usuario, "ts": iso}}.
     consolidados_info: dict[str, dict] = field(default_factory=dict)
+    dias_asignados: dict[str, list[date]] = field(default_factory=dict)
 
     def a_estado(self) -> EstadoFila:
         return EstadoFila(
             overrides={k: dict(v) for k, v in self.overrides.items()},
             consolidados=dict(self.consolidados),
             descartadas=set(self.descartadas),
+            dias_asignados={k: list(v) for k, v in self.dias_asignados.items()},
         )
 
     # --- Firestore guarda fechas como texto ISO ---
@@ -81,6 +84,7 @@ class DocFila:
             "version": self.version,
             "overrides": {k: {b: f.isoformat() for b, f in v.items()} for k, v in self.overrides.items()},
             "descartadas": self.descartadas,
+            "dias_asignados": {k: [d.isoformat() for d in v] for k, v in self.dias_asignados.items()},
             "consolidados": {
                 k: {
                     "ini": f.ini.isoformat(),
@@ -103,6 +107,9 @@ class DocFila:
                 for k, v in (datos.get("overrides") or {}).items()
             },
             descartadas=dict(datos.get("descartadas") or {}),
+            dias_asignados={
+                k: [date.fromisoformat(d) for d in v] for k, v in (datos.get("dias_asignados") or {}).items()
+            },
             consolidados={
                 k: Foto(
                     date.fromisoformat(v["ini"]),

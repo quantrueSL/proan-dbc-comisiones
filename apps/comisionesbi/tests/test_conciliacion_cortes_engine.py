@@ -5,6 +5,8 @@ from datetime import date, timedelta
 import pytest
 
 from comisionesbi import conciliacion_cortes_engine as cc
+from dataclasses import replace
+
 from comisionesbi.conciliacion_cortes_engine import (
     CONSOLIDADO,
     OK,
@@ -15,10 +17,13 @@ from comisionesbi.conciliacion_cortes_engine import (
     ErrorCorte,
     EstadoFila,
     Foto,
+    Pago,
     SerieDiaria,
     agrupar_pagos,
     construir_filas,
+    aplicar_cierre_de_mes,
     resolver_fila,
+    ultimos_dias_con_cobros,
     ventana_estandar,
 )
 
@@ -414,3 +419,131 @@ def test_un_pago_contenido_en_otro_no_se_recorta():
     ]
     pagos = agrupar_pagos(ds)[("DBC", "X", "H")]
     assert [(p.ini, p.fin) for p in pagos] == [(date(2026, 9, 5), date(2026, 9, 25)), (date(2026, 9, 12), date(2026, 9, 18))]
+
+
+# ─── Cierre de mes: último día con cobros y asignación a un pago ─────────
+
+
+def test_el_ultimo_dia_con_cobros_de_cada_mes_cerrado_se_toma_de_todos_juntos():
+    total = {
+        date(2026, 7, 30): 500.0, date(2026, 7, 31): 0.0,       # el 31 sin cobros: el cierre es el 30
+        date(2026, 8, 29): 900.0, date(2026, 8, 31): 120.0,
+        date(2026, 9, 2): 300.0,                                  # el mes más reciente no está cerrado
+    }
+    assert ultimos_dias_con_cobros(total) == {date(2026, 7, 30), date(2026, 8, 31)}
+    assert ultimos_dias_con_cobros({}) == frozenset()
+
+
+def test_el_pago_que_termina_en_el_dia_de_cierre_lo_pierde_aunque_no_sea_fin_de_calendario():
+    pagos = [Pago("a", ("a",), "DBC", "X", "H", date(2026, 7, 25), date(2026, 7, 30), 10.0)]
+    assert aplicar_cierre_de_mes(pagos, {date(2026, 7, 30)})[0].fin == date(2026, 7, 29)
+    # si el cierre es otro día, un pago que termina el 31 no se toca
+    pagos31 = [Pago("a", ("a",), "DBC", "X", "H", date(2026, 7, 25), date(2026, 7, 31), 10.0)]
+    assert aplicar_cierre_de_mes(pagos31, {date(2026, 7, 30)})[0].fin == date(2026, 7, 31)
+    # sin lista de cierres, el último día del calendario (comportamiento anterior)
+    assert aplicar_cierre_de_mes(pagos31)[0].fin == date(2026, 7, 30)
+
+
+def _fila_con_cierre(pagado_b, *, extra_pagos=()):
+    """A: sáb 27 a mar 30 jun (el 30 es el cierre, queda fuera); B: 1 a 3 jul, pagado con el cierre incluido."""
+    ds = [
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 6, 27), date(2026, 6, 30), 60.0),
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 7, 1), date(2026, 7, 3), pagado_b),
+        *extra_pagos,
+    ]
+    dias = {date(2026, 6, 25) + timedelta(days=i): 20.0 for i in range(9)}  # 20 por día del 25 jun al 3 jul
+    cierres = {date(2026, 6, 30)}
+    key = ("DBC", "X", "H")
+    pagos = agrupar_pagos(ds, cierres=cierres)[key]
+    return key, pagos, SerieDiaria(dias), cierres
+
+
+def test_se_sugiere_asignar_el_cierre_al_pago_siguiente_solo_si_lo_deja_exacto():
+    key, pagos, serie, cierres = _fila_con_cierre(80.0)  # 3 días x 20 + el cierre de 20
+    fr = resolver_fila(key, pagos, serie, None, cierres=cierres)
+    a, b = fr.pagos
+    assert a.estado == OK and a.calculado == 60.0  # 27, 28 y 29 jun; sin el 30
+    assert b.estado == SUGERENCIA and b.sugerencia.tipo == "cierre"
+    assert b.sugerencia.dias_asignar == (date(2026, 6, 30),) and b.sugerencia.cambios == ()
+    (af,) = b.sugerencia.afectados
+    assert (af.diferencia_antes, af.diferencia_despues) == (-20.0, 0.0)
+    assert [(h.ini, h.cierre) for h in fr.huecos] == [(date(2026, 6, 30), True)]
+
+    # con otro monto no hay sugerencia de cierre: no cuadra exacto
+    key, pagos, serie, cierres = _fila_con_cierre(75.0)
+    b = resolver_fila(key, pagos, serie, None, cierres=cierres).pagos[1]
+    assert b.sugerencia is None or b.sugerencia.tipo != "cierre"
+
+
+def test_un_dia_asignado_se_suma_al_pago_y_deja_de_ser_hueco():
+    key, pagos, serie, cierres = _fila_con_cierre(80.0)
+    estado = EstadoFila(dias_asignados={"DBC|2026|0000000002": [date(2026, 6, 30)]})
+    fr = resolver_fila(key, pagos, serie, estado, cierres=cierres)
+    b = fr.pagos[1]
+    assert b.estado == OK and b.calculado == 80.0 and b.dias_asignados == (date(2026, 6, 30),)
+    assert b.ajustado is True and b.sugerencia is None
+    assert fr.huecos == []
+    assert fr.dias_asignados == {"DBC|2026|0000000002": [date(2026, 6, 30)]}
+
+
+def test_con_dias_suma_a_lo_ya_asignado_y_no_toca_un_pago_consolidado():
+    key, pagos, serie, cierres = _fila_con_cierre(80.0)
+    fr = resolver_fila(key, pagos, serie, None, cierres=cierres)
+    sug = fr.pagos[1].sugerencia
+    assert fr.con_dias(sug) == {"DBC|2026|0000000002": [date(2026, 6, 30)]}
+    foto = Foto(date(2026, 7, 1), date(2026, 7, 3), 80.0, 60.0)
+    fr2 = resolver_fila(key, pagos, serie, EstadoFila(consolidados={"DBC|2026|0000000002": foto}), cierres=cierres)
+    with pytest.raises(ErrorCorte):
+        fr2.con_dias(sug)
+
+
+def test_el_cierre_solo_se_ofrece_a_los_primeros_pagos_que_empiezan_despues():
+    # solo los cuatro primeros pagos después del cierre lo reciben como sugerencia
+    ds = [DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 6, 25), date(2026, 6, 30), 100.0)]
+    for n in range(2, 8):
+        ini = date(2026, 7, 1) + timedelta(days=7 * (n - 2))
+        ds.append(DocPago(f"DBC|2026|{n:010d}", "DBC", "X", "H", ini, ini + timedelta(days=6), 140.0))
+    dias = {date(2026, 6, 25) + timedelta(days=i): 20.0 for i in range(60)}
+    cierres = {date(2026, 6, 30)}
+    key = ("DBC", "X", "H")
+    pagos = agrupar_pagos(ds, cierres=cierres, estandar=False)[key]
+    # cada pago siguiente calcula 140; con 160 de pagado, el cierre de 20 los dejaría exactos
+    pagos = [replace(p, pagado=160.0) if p.pago_id != "DBC|2026|0000000001" else p for p in pagos]
+    fr = resolver_fila(key, pagos, SerieDiaria(dias), None, cierres=cierres)
+    con_cierre = [p for p in fr.pagos if p.sugerencia and p.sugerencia.tipo == "cierre"]
+    assert len(con_cierre) == 4
+
+
+def test_el_bloque_de_fin_de_mes_incluye_los_dias_que_la_semana_anterior_suelta():
+    # A: 27 a 30 jun, pagado con solo 27 y 28; B: 1 a 3 jul, pagado con 29 y 30 jun además de sus tres días
+    ds = [
+        DocPago("DBC|2026|0000000001", "DBC", "X", "H", date(2026, 6, 27), date(2026, 6, 30), 40.0),
+        DocPago("DBC|2026|0000000002", "DBC", "X", "H", date(2026, 7, 1), date(2026, 7, 3), 100.0),
+    ]
+    dias = {date(2026, 6, 27) + timedelta(days=i): 20.0 for i in range(7)}
+    cierres = {date(2026, 6, 30)}
+    key = ("DBC", "X", "H")
+    pagos = agrupar_pagos(ds, cierres=cierres)[key]
+    a_id, b_id = "DBC|2026|0000000001", "DBC|2026|0000000002"
+
+    # paso 1: solo el 30 está suelto; con él B no cuadra y A pide soltar el 29 (terminar el 28)
+    fr = resolver_fila(key, pagos, SerieDiaria(dias), None, cierres=cierres)
+    a, b = fr.pagos
+    assert b.sugerencia is None or b.sugerencia.tipo != "cierre"
+    assert a.sugerencia is not None and a.sugerencia.tipo == "borde"
+
+    # paso 2: al soltar el 29 y el 30, el bloque de fin de mes (29 y 30 jun) le cuadra a B
+    fr = resolver_fila(key, pagos, SerieDiaria(dias), EstadoFila(overrides={a_id: {"fin": date(2026, 6, 28)}}), cierres=cierres)
+    a, b = fr.pagos
+    assert a.estado == OK
+    (h,) = fr.huecos
+    assert (h.ini, h.fin, h.cierre) == (date(2026, 6, 29), date(2026, 6, 30), True)
+    assert b.sugerencia.tipo == "cierre" and b.sugerencia.dias_asignar == (date(2026, 6, 29), date(2026, 6, 30))
+    (af,) = b.sugerencia.afectados
+    assert (af.diferencia_antes, af.diferencia_despues) == (-40.0, 0.0)
+
+    # paso 3: aplicarlo asigna los dos días y el hueco desaparece
+    asignados = fr.con_dias(b.sugerencia)
+    fr = resolver_fila(key, pagos, SerieDiaria(dias), EstadoFila(overrides={a_id: {"fin": date(2026, 6, 28)}}, dias_asignados=asignados), cierres=cierres)
+    assert fr.huecos == [] and all(p.estado == OK for p in fr.pagos)
+    assert fr.pagos[1].dias_asignados == (date(2026, 6, 29), date(2026, 6, 30))

@@ -175,6 +175,8 @@ class CortesAplicarBody(CortesEdicion):
     pago_id: str
     # Los cambios que la persona vio; si la sugerencia ya es otra, se rechaza.
     cambios: list[CortesCambioBody] | None = None
+    # Los días de cierre que la persona vio en una sugerencia de ese tipo.
+    dias: list[date] | None = None
 
 
 class CortesPagoBody(CortesEdicion):
@@ -394,7 +396,7 @@ def post_cortes_aplicar(body: CortesAplicarBody, usuario: str = Depends(editor))
     return cortes.aplicar_sugerencia(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id,
         cambios_vistos=[c.model_dump() for c in body.cambios] if body.cambios is not None else None,
-        version=body.version, usuario=usuario,
+        version=body.version, usuario=usuario, dias_vistos=body.dias,
     )
 
 

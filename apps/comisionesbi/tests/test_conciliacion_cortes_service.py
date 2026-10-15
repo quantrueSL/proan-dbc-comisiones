@@ -63,6 +63,8 @@ def bq(monkeypatch):
             ]
         if "cobros diarios" in nombre:
             return diario
+        if "días de cierre" in nombre:
+            return [{"fecha": r["fecha"], "comision": r["comision"]} for r in diario]
         if "detalle por producto" in nombre:
             return [
                 {"cedis": "Norte", "oficina": "0023", "tipo_venta": "VTA EN RUTA", "matnr": "1", "descripcion": "A",
@@ -467,3 +469,59 @@ def test_consolidar_y_reabrir_por_la_api_piden_rol_de_administrador(bq):
     assert r.status_code == 422 and r.json()["codigo"] == "no_consolidado"
     r = client.post(f"{url}/consolidar-lote", json={"mes": "2026-07", "fila_ids": [FILA_ID]}, headers=ADMIN)
     assert r.status_code == 200 and r.json()["consolidados"] == 0
+
+
+# ─── Cierre de mes: asignar el último día con cobros a un pago ───────────
+
+
+def _con_docs(monkeypatch, docs):
+    """Cambia los pagos que devuelve BigQuery simulado (los cobros diarios se quedan)."""
+    original = svc.run_query
+
+    def fake(sql, nombre, parametros=None):
+        if "pagos por documento" in nombre:
+            return docs
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+
+
+def test_el_cierre_se_sugiere_se_aplica_se_guarda_y_se_deshace(bq, monkeypatch):
+    # A: 27 a 30 jun (el 30 es el último día con cobros de junio: queda fuera); B: 1 a 3 jul, pagado con ese día incluido
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
+    vista = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    b = _fila(vista)[PAGO2]
+    assert b["estado"] == "sug" and b["sugerencia"]["tipo"] == "cierre"
+    assert b["sugerencia"]["dias_asignar"] == ["2026-06-30"] and b["sugerencia"]["cambios"] == []
+    assert [h["cierre"] for h in vista["fila"]["huecos"]] == [True]
+
+    v = svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO2, cambios_vistos=[], version=0, usuario="ana",
+                               dias_vistos=[date(2026, 6, 30)])
+    b = _fila(v)[PAGO2]
+    assert b["estado"] == "ok" and b["dias_asignados"] == ["2026-06-30"] and b["ajustado"] is True
+    assert v["fila"]["huecos"] == []
+    assert estado.get_store().leer([KEY])[KEY].dias_asignados == {PAGO2: [date(2026, 6, 30)]}
+    # sobrevive a una lectura nueva y queda en el historial
+    de_nuevo = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert _fila(de_nuevo)[PAGO2]["dias_asignados"] == ["2026-06-30"]
+    evento = svc.build_historial(key=KEY)["eventos"][0]
+    assert evento["tipo"] == "aplicar_sugerencia" and evento["detalle"] == {"dias": "2026-06-30"}
+
+    # volver a la ventana estándar devuelve el día a su sitio
+    v = svc.restablecer_pago(mes="2026-07", key=KEY, pago_id=PAGO2, version=1, usuario="ana")
+    assert _fila(v)[PAGO2]["estado"] == "sug" and _fila(v)[PAGO2]["dias_asignados"] == []
+    assert [h["cierre"] for h in v["fila"]["huecos"]] == [True]
+
+
+def test_aplicar_un_cierre_que_la_persona_no_vio_se_rechaza(bq, monkeypatch):
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
+    with pytest.raises(ErrorCorte) as e:
+        svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO2, cambios_vistos=[], version=0, usuario="ana",
+                               dias_vistos=[date(2026, 6, 29)])
+    assert e.value.codigo == "sugerencia_distinta"
+
+
+def test_el_cierre_se_toma_del_ultimo_dia_con_cobros_de_todos_los_comisionistas(bq):
+    # la consulta de cierres no lleva filtros de fila: igual para todos los comisionistas
+    svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert svc._cierres() == {date(2026, 6, 30)}

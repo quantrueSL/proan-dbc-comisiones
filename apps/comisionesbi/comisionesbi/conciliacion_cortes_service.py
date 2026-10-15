@@ -39,6 +39,7 @@ from comisionesbi.conciliacion_cortes_engine import (
     agrupar_pagos,
     construir_filas,
     resolver_fila,
+    ultimos_dias_con_cobros,
 )
 from comisionesbi.conciliacion_cortes_estado import (
     ConflictoVersion,
@@ -95,6 +96,15 @@ WHERE fecha BETWEEN @ini_ext AND @fin_ext
 GROUP BY 1, 2, 3, 4, 5
 """
 
+# Total de comisión por día de todos los comisionistas: de ahí sale el último día con cobros de cada mes.
+_CIERRES_SQL = f"""
+SELECT fecha, SUM(comision_total) AS comision
+FROM {_TABLA_DIARIA}
+WHERE fecha >= DATE '2025-01-01'
+GROUP BY fecha
+HAVING SUM(comision_total) > 0
+"""
+
 _DETALLE_SQL = f"""
 SELECT division_code, cedis, oficina, tipo_venta, matnr, descripcion, unidad_venta, unidad_tarifa,
   ANY_VALUE(tarifa)           AS tarifa,
@@ -132,6 +142,21 @@ def _iso(valor) -> str | None:
 _CACHE_TTL_POR_DEFECTO = 120
 # (mes, sociedad, división, comisionista, cobertura) -> (vence, datos crudos). Solo lo que viene de BigQuery.
 _CACHE: dict[tuple, tuple[float, tuple]] = {}
+
+
+_CIERRES_CACHE: list = []  # [(vence, frozenset de días)]
+
+
+def _cierres() -> frozenset:
+    """El último día con cobros de cada mes cerrado, con todos los comisionistas juntos (igual para todas las filas)."""
+    ttl = _cache_ttl_seconds()
+    if ttl and _CIERRES_CACHE and _CIERRES_CACHE[0][0] > time.monotonic():
+        return _CIERRES_CACHE[0][1]
+    filas = run_query(_CIERRES_SQL, "los días de cierre de mes", {})
+    dias = ultimos_dias_con_cobros({r["fecha"]: float(r["comision"] or 0.0) for r in filas})
+    if ttl:
+        _CIERRES_CACHE[:] = [(time.monotonic() + max(ttl, 3600), dias)]
+    return dias
 
 
 def _cache_ttl_seconds() -> int:
@@ -209,10 +234,11 @@ def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = 
 def _cargar(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = False):
     """Todas las filas resueltas, con el estado guardado de cada una aplicado."""
     ini, fin, docs, diario, nombres, cobertura_datos, _, info_docs = _datos(mes, sociedad, division, comisionista_id, con_cobertura)
-    claves = list(agrupar_pagos(docs))
+    cierres = _cierres()
+    claves = list(agrupar_pagos(docs, cierres=cierres))
     guardados = get_store().leer(claves)
     estados = {k: d.a_estado() for k, d in guardados.items()}
-    resueltas = construir_filas(docs, diario, estados, (ini, fin))
+    resueltas = construir_filas(docs, diario, estados, (ini, fin), cierres=cierres)
     versiones = {k: d.version for k, d in guardados.items()}
     return ini, fin, resueltas, nombres, diario, cobertura_datos, versiones, info_docs, guardados
 
@@ -231,6 +257,7 @@ def _sugerencia_json(s: Sugerencia | None) -> dict | None:
         "cambios": [
             {"pago_id": c.pago_id, "borde": c.borde, "de": _iso(c.de), "a": _iso(c.a)} for c in s.cambios
         ],
+        "dias_asignar": [_iso(d) for d in s.dias_asignar],
         "afectados": [
             {
                 "pago_id": a.pago_id,
@@ -263,6 +290,7 @@ def _pago_json(p: PagoResuelto, info_docs: dict | None = None, doc: DocFila | No
         "diferencia": p.diferencia,
         "estado": p.estado,
         "sin_calculo": p.sin_calculo,
+        "dias_asignados": [_iso(d) for d in p.dias_asignados],
         "drift": p.drift,
         "drift_pagado": p.drift_pagado,
         "consolidado_por": quien.get("por"),
@@ -393,11 +421,12 @@ def _vista_fila(mes: str, key: FilaKey, doc: DocFila) -> dict:
     """La fila resuelta con el estado `doc`, más los cobros diarios (sin volver a BigQuery si está en caché)."""
     sociedad, comisionista_id, division_code = key
     _, _, docs, diario, nombres, _, partes, info_docs = _datos(mes, sociedad, division_code, comisionista_id)
-    pagos = agrupar_pagos(docs).get(key)
+    cierres = _cierres()
+    pagos = agrupar_pagos(docs, cierres=cierres).get(key)
     if not pagos:
         return {"mes": mes, "fila": None, "dias": [], "dias_partes": {}}
     dias = {r["fecha"]: r["comision"] for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key}
-    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado())
+    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado(), cierres=cierres)
     return {
         "mes": mes,
         "fila": _fila_json(
@@ -455,11 +484,12 @@ def _contexto_edicion(mes: str, key: FilaKey, version: int):
     doc = get_store().leer([key]).get(key) or DocFila()
     if doc.version != version:
         raise ConflictoVersion("La fila cambió mientras la editabas. Se recargó con lo último.")
-    pagos = agrupar_pagos(docs).get(key)
+    cierres = _cierres()
+    pagos = agrupar_pagos(docs, cierres=cierres).get(key)
     if not pagos:
         raise ErrorCorte("fila_inexistente", "No hay pagos de esa fila en el rango cargado.")
     dias = {r["fecha"]: r["comision"] for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key}
-    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado())
+    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado(), cierres=cierres)
     return doc, fila
 
 
@@ -480,7 +510,7 @@ def _ov_json(overrides: dict, ids=None) -> dict:
 
 def _escribir(
     mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartadas=None, consolidados=None,
-    consolidados_info=None, detalle=None,
+    consolidados_info=None, dias_asignados=None, detalle=None,
 ) -> DocFila:
     """Guarda el nuevo estado de la fila (transacción con la versión que se leyó) y su evento en el historial."""
     nuevo = DocFila(
@@ -489,6 +519,7 @@ def _escribir(
         descartadas=doc.descartadas if descartadas is None else descartadas,
         consolidados=doc.consolidados if consolidados is None else consolidados,
         consolidados_info=doc.consolidados_info if consolidados_info is None else consolidados_info,
+        dias_asignados=doc.dias_asignados if dias_asignados is None else dias_asignados,
     )
     cambiados = {
         pid for pid in set(doc.overrides) | set(nuevo.overrides) if doc.overrides.get(pid) != nuevo.overrides.get(pid)
@@ -536,15 +567,21 @@ def _firma(cambios) -> set:
     }
 
 
-def aplicar_sugerencia(*, mes, key, pago_id, cambios_vistos, version, usuario) -> dict:
+def aplicar_sugerencia(*, mes, key, pago_id, cambios_vistos, version, usuario, dias_vistos=None) -> dict:
     doc, fila = _contexto_edicion(mes, key, version)
     sugerencia = _pago(fila, pago_id).sugerencia
     if sugerencia is None:
         raise ErrorCorte("sin_sugerencia", "Este pago ya no tiene una sugerencia que aplicar.")
     if cambios_vistos is not None and _firma(cambios_vistos) != _firma(sugerencia.cambios):
         raise ErrorCorte("sugerencia_distinta", "La sugerencia cambió desde que la viste. Revisa la nueva.")
-    overrides = fila.aplicar_sugerencia(sugerencia)
+    if dias_vistos is not None and {_iso(d) for d in dias_vistos} != {_iso(d) for d in sugerencia.dias_asignar}:
+        raise ErrorCorte("sugerencia_distinta", "La sugerencia cambió desde que la viste. Revisa la nueva.")
     descartadas = {k: v for k, v in doc.descartadas.items() if k != pago_id}
+    if sugerencia.tipo == "cierre":
+        return _guardar(mes, key, doc, usuario, "aplicar_sugerencia", pago_id=pago_id,
+                        dias_asignados=fila.con_dias(sugerencia), descartadas=descartadas,
+                        detalle={"dias": ",".join(_iso(d) for d in sugerencia.dias_asignar)})
+    overrides = fila.aplicar_sugerencia(sugerencia)
     return _guardar(mes, key, doc, usuario, "aplicar_sugerencia", pago_id=pago_id, overrides=overrides,
                     descartadas=descartadas)
 
@@ -571,6 +608,7 @@ def restablecer_pago(*, mes, key, pago_id, version, usuario) -> dict:
         raise ErrorCorte("corte_congelado", "El pago está consolidado.")
     overrides = {k: dict(v) for k, v in doc.overrides.items()}
     overrides.pop(pago_id, None)
+    dias_asignados = {k: v for k, v in doc.dias_asignados.items() if k != pago_id}
     for c in fila.cortes:
         if pago_id not in (c.izq, c.der):
             continue
@@ -581,7 +619,8 @@ def restablecer_pago(*, mes, key, pago_id, version, usuario) -> dict:
         if c.der == pago_id and c.izq in overrides:
             overrides[c.izq].pop("fin", None)
     overrides = {k: v for k, v in overrides.items() if v}
-    return _guardar(mes, key, doc, usuario, "restablecer_pago", pago_id=pago_id, overrides=overrides)
+    return _guardar(mes, key, doc, usuario, "restablecer_pago", pago_id=pago_id, overrides=overrides,
+                    dias_asignados=dias_asignados)
 
 
 def build_historial(*, key: FilaKey, limite: int = 30) -> dict:

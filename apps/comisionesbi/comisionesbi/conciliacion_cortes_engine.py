@@ -19,13 +19,14 @@ MODELO
     como `traslapes`. Ninguno se bloquea (en los datos reales hay 6.6% de huecos
     y 1.2% de traslapes entre pagos consecutivos).
   - Un borde congelado (de un pago consolidado) no se sugiere ni se mueve.
-  - Cierre de mes: lo cobrado el último día de cada mes va con el pago siguiente (regla del
-    cliente); ver `aplicar_cierre_de_mes`. Se aplica a la ventana por defecto.
+  - Cierre de mes: lo cobrado el último día CON COBROS de cada mes no entra en el pago de esa semana
+    (regla del cliente); ver `aplicar_cierre_de_mes`. Queda como hueco y, si con él un pago posterior cuadra
+    exacto, se sugiere asignárselo (`sugerir_cierre`); lo asignado se guarda en `dias_asignados`.
 
 SUGERENCIAS
   Cada generador recibe el contexto de una fila y el índice de un pago y
-  devuelve una `Sugerencia` o None. Hoy solo existe `sugerir_borde`; sumar otro
-  tipo (p. ej. Abarrotes con Huevo) es agregar una función a `GENERADORES`.
+  devuelve una `Sugerencia` o None: `sugerir_cierre` (asignar el día de cierre a un pago) y `sugerir_borde`
+  (mover cortes). Sumar otro tipo es agregar una función a `GENERADORES`.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from typing import Callable, Iterable, Mapping
+from typing import Callable, Collection, Iterable, Mapping
 
 TOLERANCIA = 1.0  # pesos: dentro de esto un pago "cuadra"
 MAX_DESPLAZAMIENTO = 3  # días que una sugerencia de borde puede mover cada corte
@@ -121,6 +122,8 @@ class EstadoFila:
     overrides: dict[str, dict[str, date]] = field(default_factory=dict)
     consolidados: dict[str, Foto] = field(default_factory=dict)
     descartadas: set[str] = field(default_factory=set)
+    # Días sueltos que la persona asignó a un pago, además de su ventana: {pago_id: [fecha, ...]}.
+    dias_asignados: dict[str, list[date]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -141,20 +144,48 @@ def _es_fin_de_mes(d: date) -> bool:
     return (d + DIA).month != d.month
 
 
-def aplicar_cierre_de_mes(pagos: list[Pago]) -> list[Pago]:
-    """Regla del cliente: lo cobrado el último día de cada mes no entra en el pago de esa semana.
+def ultimos_dias_con_cobros(total_por_dia: Mapping[date, float]) -> frozenset[date]:
+    """El último día con cobros de cada mes cerrado (hay datos de un mes posterior), con todas las filas juntas.
 
-    El cierre se hace durante ese día y no alcanza a entrar; va con el pago de la semana siguiente. Un pago
-    cuya ventana termina en fin de mes pasa a terminar un día antes. Ese día queda como un hueco de un día
-    (`Hueco.cierre`) y no se le asigna a ningún pago por defecto: medido sobre 740 casos con cobros ese día,
-    sacarlo del pago deja cuadrando 225 pagos (de 7 a 232 de 734), pero ningún pago siguiente lo absorbe de
-    forma consistente (el 1.º, 2.º, 3.º o 4.º mejoran en 55, 24, 40 y 0 casos y empeoran en 224 a 266), así que
-    adivinar el destino rompe más de lo que arregla. Solo mueve extremos exactos: una ventana que cruza el fin
-    de mes por dentro no se toca (en los datos no hay ninguna). Es parte de la ventana por defecto.
+    El mes más reciente de los datos se deja fuera: todavía puede tener cobros después de su último día cargado.
+    """
+    por_mes: dict[tuple[int, int], date] = {}
+    for dia, monto in total_por_dia.items():
+        if monto > 0:
+            m = (dia.year, dia.month)
+            if m not in por_mes or dia > por_mes[m]:
+                por_mes[m] = dia
+    if not por_mes:
+        return frozenset()
+    ultimo_mes = max((d.year, d.month) for d in total_por_dia)
+    return frozenset(d for m, d in por_mes.items() if m < ultimo_mes)
+
+
+def _hueco_de_cierre(ini: date, fin: date, cierres: "Collection[date] | None") -> bool:
+    """El bloque de fin de mes: los días sin pago que terminan en el día de cierre (hasta una semana)."""
+    if cierres is None:
+        return ini == fin and _es_fin_de_mes(ini)
+    return fin in cierres and (fin - ini).days < 7
+
+
+def _es_cierre(d: date, cierres: "Collection[date] | None") -> bool:
+    """`cierres` None = el último día del calendario; si no, solo esos días (el último día con cobros de cada mes)."""
+    return _es_fin_de_mes(d) if cierres is None else d in cierres
+
+
+def aplicar_cierre_de_mes(pagos: list[Pago], cierres: "Collection[date] | None" = None) -> list[Pago]:
+    """Regla del cliente: lo cobrado el último día con cobros de cada mes no entra en el pago de esa semana.
+
+    El cierre se hace durante ese día y no alcanza a entrar. Un pago cuya ventana termina en ese día pasa a
+    terminar un día antes. Ese día queda como un hueco de un día (`Hueco.cierre`) y no se le asigna a ningún pago
+    por defecto: medido sobre 740 casos con cobros ese día, sacarlo del pago deja cuadrando 225 pagos (de 7 a 232
+    de 734). Dónde se paga después cambia de un mes a otro y de un comisionista a otro (1.º, 2.º o 3.º pago del
+    mes siguiente, y a veces solo una parte), así que no se adivina: `sugerir_cierre` lo propone solo donde
+    cuadra exacto. Solo mueve extremos exactos: una ventana que cruza ese día por dentro no se toca.
     """
     salida = []
     for p in pagos:
-        if p.ini and p.fin and _es_fin_de_mes(p.fin) and p.fin > p.ini:
+        if p.ini and p.fin and _es_cierre(p.fin, cierres) and p.fin > p.ini:
             p = replace(p, fin=p.fin - DIA)
         salida.append(p)
     return salida
@@ -201,7 +232,10 @@ def _sin_traslapes(pagos: list[Pago]) -> list[Pago]:
 
 
 def agrupar_pagos(
-    docs: Iterable[DocPago], cierre_de_mes: bool = True, estandar: bool = True
+    docs: Iterable[DocPago],
+    cierre_de_mes: bool = True,
+    estandar: bool = True,
+    cierres: Collection[date] | None = None,
 ) -> dict[FilaKey, list[Pago]]:
     """Agrupa documentos en pagos por fila y ventana; los sin ventana quedan sueltos.
 
@@ -238,7 +272,7 @@ def agrupar_pagos(
         pagos.sort(key=lambda p: (p.ini is None, p.ini or date.min, p.fin or date.min, p.pago_id))
         if estandar:
             pagos = _sin_traslapes(pagos)
-        out[llave] = aplicar_cierre_de_mes(pagos) if cierre_de_mes else pagos
+        out[llave] = aplicar_cierre_de_mes(pagos, cierres) if cierre_de_mes else pagos
     return out
 
 
@@ -272,6 +306,8 @@ class Sugerencia:
     afectados: tuple[Afectado, ...]
     unica: bool
     n_opciones: int
+    # Tipo "cierre": los días sueltos que se le asignan al pago (no hay cambios de borde).
+    dias_asignar: tuple[date, ...] = ()
 
 
 @dataclass
@@ -291,10 +327,11 @@ class PagoResuelto:
     drift_pagado: float | None = None  # consolidado: pagado vivo - pagado congelado
     descartada: bool = False  # la persona descartó la sugerencia de este pago
     sugerencia: Sugerencia | None = None
+    dias_asignados: tuple[date, ...] = ()
 
     @property
     def ajustado(self) -> bool:
-        return (self.ini, self.fin) != (self.ini_default, self.fin_default)
+        return (self.ini, self.fin) != (self.ini_default, self.fin_default) or bool(self.dias_asignados)
 
 
 @dataclass(frozen=True)
@@ -304,7 +341,7 @@ class Hueco:
     comision: float
     despues_de: str
     antes_de: str
-    # El último día del mes: va con el pago de la semana siguiente (regla del cliente), no es un cobro olvidado.
+    # El último día con cobros del mes: no entra en el pago de su semana (regla del cliente); no es un cobro olvidado.
     cierre: bool = False
 
 
@@ -331,6 +368,7 @@ class FilaResuelta:
     traslapes: list[Traslape]
     cortes: list[Corte]
     overrides: dict[str, dict[str, date]]
+    dias_asignados: dict[str, list[date]] = field(default_factory=dict)
 
     def pago(self, pago_id: str) -> PagoResuelto:
         for p in self.pagos:
@@ -354,6 +392,14 @@ class FilaResuelta:
             if self._congelado(c.pago_id):
                 raise ErrorCorte("corte_congelado", "El pago está consolidado.")
         return self._con(s.cambios)
+
+    def con_dias(self, s: Sugerencia) -> dict[str, list[date]]:
+        """Los días asignados con los de una sugerencia de cierre sumados (devuelve el nuevo dict, no lo guarda)."""
+        if self._congelado(s.pago_id):
+            raise ErrorCorte("corte_congelado", "El pago está consolidado.")
+        nuevo = {k: list(v) for k, v in self.dias_asignados.items()}
+        nuevo[s.pago_id] = sorted(set(nuevo.get(s.pago_id, [])) | set(s.dias_asignar))
+        return nuevo
 
     def mover_corte(self, izq_id: str, nueva_fecha: date) -> dict[str, dict[str, date]]:
         """Mueve el corte entre un pago y el siguiente (deben ser contiguos)."""
@@ -426,13 +472,27 @@ class _V:
 
 
 class _Ctx:
-    def __init__(self, vs: list[_V], serie: SerieDiaria, descartadas: set[str]):
+    def __init__(
+        self,
+        vs: list[_V],
+        serie: SerieDiaria,
+        descartadas: set[str],
+        dias_asignados: Mapping[str, Collection[date]] | None = None,
+        cierres_libres: list[list[tuple[date, float]]] | None = None,
+    ):
         self.vs = vs
         self.serie = serie
         self.descartadas = descartadas
+        self.dias_asignados = dias_asignados or {}
+        # Por cada día de cierre: los días seguidos, hasta él, que ningún pago cubre ni tiene asignado,
+        # como (día, comisión), del más antiguo al día de cierre.
+        self.cierres_libres = cierres_libres or []
 
     def calc(self, v: _V) -> float:
-        return v.frozen_calc if v.cons and v.frozen_calc is not None else self.serie.suma(v.ini, v.fin)
+        if v.cons and v.frozen_calc is not None:
+            return v.frozen_calc
+        extra = sum(self.serie.suma(d, d) for d in self.dias_asignados.get(v.pago_id, ()))
+        return self.serie.suma(v.ini, v.fin) + extra
 
     def dif(self, v: _V) -> float:
         return self.calc(v) - v.pagado
@@ -449,6 +509,7 @@ def resolver_fila(
     serie: SerieDiaria,
     estado: EstadoFila | None = None,
     sugerir_en: tuple[date, date] | None = None,
+    cierres: Collection[date] | None = None,
 ) -> FilaResuelta:
     """`sugerir_en`: si se da, solo se buscan sugerencias en los pagos que tocan ese rango; los demás
     (vecinos cargados de margen) quedan como "sin explicación" sin gastar la búsqueda."""
@@ -473,7 +534,21 @@ def resolver_fila(
             vs.append(_V(p.pago_id, ini, fin, p.pagado, False))
 
     vs.sort(key=lambda v: (v.ini, v.fin, v.pago_id))
-    ctx = _Ctx(vs, serie, estado.descartadas)
+    asignados = {pid: tuple(sorted(set(ds))) for pid, ds in estado.dias_asignados.items() if ds}
+    ocupados = {d for ds in asignados.values() for d in ds}
+    def libre(d: date) -> bool:
+        return d not in ocupados and not any(v.ini <= d <= v.fin for v in vs)
+
+    libres: list[list[tuple[date, float]]] = []
+    for dia in sorted(cierres or ()):
+        corrida: list[tuple[date, float]] = []
+        d = dia
+        while len(corrida) < DIAS_DE_COLA and libre(d):
+            corrida.insert(0, (d, round(serie.suma(d, d), 2)))
+            d -= DIA
+        if any(m > 0 for _, m in corrida):
+            libres.append(corrida)
+    ctx = _Ctx(vs, serie, estado.descartadas, asignados, libres)
     docs_de = {p.pago_id: p.docs for p in pagos}
     pagado_vivo = {p.pago_id: p.pagado for p in pagos}
 
@@ -486,6 +561,7 @@ def resolver_fila(
             v.pago_id, docs_de[v.pago_id], v.ini, v.fin, ini_d, fin_d, v.pagado,
             round(calculado, 2), round(dif, 2), OK, sin_calculo=calculado == 0,
             descartada=v.pago_id in ctx.descartadas,
+            dias_asignados=asignados.get(v.pago_id, ()),
         )
         if v.cons:
             r.estado = CONSOLIDADO
@@ -502,14 +578,19 @@ def resolver_fila(
         if b.ini > a.fin + DIA:
             ini, fin = a.fin + DIA, b.ini - DIA
             huecos.append(
-                Hueco(ini, fin, round(serie.suma(ini, fin), 2), a.pago_id, b.pago_id, cierre=ini == fin and _es_fin_de_mes(ini))
+                Hueco(ini, fin, round(serie.suma(ini, fin), 2), a.pago_id, b.pago_id, cierre=_hueco_de_cierre(ini, fin, cierres))
             )
         elif b.ini <= a.fin:
             traslapes.append(Traslape(b.ini, min(a.fin, b.fin), (a.pago_id, b.pago_id)))
         else:
             cortes.append(Corte(a.pago_id, b.pago_id, a.fin, a.cons or b.cons))
 
-    return FilaResuelta(key, resueltos + sin_ventana, huecos, traslapes, cortes, dict(estado.overrides))
+    # un hueco que solo es un día asignado a un pago ya no es comisión sin pago
+    huecos = [h for h in huecos if not all((h.ini + timedelta(days=k)) in ocupados for k in range((h.fin - h.ini).days + 1))]
+    return FilaResuelta(
+        key, resueltos + sin_ventana, huecos, traslapes, cortes, dict(estado.overrides),
+        {k: list(v) for k, v in asignados.items()},
+    )
 
 
 # ─── Sugerencias ─────────────────────────────────────────────────────────
@@ -580,7 +661,7 @@ def _evaluar(ctx: _Ctx, i: int, dl: int, dr: int, acopla_izq: _V | None, acopla_
             return None
 
     nv = ventana(v)
-    if abs(ctx.serie.suma(nv.ini, nv.fin) - nv.pagado) > TOLERANCIA:
+    if abs(ctx.calc(nv) - nv.pagado) > TOLERANCIA:
         return None
 
     total = 0.0
@@ -613,7 +694,46 @@ def _evaluar(ctx: _Ctx, i: int, dl: int, dr: int, acopla_izq: _V | None, acopla_
     }
 
 
-GENERADORES: list[Callable[[_Ctx, int], "Sugerencia | None"]] = [sugerir_borde]
+DIAS_DE_COLA = 7  # cuántos días hacia atrás, desde el día de cierre, se juntan en el bloque de fin de mes
+PAGOS_PARA_ASIGNAR_CIERRE = 4  # el día de cierre se busca en los primeros pagos que empiezan después de él
+
+
+def sugerir_cierre(ctx: _Ctx, i: int) -> Sugerencia | None:
+    """Asignar al pago el bloque de fin de mes que lo deja en $0.
+
+    El bloque son los días sin pago que terminan en el último día con cobros de un mes (el día de cierre, y los
+    que lo preceden si la semana de arriba ya los soltó). Se prueba cada cola posible, de un día a siete, y se
+    ofrece la más corta que deja el pago exacto. Solo entre los primeros pagos que empiezan después del cierre: ahí
+    es donde el cliente lo paga (mismo mes siguiente para todos, pero distinto entre meses y a veces solo una parte).
+    """
+    vs, v = ctx.vs, ctx.vs[i]
+    if v.cons or not ctx.cierres_libres:
+        return None
+    dif = ctx.dif(v)
+    candidatos = []
+    for corrida in ctx.cierres_libres:
+        cierre = corrida[-1][0]
+        if cierre >= v.ini:
+            continue
+        despues = [x for x in vs if x.ini > cierre and not x.cons]
+        if v.pago_id not in [x.pago_id for x in despues[:PAGOS_PARA_ASIGNAR_CIERRE]]:
+            continue
+        for j, (_, monto_j) in enumerate(corrida):
+            if monto_j <= 0:
+                continue  # la cola arranca en un día con cobros: una cola que empieza en un día vacío repite a otra
+            bloque = corrida[j:]
+            total = round(sum(m for _, m in bloque), 2)
+            if abs(dif + total) <= TOLERANCIA:
+                candidatos.append((len(bloque), cierre, tuple(d for d, _ in bloque), total))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda c: (c[0], -c[1].toordinal()))  # la cola más corta; a igual largo, el cierre más cercano
+    _, _, dias, total = candidatos[0]
+    afectado = Afectado(v.pago_id, v.ini, v.fin, v.ini, v.fin, round(dif, 2), round(dif + total, 2))
+    return Sugerencia("cierre", v.pago_id, (), (afectado,), len(candidatos) == 1, len(candidatos), dias_asignar=dias)
+
+
+GENERADORES: list[Callable[[_Ctx, int], "Sugerencia | None"]] = [sugerir_cierre, sugerir_borde]
 
 
 # ─── Conjunto de filas ───────────────────────────────────────────────────
@@ -626,6 +746,7 @@ def construir_filas(
     sugerir_en: tuple[date, date] | None = None,
     cierre_de_mes: bool = True,
     estandar: bool = True,
+    cierres: Collection[date] | None = None,
 ) -> dict[FilaKey, FilaResuelta]:
     """Resuelve todas las filas. `diario`: dicts con sociedad, comisionista_id, division_code, fecha, comision."""
     dias: dict[FilaKey, dict[date, float]] = defaultdict(dict)
@@ -635,6 +756,6 @@ def construir_filas(
 
     estados = estados or {}
     out = {}
-    for key, pagos in agrupar_pagos(docs, cierre_de_mes, estandar).items():
-        out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en)
+    for key, pagos in agrupar_pagos(docs, cierre_de_mes, estandar, cierres).items():
+        out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en, cierres)
     return out
