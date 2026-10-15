@@ -6,7 +6,7 @@
 // panel a la derecha, fijo mientras se recorre la lista.
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { ComisionesCatalog, CortesEstado, CortesFila, CortesMesResponse, DivisionRow } from "@/types/comisiones";
+import type { ComisionesCatalog, CortesEstado, CortesFila, CortesMesResponse, CortesPago, DivisionRow } from "@/types/comisiones";
 import { CortesPanel } from "./cortes-panel";
 import {
   ETIQUETA_ESTADO,
@@ -20,6 +20,7 @@ import {
   filtrarFilas,
   hayDrift,
   huecosDelMes,
+  mesParaPago,
   pesos,
   posicionarPagos,
   rangoCorto,
@@ -80,11 +81,12 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   // Sube al recargar el mes después de un lote: el panel abierto vuelve a pedir su fila.
   const [refrescos, setRefrescos] = useState(0);
 
-  async function cargarMes(nuevo: string) {
+  // `conservar`: al cambiar de mes porque se navegó a un pago de otro mes, ese pago queda elegido.
+  async function cargarMes(nuevo: string, conservar: Seleccion | null = null) {
     setMes(nuevo);
     setCargando(true);
     setError(null);
-    setSeleccion(null);
+    setSeleccion(conservar);
     setAviso(null);
     try {
       const res = await fetch("/api/comisionesbi/cortes/mes", {
@@ -178,13 +180,18 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
   const cola = useMemo(() => colaDePagos(grupos, semanas), [grupos, semanas]);
 
-  // La tabla recorre en el mismo orden que la cola; "anterior" y "siguiente" se quedan dentro de la fila.
-  const vecinos = useMemo(() => {
-    if (!seleccion) return { anterior: null, siguiente: null };
-    const deLaFila = cola.filter((r) => r.filaId === seleccion.filaId);
-    const i = deLaFila.findIndex((r) => r.pagoId === seleccion.pagoId);
-    return { anterior: i > 0 ? deLaFila[i - 1] : null, siguiente: i >= 0 && i < deLaFila.length - 1 ? deLaFila[i + 1] : null };
-  }, [cola, seleccion]);
+  // Ir a otro pago de la fila elegida; si es de otro mes, la lista cambia de mes y el pago queda elegido.
+  function irAPago(pago: CortesPago) {
+    if (!seleccion) return;
+    const destino = mesParaPago(pago, desde, hasta);
+    if (destino === null) {
+      elegir({ filaId: seleccion.filaId, pagoId: pago.pago_id });
+      return;
+    }
+    const fila = filas.find((f) => f.fila_id === seleccion.filaId);
+    if (fila) setAbiertos((previos) => new Set(previos).add(fila.comisionista_id));
+    void cargarMes(destino, { filaId: seleccion.filaId, pagoId: pago.pago_id });
+  }
 
   function elegir(ref: RefPago, mensaje: string | null = null) {
     setSeleccion({ filaId: ref.filaId, pagoId: ref.pagoId });
@@ -363,11 +370,11 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             <small>{pesos(totales.porEstado.sinv.pagado)} pagado</small>
           </div>
           <div className="cortes-kpi is-hueco es-ancho">
-            <dt>Cobros sin pago</dt>
+            <dt>Comisión calculada sin pago</dt>
             <dd>{totales.sinPago.n}</dd>
             <small>{pesos(totales.sinPago.comision)} de comisión</small>
             {totales.cierre.n ? (
-              <small title="Lo cobrado el último día del mes va con el pago de la semana siguiente">
+              <small title="Lo cobrado el último día del mes no entra en el pago de su semana y aún no está asignado a otro pago">
                 Cierre de mes: {pesos(totales.cierre.comision)}
               </small>
             ) : null}
@@ -456,7 +463,7 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
                                     {fila.junta_con?.length ? " · se paga junto" : ""}
                                     {filaTodoCuadra(fila) ? " · todo cuadra" : ""}
                                   </span>
-                                  {hueco.n ? <em>Cobros sin pago: {pesos(hueco.comision)}</em> : null}
+                                  {hueco.n ? <em>Comisión calculada sin pago: {pesos(hueco.comision)}</em> : null}
                                   {fila.huerfanos?.length ? <em>⚠ {fila.huerfanos.length} guardado(s) de un documento que ya no está</em> : null}
                                 </div>
                                 {posicionados.map(({ pago, colIni, colFin }) => {
@@ -567,15 +574,13 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             mes={mes}
             nombresDivision={nombresDivision}
             onAccionHecha={accionHecha}
-            onAnterior={vecinos.anterior ? () => elegir(vecinos.anterior!) : null}
             onCerrar={() => {
               setSeleccion(null);
               setAviso(null);
             }}
-            onElegirPago={(pagoId) => elegir({ filaId: filaSeleccionada.fila_id, pagoId })}
+            onElegirPago={irAPago}
             onFilaActualizada={filaActualizada}
             onSaltarSoloChange={setSaltarSolo}
-            onSiguiente={vecinos.siguiente ? () => elegir(vecinos.siguiente!) : null}
             onSiguientePendiente={() => irAlSiguientePendiente()}
             pagoId={seleccion.pagoId}
             puedeEditar={puedeEditar}

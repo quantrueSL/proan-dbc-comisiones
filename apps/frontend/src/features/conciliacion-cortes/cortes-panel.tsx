@@ -22,6 +22,7 @@ import {
   ETIQUETA_ESTADO,
   calculadoPorParte,
   cortesMovidos,
+  describirCierre,
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
@@ -31,6 +32,7 @@ import {
   moverCorteLocal,
   nombreComisionista,
   pagosEnVista,
+  pagosOrdenados,
   pesos,
   rangoCorto,
   sumarDias,
@@ -49,10 +51,9 @@ type Props = {
   aviso: string | null;
   saltarSolo: boolean;
   onSaltarSoloChange: (valor: boolean) => void;
-  onAnterior: (() => void) | null;
-  onSiguiente: (() => void) | null;
   onSiguientePendiente: () => void;
-  onElegirPago: (pagoId: string) => void;
+  /** Ir a otro pago de la misma fila, aunque sea de otro mes: la lista cambia de mes si hace falta. */
+  onElegirPago: (pago: CortesPago) => void;
   onCerrar: () => void;
   /** La fila ya guardada: la lista del mes se actualiza con ella. */
   onFilaActualizada: (fila: CortesFila) => void;
@@ -239,8 +240,6 @@ export function CortesPanel({
   aviso: avisoAccion,
   saltarSolo,
   onSaltarSoloChange,
-  onAnterior,
-  onSiguiente,
   onSiguientePendiente,
   onElegirPago,
   onCerrar,
@@ -416,6 +415,11 @@ export function CortesPanel({
   const elementos = fila ? elementosDeLinea(fila, vista) : [];
   const puedeActuar = puedeEditar && !guardando && !pendiente && !!filaBase;
   const filaActual = fila ?? filaResumen;
+  // Anterior y siguiente salen de toda la fila cargada (con margen de un mes a cada lado), no solo del mes en pantalla.
+  const ordenados = fila ? pagosOrdenados(fila) : [];
+  const posicion = ordenados.findIndex((p) => p.pago_id === pago.pago_id);
+  const anterior = posicion > 0 ? ordenados[posicion - 1] : null;
+  const siguiente = posicion >= 0 && posicion < ordenados.length - 1 ? ordenados[posicion + 1] : null;
   const huerfanos = filaActual.huerfanos ?? [];
   const consolidado = pago.estado === "cons";
   /** Los pagos consolidados a cada lado de un corte (uno o los dos). */
@@ -464,10 +468,10 @@ export function CortesPanel({
       </header>
 
       <nav aria-label="Moverse entre pagos" className="cortes-nav">
-        <button className="cortes-boton" disabled={!onAnterior} onClick={() => onAnterior?.()} type="button">
+        <button className="cortes-boton" disabled={!anterior} onClick={() => anterior && onElegirPago(anterior)} type="button">
           ‹ Pago anterior
         </button>
-        <button className="cortes-boton" disabled={!onSiguiente} onClick={() => onSiguiente?.()} type="button">
+        <button className="cortes-boton" disabled={!siguiente} onClick={() => siguiente && onElegirPago(siguiente)} type="button">
           Pago siguiente ›
         </button>
         <button className="cortes-boton is-primario" onClick={onSiguientePendiente} title="Atajo: N" type="button">
@@ -722,7 +726,7 @@ export function CortesPanel({
                                 <div className="cortes-tramo-cab">
                                   <b>{el.cierre ? "Cierre de mes" : "Sin pago"}</b>
                                   <span className={`cortes-pastilla ${el.cierre ? "is-cons" : "is-sinv"}`}>
-                                    {el.cierre ? "Va con el pago siguiente" : "Cobros sin pago"}
+                                    {el.cierre ? "Cierre de mes, sin asignar" : "Comisión calculada sin pago"}
                                   </span>
                                 </div>
                                 <dl className="cortes-cifras">
@@ -733,7 +737,7 @@ export function CortesPanel({
                                 </dl>
                                 <div className="cortes-dias">
                                   {dd.map((d) => (
-                                    <div className="cortes-dia" key={d}>
+                                    <div className={`cortes-dia${marcados.has(d) ? " is-mv" : ""}`} key={d}>
                                       <small>{fechaConDia(d).replace(" ", "\n")}</small>
                                       {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
                                     </div>
@@ -756,7 +760,7 @@ export function CortesPanel({
                                 {p.pago_id === pago.pago_id ? (
                                   <b>{rangoCorto(p.ini!, p.fin!)}</b>
                                 ) : (
-                                  <button className="cortes-ir" onClick={() => onElegirPago(p.pago_id)} title="Ir a este pago" type="button">
+                                  <button className="cortes-ir" onClick={() => onElegirPago(p)} title="Ir a este pago" type="button">
                                     {rangoCorto(p.ini!, p.fin!)}
                                   </button>
                                 )}
@@ -773,7 +777,23 @@ export function CortesPanel({
                                     {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
                                   </div>
                                 ))}
+                                {(p.dias_asignados ?? []).map((d) => (
+                                  <div className="cortes-dia is-asignado" key={`a${d}`} title="Día de cierre asignado a este pago">
+                                    <small>{fechaConDia(d).replace(" ", "\n")}</small>
+                                    {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
+                                  </div>
+                                ))}
                               </div>
+                              {(p.dias_asignados ?? []).length ? (
+                                <small className="cortes-incluye">
+                                  Incluye el cierre del{" "}
+                                  {(p.dias_asignados ?? []).length > 1
+                                    ? rangoCorto(p.dias_asignados![0], p.dias_asignados![p.dias_asignados!.length - 1])
+                                    : fechaCorta(p.dias_asignados![0])}
+                                  :{" "}
+                                  {pesos((p.dias_asignados ?? []).reduce((t, d) => t + (dias.get(d) ?? 0), 0))}
+                                </small>
+                              ) : null}
                             </div>
                           );
                         })}
@@ -815,7 +835,10 @@ export function CortesPanel({
                         {sugerencia.unica ? "Única opción exacta" : "Varias opciones, la de menor cambio"}
                       </span>
                     </div>
-                    <h3>Sugerencia: {cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}</h3>
+                    <h3>
+                      Sugerencia:{" "}
+                      {sugerencia.tipo === "cierre" ? describirCierre(sugerencia) : cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}
+                    </h3>
                     <div className="cortes-antes-despues">
                       {sugerencia.afectados.map((a) => (
                         <div key={a.pago_id}>
@@ -831,7 +854,13 @@ export function CortesPanel({
                         <button
                           className="cortes-boton is-primario"
                           disabled={!puedeActuar}
-                          onClick={() => void editar("aplicar", { pago_id: pago.pago_id, cambios: sugerencia.cambios }, "Sugerencia aplicada.")}
+                          onClick={() =>
+                            void editar(
+                              "aplicar",
+                              { pago_id: pago.pago_id, cambios: sugerencia.cambios, dias: sugerencia.dias_asignar ?? [] },
+                              "Sugerencia aplicada."
+                            )
+                          }
                           type="button"
                         >
                           Aplicar

@@ -211,3 +211,25 @@ pagos siguientes (hasta 6) uno cuyo residuo (pagado − calculado) sea igual a l
 El destino por mes coincide con la tabla del análisis (1.º, 1.º, 1.º, 3.º, —, 1.º, 3.º, 2.º). Los pagos de destino que "se rompían" al sumar
 el día a todos son comisionistas cuyo día NO salió de su semana: el movimiento es por comisionista, no global. Mayo no se pudo medir
 (sábado 30 sin casos claros). Casos sin pago de origen en mayo: 79.
+
+## 11. Implementado: último día con cobros + sugerencia de cierre
+
+- El "último día del mes" ya no es el del calendario sino el último día con cobros de cada mes cerrado, con todos los comisionistas
+  juntos (`ultimos_dias_con_cobros`; el mes más reciente de los datos se deja fuera). Un pago que termina ese día lo pierde y queda
+  como hueco "Cierre de mes" (la tarjeta no cambió).
+- Nueva sugerencia `cierre`: asignar ese día a un pago posterior (entre los 4 primeros que empiezan después) solo si lo deja en $0
+  (±$1). Se guarda en `dias_asignados` de la fila (Firestore), con historial; "Volver a la ventana estándar" lo deshace.
+- Sobre los datos de ene–sep: 120 sugerencias de cierre; aplicadas todas, los pagos que cuadran pasan de 1,316 a 1,425 (+109).
+- Mayo: el último día con cobros es el domingo 31, no el sábado 30 del análisis.
+
+## 12. El bloque de fin de mes (más de un día)
+
+Caso de Silvana: 29, 30 y 31 de agosto juntos ($9,910) cubren exacto el desfase del pago de 5-11 sep, y el pago de 22-30 ago sobraba $364
+(los días 29 y 30). Probando colas de 1 a 7 días terminadas en el último día con cobros, solo cuando el pago de origen y el de destino
+quedan exactos: 105 casos se resuelven con solo el último día y 20 más solo con una cola de 2 o 3 días (feb, abr, jun, ago).
+Tomar siempre "el último sábado hasta el último día" empeora (41 casos frente a 105), así que la cola se prueba caso por caso.
+
+Implementado: el bloque de fin de mes son los días sin pago que terminan en el último día con cobros (hueco `cierre`, hasta 7 días). Los días
+de la semana anterior pasan al bloque cuando se aplica la sugerencia de borde de ese pago (terminar el pago el viernes); entonces el pago de
+destino ofrece la cola más corta que lo deja exacto. Sobre ene–sep (ok = pagos que cuadran, base 1,316): solo cierres 1,436; borde
+y luego cierres (dos pasos) 1,536.

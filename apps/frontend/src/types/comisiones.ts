@@ -484,6 +484,8 @@ export type CortesSugerencia = {
   unica: boolean;
   n_opciones: number;
   cambios: CortesCambioBorde[];
+  /** Tipo `cierre`: los días de cierre de mes que se le asignan al pago (no hay cambios de borde). */
+  dias_asignar?: string[];
   afectados: CortesAfectado[];
 };
 
@@ -518,6 +520,8 @@ export type CortesPago = {
   drift: number | null;
   /** Consolidado: pagado de hoy en SAP − pagado congelado. */
   drift_pagado?: number | null;
+  /** Días sueltos (cierre de mes) que se le sumaron a este pago además de su ventana. */
+  dias_asignados?: string[];
   consolidado_por?: string | null;
   consolidado_en?: string | null;
   /** La persona descartó la sugerencia de este pago. */

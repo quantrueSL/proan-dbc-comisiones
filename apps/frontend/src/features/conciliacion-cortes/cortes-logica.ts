@@ -5,6 +5,7 @@ import type {
   CortesEstado,
   CortesFila,
   CortesHueco,
+  CortesMesResponse,
   CortesPago,
   CortesSugerencia
 } from "@/types/comisiones";
@@ -308,7 +309,7 @@ export function totalesCortes(filas: CortesFila[], desde: string, hasta: string)
   return { porEstado, sinPago, cierre, totalPagos };
 }
 
-/** Cobros sin pago de una fila dentro del mes (para el aviso junto a su nombre). */
+/** Comisión calculada sin pago de una fila dentro del mes (para el aviso junto a su nombre). */
 export function huecosDelMes(fila: CortesFila, desde: string, hasta: string): { n: number; comision: number } {
   const hs = fila.huecos.filter((h) => h.comision > 0 && !h.cierre && huecoToca(h, desde, hasta));
   return { n: hs.length, comision: hs.reduce((s, h) => s + h.comision, 0) };
@@ -364,6 +365,7 @@ export function elementosDeLinea(fila: CortesFila, vista: CortesPago[]): Element
 export function diasQueCambian(s: CortesSugerencia | null): Set<string> {
   const dias = new Set<string>();
   if (!s) return dias;
+  for (const d of s.dias_asignar ?? []) dias.add(d);
   for (const c of s.cambios) {
     const ini = c.de < c.a ? c.de : c.a;
     const fin = c.de < c.a ? c.a : c.de;
@@ -373,6 +375,16 @@ export function diasQueCambian(s: CortesSugerencia | null): Set<string> {
     for (let d = desde; d <= hasta; d = sumarDias(d, 1)) dias.add(d);
   }
   return dias;
+}
+
+/** Frase de una sugerencia de cierre: "incluir el cierre del vie 31 ago ($12,030) en este pago". */
+export function describirCierre(s: CortesSugerencia): string {
+  const monto = s.afectados.length ? s.afectados[0].diferencia_despues - s.afectados[0].diferencia_antes : null;
+  const dias = [...(s.dias_asignar ?? [])].sort();
+  // un día: "del lun 31 ago"; varios seguidos (el bloque de fin de mes): "del vie 29 ago al lun 31 ago"
+  const cuando =
+    dias.length > 1 ? `del ${fechaConDia(dias[0])} al ${fechaConDia(dias[dias.length - 1])}` : `del ${fechaConDia(dias[0] ?? "")}`;
+  return `incluir el cierre ${cuando}${monto === null ? "" : ` (${pesos(monto)})`} en este pago`;
 }
 
 export type CorteMovido = {
@@ -418,9 +430,34 @@ export function nombreComisionista(fila: Pick<CortesFila, "comisionista" | "comi
   return fila.comisionista?.trim() || `Proveedor ${fila.comisionista_id.replace(/^0+/, "")}`;
 }
 
-/** Mes `AAAA-MM` por defecto: el del último día cerrado hace dos semanas. */
+/**
+ * Mes `AAAA-MM` con el que se abre la pestaña: el de hoy. Si todavía no tiene pagos con ventana (los pagos
+ * se hacen los viernes y el mes recién empezó), la página abre el anterior; en cuanto entran los primeros
+ * pagos del mes nuevo, la pestaña se abre en él.
+ */
 export function mesPorDefecto(hoyISO: string): string {
-  return sumarDias(hoyISO, -14).slice(0, 7);
+  return hoyISO.slice(0, 7);
+}
+
+/**
+ * El mes al que hay que cambiar para ver un pago, o `null` si el pago ya toca el mes en pantalla. Un pago anterior
+ * al mes se ve en el mes de su fin; uno posterior, en el mes de su inicio.
+ */
+export function mesParaPago(pago: { ini: string | null; fin: string | null }, desde: string, hasta: string): string | null {
+  if (!pago.ini || !pago.fin) return null;
+  if (pago.ini <= hasta && pago.fin >= desde) return null;
+  return (pago.fin < desde ? pago.fin : pago.ini).slice(0, 7);
+}
+
+/** El mes `AAAA-MM` anterior. */
+export function mesAnterior(mes: string): string {
+  const [a, m] = mes.split("-").map(Number);
+  return m === 1 ? `${a - 1}-12` : `${a}-${String(m - 1).padStart(2, "0")}`;
+}
+
+/** ¿Hay algún pago con ventana en el mes? Sin ninguno (solo pagos sin ventana) el mes aún no tiene nada que conciliar. */
+export function tienePagosConVentana(respuesta: Pick<CortesMesResponse, "filas">): boolean {
+  return respuesta.filas.some((f) => f.pagos.some((p) => p.estado !== "sinv"));
 }
 
 /** Meses disponibles, del más reciente al más antiguo, entre dos fechas ISO. */
@@ -476,7 +513,9 @@ export function moverCorteLocal(fila: CortesFila, dias: Map<string, number>, izq
   const corte = fila.cortes.find((c) => c.izq === izqId);
   if (!corte) return fila;
   const recalcula = (p: CortesPago, ini: string, fin: string): CortesPago => {
-    const calculado = Math.round(sumaDias(dias, ini, fin) * 100) / 100;
+    // los días sueltos asignados (cierre de mes) siguen sumándose al mover un corte
+    const asignados = (p.dias_asignados ?? []).reduce((t, d) => t + (dias.get(d) ?? 0), 0);
+    const calculado = Math.round((sumaDias(dias, ini, fin) + asignados) * 100) / 100;
     const diferencia = Math.round((calculado - p.pagado) * 100) / 100;
     return {
       ...p,

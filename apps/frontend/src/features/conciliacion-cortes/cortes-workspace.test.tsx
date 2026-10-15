@@ -146,7 +146,7 @@ describe("CortesWorkspace", () => {
     expect(html).toContain("Con sugerencia");
     expect(html).toContain("Dif. $4,100");
     expect(html).toContain("$20,000 calculado");
-    expect(html).toContain("Cobros sin pago");
+    expect(html).toContain("Comisión calculada sin pago");
     expect(html).toContain("$1,800 de comisión");
   });
 
@@ -162,7 +162,7 @@ describe("CortesWorkspace", () => {
     const html = pinta(r);
     expect(html).toContain("Cierre de mes: $4,200");
     expect(html).toContain("$0 de comisión");
-    expect(html).not.toContain("Cobros sin pago:");
+    expect(html).not.toContain("Comisión calculada sin pago:");
   });
 
   it("Consolidar lo que cuadra cuenta lo que planea el servidor, no todo lo que cuadra", () => {

@@ -5,6 +5,7 @@ import {
   calculadoPorParte,
   colaDePagos,
   cortesMovidos,
+  describirCierre,
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
@@ -15,6 +16,9 @@ import {
   hayDrift,
   huecosDelMes,
   limitesDeCorte,
+  mesAnterior,
+  mesParaPago,
+  tienePagosConVentana,
   moverCorteLocal,
   mesPorDefecto,
   mesesDisponibles,
@@ -95,10 +99,19 @@ describe("meses", () => {
     expect(s[s.length - 1].fin >= "2026-08-31").toBe(true);
   });
 
-  it("mes por defecto: el de hace dos semanas; lista de meses descendente", () => {
-    expect(mesPorDefecto("2026-10-14")).toBe("2026-09");
-    expect(mesPorDefecto("2026-10-20")).toBe("2026-10");
+  it("mes por defecto: el de hoy; lista de meses descendente", () => {
+    expect(mesPorDefecto("2026-10-15")).toBe("2026-10");
+    expect(mesPorDefecto("2026-09-30")).toBe("2026-09");
     expect(mesesDisponibles("2026-01-02", "2026-03-10")).toEqual(["2026-03", "2026-02", "2026-01"]);
+  });
+
+  it("si el mes recién empezó y solo tiene pagos sin ventana, se abre el anterior", () => {
+    expect(mesAnterior("2026-10")).toBe("2026-09");
+    expect(mesAnterior("2026-01")).toBe("2025-12");
+    const suelto = { filas: [fila("1", [pago("a", null, null, "sinv")])] };
+    expect(tienePagosConVentana(suelto)).toBe(false);
+    expect(tienePagosConVentana({ filas: [] })).toBe(false);
+    expect(tienePagosConVentana({ filas: [fila("1", [pago("a", "2026-09-26", "2026-09-30", "ok")])] })).toBe(true);
   });
 });
 
@@ -401,5 +414,61 @@ describe("consolidar", () => {
     const c = fila("3", [pago("d", "2026-07-04", "2026-07-10")]);
     expect(resumenLote([a, b, c])).toEqual({ pagos: 2, filas: 1 });
     expect(resumenLote([])).toEqual({ pagos: 0, filas: 0 });
+  });
+});
+
+
+describe("cierre de mes asignado a un pago", () => {
+  const sugCierre: CortesSugerencia = {
+    tipo: "cierre",
+    pago_id: "b",
+    unica: true,
+    n_opciones: 1,
+    cambios: [],
+    dias_asignar: ["2026-08-31"],
+    afectados: [
+      { pago_id: "b", ini_antes: "2026-09-05", fin_antes: "2026-09-11", ini_despues: "2026-09-05", fin_despues: "2026-09-11", diferencia_antes: -12030, diferencia_despues: 0 }
+    ]
+  };
+
+  it("la frase dice qué día se incluye y cuánto vale", () => {
+    expect(describirCierre(sugCierre)).toBe("incluir el cierre del lun 31 ago ($12,030) en este pago");
+  });
+
+  it("un bloque de fin de mes se describe de su primer a su último día", () => {
+    const bloque = { ...sugCierre, dias_asignar: ["2026-08-29", "2026-08-30", "2026-08-31"] };
+    expect(describirCierre(bloque)).toBe("incluir el cierre del sáb 29 ago al lun 31 ago ($12,030) en este pago");
+  });
+
+  it("el día de cierre se marca como lo que cambia de pago", () => {
+    expect([...diasQueCambian(sugCierre)]).toEqual(["2026-08-31"]);
+  });
+
+  it("al mover un corte en la vista previa, el día asignado sigue sumándose al pago", () => {
+    const a = pago("a", "2026-09-05", "2026-09-08", "ok", { pagado: 400, calculado: 400 });
+    const b = pago("b", "2026-09-09", "2026-09-11", "ok", { pagado: 330, calculado: 330, dias_asignados: ["2026-08-31"] });
+    const f = fila("1", [a, b], { cortes: [{ izq: "a", der: "b", fecha: "2026-09-08", congelado: false }] });
+    const dias = new Map<string, number>([["2026-08-31", 30], ["2026-09-08", 100], ["2026-09-09", 100], ["2026-09-10", 100], ["2026-09-11", 100]]);
+    const movida = moverCorteLocal(f, dias, "a", "2026-09-09");
+    // b ahora es 10 y 11 sep (200) más el día asignado (30)
+    expect(movida.pagos.find((p) => p.pago_id === "b")!.calculado).toBe(230);
+  });
+});
+
+
+describe("navegar a un pago de otro mes", () => {
+  it("un pago que toca el mes en pantalla no cambia de mes", () => {
+    expect(mesParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, "2026-08-01", "2026-08-31")).toBeNull();
+    // uno que cruza el cambio de mes toca los dos
+    expect(mesParaPago({ ini: "2026-08-29", fin: "2026-09-04" }, "2026-09-01", "2026-09-30")).toBeNull();
+  });
+
+  it("uno anterior se ve en el mes de su fin y uno posterior en el mes de su inicio", () => {
+    expect(mesParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, "2026-09-01", "2026-09-30")).toBe("2026-08");
+    expect(mesParaPago({ ini: "2026-10-01", fin: "2026-10-02" }, "2026-09-01", "2026-09-30")).toBe("2026-10");
+  });
+
+  it("sin ventana no hay a qué mes ir", () => {
+    expect(mesParaPago({ ini: null, fin: null }, "2026-09-01", "2026-09-30")).toBeNull();
   });
 });

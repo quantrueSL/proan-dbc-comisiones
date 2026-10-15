@@ -1,7 +1,7 @@
 import { requireSession } from "@/lib/auth/session";
 import { getComisionesCatalog, getCortesMes } from "@/lib/comisionesbi";
 import { CortesWorkspace } from "@/features/conciliacion-cortes/cortes-workspace";
-import { mesPorDefecto, mesesDisponibles } from "@/features/conciliacion-cortes/cortes-logica";
+import { mesAnterior, mesPorDefecto, mesesDisponibles, tienePagosConVentana } from "@/features/conciliacion-cortes/cortes-logica";
 import { EMPTY_CATALOG, type ComisionesCatalog, type CortesMesResponse } from "@/types/comisiones";
 
 // Fecha de México, no la del servidor (mismo criterio que la pantalla de Conciliación).
@@ -14,7 +14,7 @@ export default async function ConciliacionCortesPage() {
   const sesion = requireSession();
 
   const hoy = fechaMexicoISO();
-  const mes = mesPorDefecto(hoy);
+  let mes = mesPorDefecto(hoy);
   let catalog: ComisionesCatalog = EMPTY_CATALOG;
   let response: CortesMesResponse | null = null;
   let error: string | null = null;
@@ -28,6 +28,18 @@ export default async function ConciliacionCortesPage() {
   }
   if (cortes.status === "fulfilled") {
     response = cortes.value;
+    // Los pagos se hacen los viernes: mientras el mes nuevo no tenga pagos con ventana (solo algún pago suelto), se abre el anterior.
+    for (let intento = 0; intento < 2 && response && !tienePagosConVentana(response); intento++) {
+      try {
+        const anterior = mesAnterior(mes);
+        const previa = await getCortesMes({ mes: anterior });
+        if (!tienePagosConVentana(previa)) break;
+        mes = anterior;
+        response = previa;
+      } catch {
+        break;
+      }
+    }
   } else {
     error = error ?? (cortes.reason instanceof Error ? cortes.reason.message : "No se pudo cargar la conciliación por cortes.");
   }
