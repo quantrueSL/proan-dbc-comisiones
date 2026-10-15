@@ -11,13 +11,13 @@
 #
 # Patrón calcado de proan-hidrocarburos/deploy/cloudrun/service.yaml.
 #
-# Los placeholders __REPO__, __TAG__ y __SERVICE_ACCOUNT__ los rellena deploy.sh.
+# Los placeholders __SERVICE__, __REPO__, __TAG__ y __SERVICE_ACCOUNT__ los rellena deploy.sh.
 # No se despliega con `gcloud run deploy`: los sidecars solo se describen en YAML.
 
 apiVersion: serving.knative.dev/v1
 kind: Service
 metadata:
-  name: plataforma-comisiones-dbc
+  name: __SERVICE__
 spec:
   template:
     metadata:

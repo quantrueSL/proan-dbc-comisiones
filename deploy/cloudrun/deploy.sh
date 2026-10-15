@@ -13,7 +13,8 @@ set -euo pipefail
 
 PROJECT="proan-quantrue"
 REGION="us-west4"
-SERVICE="plataforma-comisiones-dbc"
+# Con SERVICE=otro-nombre se despliega una copia (ver deploy-dev.sh); por defecto, el servicio de siempre.
+SERVICE="${SERVICE:-plataforma-comisiones-dbc}"
 REPO="${REGION}-docker.pkg.dev/${PROJECT}/cloud-run-source-deploy"
 # Mismo proyecto que proan-hidrocarburos → misma cuenta de servicio de cómputo
 # por defecto. Verificar si cambia.
@@ -46,6 +47,7 @@ echo "== Desplegando servicio =="
 RENDERED="$(mktemp)"
 trap 'rm -f "$RENDERED"' EXIT
 sed \
+  -e "s|__SERVICE__|${SERVICE}|g" \
   -e "s|__REPO__|${REPO}|g" \
   -e "s|__TAG__|${TAG}|g" \
   -e "s|__SERVICE_ACCOUNT__|${SERVICE_ACCOUNT}|g" \

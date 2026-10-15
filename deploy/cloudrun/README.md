@@ -118,3 +118,25 @@ gestionan en la lista de Firestore desde el portal de listas (ver `LOGIN.md`).
 En desarrollo (`deploy/docker-compose.dev.yml`) sí hay nginx delante: da el puerto
 de entrada estable y el `Upgrade` de websockets para el recargado en caliente de
 Next. En producción no hace falta.
+
+## Servicio de pruebas (dev)
+
+Para ensenar el trabajo en curso hay una copia aparte, `plataforma-comisiones-dbc-dev`, que no toca el
+servicio de siempre:
+
+```bash
+bash deploy/cloudrun/deploy-dev.sh
+```
+
+Es el mismo `deploy.sh` con otro nombre de servicio (`SERVICE=...`): mismas imagenes, secretos y cuenta de
+servicio, y escala a 0 cuando nadie la usa. Construye con los ficheros que haya en disco (la etiqueta usa el
+commit actual), asi que conviene hacer commit antes.
+
+- **Primera vez:** anade el dominio que imprime (tiene la forma
+  `plataforma-comisiones-dbc-dev-5dxsdha2sa-wn.a.run.app`) en Firebase Console -> *Authentication* ->
+  *Settings* -> *Authorized domains*.
+- **Acceso:** el de siempre, la lista `dbc_comisiones_acceso` de Firestore (`LOGIN.md` §4). Quien entre con un
+  rol `admin` puede editar.
+- **Datos:** comparte BigQuery y la base de Firestore `dbc-comisiones` con el otro servicio, asi que lo que se
+  consolide o ajuste aqui se ve alli y al reves.
+- **Borrarlo:** `gcloud run services delete plataforma-comisiones-dbc-dev --project=proan-quantrue --region=us-west4`.
