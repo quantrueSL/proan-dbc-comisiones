@@ -81,7 +81,8 @@ descripcion AS (
   SELECT LTRIM(MATNR, '0') AS matnr_clean, MAKTX AS descripcion
   FROM `proan-quantrue.D00_SANDBOX.proan_MAKT_Materials_20260831`
   WHERE SPRAS = 'S'
-)
+),
+lineas AS (
 SELECT
   t.billing_document,
   t.item_number,
@@ -139,4 +140,45 @@ LEFT JOIN comisionista_oficina_division cod
        ON cod.sociedad = t.bukrs AND cod.oficina = t.oficina_ventas
       AND cod.division = t.division
 -- Venta excluida (México, 0130, comisionistas de baja; cliente 2026-10-14) no entra a la conciliación.
-WHERE t.status != 'EXCLUIDA';
+WHERE t.status != 'EXCLUIDA'
+),
+-- ADMINISTRADORES (cliente, 13-oct): Amelia Becerra y Armando Padilla cobran $/kg o pieza sobre la venta
+-- de otros dos comisionistas cada uno. Van como líneas espejo de las de esos comisionistas, a su nombre y
+-- con su tarifa. Tortilla (A) entra como Huevo: se les paga en la misma factura "COMISION HUEVO".
+-- Validado 2026-10-19 contra BSAK ene-sep: Huevo, Vuala y Leche dentro de ±4%; Croqueta pagado +27%/+47% (base por confirmar).
+regla_administrador AS (
+  SELECT a.admin_id, v.razon_social AS admin_nombre, base_id, d.division,
+         IF(d.division IN ('H', 'A'), a.tarifa_huevo, d.tarifa) AS tarifa
+  FROM UNNEST([
+    STRUCT('0000014917' AS admin_id, ['0000015107', '0000015315'] AS bases, 0.28 AS tarifa_huevo),  -- Amelia: César de Rueda y Jorge A. Sánchez (León)
+    STRUCT('0000016385', ['0000009079', '0000014356'], 0.43)                                        -- Armando: Martha L. Martínez y María de la Luz Cea (Aguascalientes)
+  ]) a
+  CROSS JOIN UNNEST(a.bases) AS base_id
+  CROSS JOIN UNNEST([
+    STRUCT('H' AS division, CAST(NULL AS FLOAT64) AS tarifa), ('A', NULL), ('IA', 0.20), ('BO', 0.20), ('L', 0.15)
+  ]) d
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = a.admin_id
+),
+nombre_huevo AS (
+  SELECT ANY_VALUE(business_area_name) AS division
+  FROM `proan-quantrue.D20_DIMENSION.dm_business_area` WHERE business_area_code = 'H'
+)
+SELECT * FROM lineas
+UNION ALL
+SELECT l.* REPLACE (
+  IF(l.division_code = 'A', 'H', l.division_code)   AS division_code,
+  IF(l.division_code = 'A', h.division, l.division) AS division,
+  r.admin_id                                        AS comisionista_id,
+  r.admin_nombre                                    AS comisionista,
+  r.tarifa                                          AS tarifa,
+  ROUND(l.cantidad_base * r.tarifa, 2)              AS comision,
+  'calculada'                                       AS comision_estado,
+  ROUND(l.cantidad_cobrada * r.tarifa, 2)           AS comision_cobrada
+)
+FROM lineas l
+JOIN regla_administrador r ON r.base_id = l.comisionista_id AND r.division = l.division_code
+CROSS JOIN nombre_huevo h;

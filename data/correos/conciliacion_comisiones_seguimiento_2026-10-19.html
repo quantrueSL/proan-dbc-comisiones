@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Conciliación de comisiones: seguimiento</title>
+<style>
+  :root {
+    --ink: #1f1f1d; --ink-2: #4a4a46; --muted: #76756f; --rule: #dcdad3;
+    --surface: #ffffff; --soft: #f5f4f0; --green: #3f8f5a; --amber: #b07a1e;
+  }
+  @page { size: Letter; margin: 18mm 17mm 18mm 17mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface); color: var(--ink);
+         font: 10.5pt/1.45 "Segoe UI", Calibri, Arial, sans-serif; }
+  h1 { font-size: 19pt; line-height: 1.2; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 10pt; }
+  h2 { font-size: 13pt; margin: 22px 0 6px; font-weight: 600; break-after: avoid; }
+  h3 { font-size: 11pt; margin: 14px 0 4px; font-weight: 600; break-after: avoid; }
+  p { margin: 0 0 8px; }
+  ul, ol { margin: 0 0 8px; padding-left: 20px; }
+  li { margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 10px; font-size: 9.5pt; break-inside: avoid; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; color: var(--ink-2); border-bottom: 1.5px solid var(--ink-2); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.warn { color: var(--amber); font-weight: 600; }
+  .q { background: var(--soft); border-left: 3px solid var(--green); padding: 7px 10px; margin: 6px 0 10px; break-inside: avoid; }
+  .q > b { display: block; margin-bottom: 2px; }
+  .q ul { margin: 0; }
+  .note { color: var(--muted); font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<h1>Conciliación de comisiones: seguimiento</h1>
+<p class="sub">19 de octubre de 2026 · DBC y PAN · actualiza el documento de puntos abiertos del 5 de octubre con las respuestas de la reunión del 13 de octubre</p>
+
+<p>Gracias por las respuestas y los archivos. Con ellos cerramos varios puntos y ya los aplicamos en el cálculo. Quedan abiertos sobre todo el manejo del fin de mes, dos casos puntuales y algunas tarifas. Las cifras de diferencia total se actualizarán en la siguiente corrida del cálculo.</p>
+
+<h2>1. Lo que ya quedó resuelto</h2>
+<table>
+  <tr><th>Tema</th><th>Respuesta</th><th>Qué hicimos</th></tr>
+  <tr><td>Celaya: Genaro y Agustín</td><td>El reparto de la semana 19-25 sep fue un error operativo; la asignación actual es correcta.</td><td>Se mantiene: 0012 con Agustín, 0122 con Genaro.</td></tr>
+  <tr><td>Jonathan Espinosa y Luis F. Ruiz</td><td>Ya no trabajan en DBC; se excluyen de todo.</td><td>Su venta (0184 Irapuato 2; 0017 y 0079 Morelia) ya no genera comisión: −$3.48M en DBC y −$4.47M en PAN (ene–6 oct).</td></tr>
+  <tr><td>Oficinas de México</td><td>No comisionan.</td><td>0018 (México 1), 0153, 0176 y 0256 (México 2), 0188 (México Carlos) y 0130 quedan fuera ($31M de venta en 2026). Ya no aparecen como venta sin tarifa.</td></tr>
+  <tr><td>Amelia Becerra y Armando Padilla</td><td>Cobran $/kg o pieza sobre la venta de otros comisionistas.</td><td>Calculados con su tarifa (punto 2). Huevo, Vuala y Leche cuadran; Croqueta no.</td></tr>
+  <tr><td>Juan José López, 18-24 abr</td><td>Se le pagó Vuala de más por error ($35,284.80 en vez de $6,635.40) y se recuperó no pagándole Vuala del 16-may al 19-jun y $153.60 del 20-30 jun.</td><td>Explica la diferencia de esa semana y las semanas siguientes sin pago.</td></tr>
+  <tr><td>Croqueta 14-20 feb (Agustín y César)</td><td>Error de texto: son pagos de Huevo.</td><td>Reclasificados a Huevo ($82,202.71 y $42,361.90).</td></tr>
+</table>
+
+<h2>2. Amelia Becerra y Armando Padilla</h2>
+<p>Aplicamos la regla que nos compartieron: Huevo y tortilla 0.28 (Amelia) y 0.43 (Armando); Croqueta y Vuala 0.20; Leche 0.15. Amelia cobra sobre César de Rueda y Jorge Alberto Sánchez (León), y Armando sobre Martha Leticia Martínez y María de la Luz Cea (Aguascalientes). Huevo y tortilla se suman porque se pagan en la misma factura. Comparado contra lo pagado en SAP de enero a septiembre:</p>
+<table>
+  <tr><th>Administrador</th><th>División</th><th class="num">Calculado con la regla</th><th class="num">Pagado</th><th class="num">Calculado vs pagado</th></tr>
+  <tr><td>Amelia</td><td>Huevo + tortilla DBC</td><td class="num">$472K</td><td class="num">$463K</td><td class="num">+2%</td></tr>
+  <tr><td>Amelia</td><td>Huevo PAN</td><td class="num">$1.10M</td><td class="num">$1.11M</td><td class="num">−1%</td></tr>
+  <tr><td>Amelia</td><td>Vuala</td><td class="num">$292K</td><td class="num">$281K</td><td class="num">+4%</td></tr>
+  <tr><td>Amelia</td><td>Leche</td><td class="num">$14,959</td><td class="num">$14,973</td><td class="num">0%</td></tr>
+  <tr><td>Amelia</td><td>Croqueta</td><td class="num">$42K</td><td class="num">$54K</td><td class="num warn">−21%</td></tr>
+  <tr><td>Armando</td><td>Huevo DBC</td><td class="num">$282K</td><td class="num">$273K</td><td class="num">+3%</td></tr>
+  <tr><td>Armando</td><td>Huevo PAN</td><td class="num">$997K</td><td class="num">$1.01M</td><td class="num">−1%</td></tr>
+  <tr><td>Armando</td><td>Vuala</td><td class="num">$129K</td><td class="num">$126K</td><td class="num">+2%</td></tr>
+  <tr><td>Armando</td><td>Leche</td><td class="num">$8,136</td><td class="num">$8,147</td><td class="num">0%</td></tr>
+  <tr><td>Armando</td><td>Croqueta</td><td class="num">$20K</td><td class="num">$30K</td><td class="num warn">−32%</td></tr>
+</table>
+<div class="q"><b>Pregunta</b>En Croqueta se les paga más de lo que da la regla de 0.20 por kilo. ¿Sobre qué cantidad se calcula la Croqueta de Amelia y Armando, o qué tarifa tiene?</div>
+
+<h2>3. Tarifas</h2>
+<p>Comparamos los archivos de tarifas contra las tablas de SAP que usa el cálculo. Abarrotes (hoja "TORTILLA") es igual a SAP. En Huevo coinciden 153 de 181 tarifas. Croqueta, Vuala y Leche coinciden con la tarifa estándar.</p>
+<table>
+  <tr><th>Comisionista</th><th>Tarifa</th><th class="num">En su archivo</th><th class="num">En SAP</th></tr>
+  <tr><td>Ana Karina Pérez (León Abastos)</td><td>Huevo Mayoreo, San Juan y Portales</td><td class="num">0.50</td><td class="num">vacía</td></tr>
+  <tr><td>Rigoberto Guerrero (Uruapan)</td><td>Huevo ½ Mayoreo, San Juan</td><td class="num">0.45</td><td class="num">0</td></tr>
+  <tr><td>Ana Karina Pérez (0069)</td><td>Abarrotes, materiales 110000012790 y 110000017587</td><td class="num">−0.5</td><td class="num">0</td></tr>
+</table>
+<p>Las tarifas de Brandon Hernández, Felipe Vázquez y Raúl Saldaña Franco son iguales en su archivo y en SAP. La diferencia de 3.5–5% que vemos con ellos en PAN Huevo no viene de la tarifa.</p>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>Para Ana Karina (Mayoreo) y Rigoberto (½ Mayoreo San Juan), ¿cuál tarifa aplica, la de su archivo o la de SAP? ¿Desde cuándo?</li>
+  <li>¿Los −0.5 de abarrotes de Ana Karina son correctos?</li>
+</ul></div>
+
+<h2>4. Lo que sigue abierto</h2>
+
+<h3>Fin e inicio de mes</h3>
+<p>Sigue sin respuesta y es la causa más grande de diferencia semana a semana: todos los meses, la comisión de lo cobrado el último día no entra en el pago de fin de mes y aparece en un pago posterior (el 1º, 2º o 3º del mes siguiente, según el mes). Ver el punto 2 del documento del 5 de octubre.</p>
+<p>Sobre el pago "COMISIONES DEL 12 AL 28 DE FEBRERO": al revisarlo con más detalle, creemos que <b>no es un ajuste</b>, sino el pago semanal del 21 al 28 de febrero con la fecha de inicio mal escrita. Ese mes 15 comisionistas recibieron "21 AL 28" y otros 14 recibieron "12 AL 28", nunca los dos. Lo pagado como "12 al 28" ($1.02M) se parece a lo calculado del 21 al 27 ($1.09M), no a 17 días.</p>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿En qué pago entra lo cobrado el último día del mes, y por qué cambia de un mes a otro?</li>
+  <li>¿Nos confirman que "12 AL 28 DE FEBRERO" debía decir "21 AL 28"?</li>
+</ul></div>
+
+<h3>Carlos López: factura 2015398799</h3>
+<p>En la captura de ZCOM1 que nos compartieron, la factura sí entra en su pago del 18 al 24 de abril. En nuestro cálculo también tiene fecha de cobro del 22 de abril, dentro de esa semana. La diferencia de esa semana, entonces, no viene de esta factura y sigue sin explicarse.</p>
+<div class="q"><b>Pregunta</b>¿Nos pueden compartir la salida completa de ZCOM1 de Carlos para esa semana (PAN, Puebla 1, Huevo, registro de pago del 18 al 24 de abril)? Con eso podemos comparar factura por factura y encontrar la diferencia. Si es posible, nos ayudaría tener también ZCOM1 de una semana completa de todos los comisionistas.</div>
+
+<h3>Leche acumulada</h3>
+<p>El correo de Juan José confirma que la leche a veces se paga acumulada ("LECHE 01-24 ABRIL"). Pasa lo mismo con María de la Luz Cea.</p>
+<div class="q"><b>Pregunta</b>¿Con qué regla se acumula la leche: un monto mínimo, cada cierto número de semanas?</div>
+
+<h3>Diferencias de nivel</h3>
+<ul>
+  <li><b>Vuala:</b> en total calculamos +2.3% ($503K) sobre lo pagado. Oscar Renato Trujillo (+10.7%) y Felipe Vázquez (+7.8%) son los más altos.</li>
+  <li><b>PAN Huevo:</b> a Brandon Hernández, Felipe Vázquez y Raúl Saldaña Franco se les paga entre 3.5% y 5% más de lo calculado, casi todas las semanas. Su tarifa es la misma que en SAP.</li>
+</ul>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿Se paga o se descuenta algo más dentro de la comisión de Vuala?</li>
+  <li>¿Hay algo adicional que se les pague a Brandon, Felipe y Raúl en Huevo PAN?</li>
+</ul></div>
+
+<h3>Venta que todavía no se puede calcular</h3>
+<p>Sin las oficinas de México, quedan estas oficinas sin tarifa o sin tipo de venta en SAP (ventas ene-sep 2026):</p>
+<table>
+  <tr><th>Oficina</th><th>Almacén</th><th>División</th><th>Motivo</th><th class="num">Venta</th></tr>
+  <tr><td>0106 (San Luis), PAN</td><td>H707</td><td>Huevo</td><td>Sin tipo de venta</td><td class="num">$4.12M</td></tr>
+  <tr><td>0149 (San Cristóbal)</td><td>H721</td><td>Huevo</td><td>Sin tipo de venta</td><td class="num">$1.10M</td></tr>
+  <tr><td>0227 (Celaya)</td><td>BO11</td><td>Vuala</td><td>Sin tarifa (medio mayoreo)</td><td class="num">$778K</td></tr>
+  <tr><td>0240, 0242</td><td>BO47, H788</td><td>Vuala, Croqueta</td><td>Oficinas nuevas, sin tipo de venta</td><td class="num">$1.56M</td></tr>
+  <tr><td>0268, 0277, 0278</td><td>H724, H789</td><td>Croqueta, Leche</td><td>Oficinas nuevas, sin tipo de venta</td><td class="num">$1.70M</td></tr>
+  <tr><td>0128 (Tuxtla)</td><td>H718</td><td>Leche</td><td>Sin tarifa (medio mayoreo)</td><td class="num">$148K</td></tr>
+</table>
+<p>La tabla estándar que nos compartieron trae la tarifa de ½ Mayoreo de Croqueta, Vuala y Leche, que en SAP no está como columna aparte. Con ella podríamos calcular la 0227 y la Leche de la 0128.</p>
+<div class="q"><b>Preguntas</b>
+<ul>
+  <li>¿La 0227 Celaya y la Leche de la 0128 Tuxtla comisionan? Si sí, ¿con la tarifa estándar de ½ Mayoreo?</li>
+  <li>Para el resto de la tabla: ¿estas oficinas comisionan? Si sí, ¿qué tipo de venta tienen y a qué comisionista corresponden?</li>
+</ul></div>
+
+<h2>5. Propuesta: estandarizar la forma de pago</h2>
+<p>Sigue en pie la propuesta del documento anterior: periodos fijos con días completos, una regla única para el cambio de mes y un formato único en el texto de la factura de comisión. Los casos que resolvimos en esta ronda (texto de Croqueta que era Huevo, factura de Juan José con texto de Leche que era Vuala, febrero "12 al 28") salen justamente de ahí. Ahora que sabemos que el cálculo se hace con ZCOM1, una opción sencilla sería guardar en la factura de comisión la misma ventana de fechas que se usa en ZCOM1.</p>
+
+<p class="note">Cifras en pesos mexicanos. Montos de comisión antes de IVA y retenciones.</p>
+
+</body>
+</html>

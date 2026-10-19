@@ -59,6 +59,8 @@ doc AS (
     SAFE.PARSE_DATE('%Y%m%d', b.BUDAT) AS fecha_doc,
     SAFE.PARSE_DATE('%Y%m%d', k.budat_kz) AS fecha_pago,
     CASE
+      -- Error de texto (cliente, 13-oct): "COMISION CROQUETA 14-20 FEBRERO" de Agustín y César es Huevo.
+      WHEN b.BUKRS = 'DBC' AND b.GJAHR = '2026' AND b.BELNR IN ('5100002986', '5100002934') THEN 'H'
       WHEN b.BUKRS = 'PAN' THEN 'H'
       ELSE CASE REGEXP_EXTRACT(UPPER(b.SGTXT), r'^COMISION(?:ES)?\s+([A-ZÑ]+)')
         WHEN 'HUEVO'    THEN 'H'

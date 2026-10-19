@@ -103,7 +103,7 @@ WITH bsak_crudo AS (
 -- recarga trae cada documento repetido (PAN 1.1M filas / 317K llaves, copias
 -- con el mismo importe) y las fotos RT se solapan entre sí.
 bsak AS (
-  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL
+  SELECT BUKRS, LIFNR, BUDAT, BLART, SGTXT, DMBTR, QSSHB, AUGBL, GJAHR, BELNR
   FROM bsak_crudo
   QUALIFY ROW_NUMBER() OVER (PARTITION BY BUKRS, GJAHR, BELNR, BUZEI ORDER BY BUDAT) = 1
 ),
@@ -136,6 +136,8 @@ pago_real AS (
     BUKRS AS sociedad,
     LIFNR,
     CASE
+      -- Error de texto (cliente, 13-oct): "COMISION CROQUETA 14-20 FEBRERO" de Agustín y César es Huevo.
+      WHEN BUKRS = 'DBC' AND GJAHR = '2026' AND BELNR IN ('5100002986', '5100002934') THEN 'H'
       WHEN BUKRS = 'PAN' THEN 'H'
       ELSE CASE REGEXP_EXTRACT(UPPER(SGTXT), r'^COMISION(?:ES)?\s+([A-ZÑ]+)')
         WHEN 'HUEVO'    THEN 'H'
@@ -256,6 +258,20 @@ cod AS (
     GROUP BY id_proveedor
   ) v ON v.id_proveedor = LPAD(TRIM(c.persona_cod), 10, '0')
   WHERE NULLIF(TRIM(c.persona_cod), '') IS NOT NULL AND NULLIF(TRIM(c.oficina), '') IS NOT NULL
+  UNION ALL
+  -- Administradores (cliente, 13-oct): cobran sobre la venta de otros comisionistas, sin oficina
+  -- propia. Una oficina ficticia por persona para que sus pagos entren en todas sus divisiones.
+  SELECT a.sociedad, a.lifnr, CONCAT('ADMIN-', a.lifnr), a.division, v.razon_social
+  FROM UNNEST([
+    STRUCT('DBC' AS sociedad, '0000014917' AS lifnr, 'H' AS division), ('DBC', '0000014917', 'IA'),
+    ('DBC', '0000014917', 'BO'), ('DBC', '0000014917', 'L'), ('PAN', '0000014917', 'H'),
+    ('DBC', '0000016385', 'H'), ('DBC', '0000016385', 'IA'), ('DBC', '0000016385', 'BO'),
+    ('DBC', '0000016385', 'L'), ('PAN', '0000016385', 'H')]) a
+  LEFT JOIN (
+    SELECT id_proveedor, ANY_VALUE(razon_social) AS razon_social
+    FROM `proan-quantrue.D20_DIMENSION.dm_vendors`
+    GROUP BY id_proveedor
+  ) v ON v.id_proveedor = a.lifnr
 ),
 -- `cod.lifnr` va calificado en el HAVING a propósito: sin el prefijo, BigQuery
 -- resuelve `lifnr` al alias de abajo (ANY_VALUE) y falla por agregar un agregado.
