@@ -521,6 +521,25 @@ def test_aplicar_un_cierre_que_la_persona_no_vio_se_rechaza(bq, monkeypatch):
     assert e.value.codigo == "sugerencia_distinta"
 
 
+def test_asignar_dias_a_mano_sin_sugerencia_y_quitarlos(bq, monkeypatch):
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
+    v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 30)], version=0, usuario="ana")
+    b = _fila(v)[PAGO2]
+    assert b["estado"] == "ok" and b["dias_asignados"] == ["2026-06-30"] and v["fila"]["huecos"] == []
+    evento = svc.build_historial(key=KEY)["eventos"][0]
+    assert evento["tipo"] == "asignar_dias" and evento["detalle"] == {"dias": "2026-06-30"}
+    # lista vacía: el día vuelve a quedar sin asignar
+    v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[], version=1, usuario="ana")
+    assert _fila(v)[PAGO2]["dias_asignados"] == [] and [h["cierre"] for h in v["fila"]["huecos"]] == [True]
+
+
+def test_asignar_dias_rechaza_un_dia_que_no_es_de_cierre_libre(bq, monkeypatch):
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
+    with pytest.raises(ErrorCorte) as e:
+        svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 7, 2)], version=0, usuario="ana")
+    assert e.value.codigo == "dia_no_libre"
+
+
 def test_el_cierre_se_toma_del_ultimo_dia_con_cobros_de_todos_los_comisionistas(bq):
     # la consulta de cierres no lleva filtros de fila: igual para todos los comisionistas
     svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")

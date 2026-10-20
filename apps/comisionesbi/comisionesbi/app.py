@@ -222,6 +222,11 @@ class CortesVentanaBody(CortesEdicion):
     fin: date
 
 
+class CortesDiasBody(CortesEdicion):
+    pago_id: str
+    dias: list[date] = Field(max_length=31)
+
+
 class CortesHistorialBody(BaseModel):
     sociedad: str
     comisionista_id: str
@@ -474,6 +479,14 @@ def post_cortes_fijar_ventana(body: CortesVentanaBody, usuario: str = Depends(ed
     return cortes.fijar_ventana(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id, ini=body.ini, fin=body.fin,
         version=body.version, usuario=usuario,
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/asignar-dias")
+def post_cortes_asignar_dias(body: CortesDiasBody, usuario: str = Depends(editor)) -> dict:
+    """Asigna a mano días de cierre de mes a un pago (o los quita con lista vacía)."""
+    return cortes.asignar_dias(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, dias=body.dias, version=body.version, usuario=usuario
     )
 
 

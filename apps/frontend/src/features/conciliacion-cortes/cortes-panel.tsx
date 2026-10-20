@@ -259,6 +259,8 @@ export function CortesPanel({
   // Pagos consolidados que la persona quiere reabrir: se pide confirmar antes.
   const [reabrir, setReabrir] = useState<string[] | null>(null);
   const [ventana, setVentana] = useState({ ini: "", fin: "" });
+  // Días de cierre de mes que la persona marcó para incluirlos en este pago.
+  const [diasElegidos, setDiasElegidos] = useState<string[]>([]);
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ultimaFecha = useRef<{ izqId: string; fecha: string } | null>(null);
 
@@ -286,6 +288,7 @@ export function CortesPanel({
     setHistorial(null);
     setReabrir(null);
     setVentana({ ini: "", fin: "" });
+    setDiasElegidos([]);
     cargarFila().catch((e) => vigente && setError(e instanceof Error ? e.message : "No se pudo cargar el pago."));
     return () => {
       vigente = false;
@@ -347,6 +350,7 @@ export function CortesPanel({
       if (res.ok && payload?.fila) {
         setDatos(payload);
         setHistorial(null);
+        setDiasElegidos([]);
         onFilaActualizada(payload.fila);
         if (mensajeExito) onAccionHecha(mensajeExito, payload.fila, avanzar);
         return true;
@@ -422,6 +426,12 @@ export function CortesPanel({
   const siguiente = posicion >= 0 && posicion < ordenados.length - 1 ? ordenados[posicion + 1] : null;
   const huerfanos = filaActual.huerfanos ?? [];
   const consolidado = pago.estado === "cons";
+  // Cierre de mes a mano: los días libres de los huecos de cierre y los que este pago ya tiene asignados.
+  const huecosCierre = puedeEditar && !consolidado && !sinVentana ? filaActual.huecos.filter((h) => h.cierre) : [];
+  const diasPropios = pago.dias_asignados ?? [];
+  const asignadosAOtros = new Set(filaActual.pagos.filter((p) => p.pago_id !== pago.pago_id).flatMap((p) => p.dias_asignados ?? []));
+  const sumaElegida = diasElegidos.reduce((t, d) => t + (dias.get(d) ?? 0), 0);
+  const alternarDia = (d: string) => setDiasElegidos((previos) => (previos.includes(d) ? previos.filter((x) => x !== d) : [...previos, d].sort()));
   /** Los pagos consolidados a cada lado de un corte (uno o los dos). */
   function consolidadosDelCorte(izqId: string): string[] {
     const corte = filaActual.cortes.find((c) => c.izq === izqId);
@@ -874,6 +884,83 @@ export function CortesPanel({
                           Descartar
                         </button>
                       </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {huecosCierre.length || diasPropios.length ? (
+                <div className="cortes-bloque">
+                  <div className="cortes-caja">
+                    <h3>Cierre de mes</h3>
+                    {diasPropios.length ? (
+                      <p>
+                        Este pago incluye el cierre del {diasPropios.map(fechaCorta).join(", ")}:{" "}
+                        {pesos(diasPropios.reduce((t, d) => t + (dias.get(d) ?? 0), 0))}.{" "}
+                        <button
+                          className="cortes-ir"
+                          disabled={!puedeActuar}
+                          onClick={() => void editar("asignar-dias", { pago_id: pago.pago_id, dias: [] }, "Cierre quitado de este pago.", false)}
+                          type="button"
+                        >
+                          Quitar
+                        </button>
+                      </p>
+                    ) : null}
+                    {huecosCierre.map((h) => {
+                      const dd: string[] = [];
+                      for (let d = h.ini; d <= h.fin; d = sumarDias(d, 1)) dd.push(d);
+                      return (
+                        <div className="cortes-dias" key={h.ini}>
+                          {dd.map((d) => {
+                            const ocupado = asignadosAOtros.has(d) || diasPropios.includes(d);
+                            return (
+                              <button
+                                aria-pressed={diasElegidos.includes(d)}
+                                className={`cortes-dia${diasElegidos.includes(d) ? " is-mv" : ""}${ocupado ? " is-asignado" : ""}`}
+                                disabled={!puedeActuar || ocupado}
+                                key={d}
+                                onClick={() => alternarDia(d)}
+                                title={ocupado ? "Ya está asignado a un pago" : "Marcar para incluirlo en este pago"}
+                                type="button"
+                              >
+                                <small>{fechaConDia(d).replace(" ", "\n")}</small>
+                                {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                    {diasElegidos.length ? (
+                      <>
+                        <p>
+                          Marcaste {diasElegidos.length} día(s), {pesos(sumaElegida)}. El pago quedaría en{" "}
+                          <b>{textoDiferencia((pago.diferencia ?? 0) + sumaElegida)}</b> de diferencia.
+                        </p>
+                        <div className="cortes-acciones">
+                          <button
+                            className="cortes-boton is-primario"
+                            disabled={!puedeActuar}
+                            onClick={() =>
+                              void editar(
+                                "asignar-dias",
+                                { pago_id: pago.pago_id, dias: [...diasPropios, ...diasElegidos].sort() },
+                                "Cierre incluido en este pago.",
+                                false
+                              )
+                            }
+                            type="button"
+                          >
+                            Incluir en este pago
+                          </button>
+                          <button className="cortes-boton" onClick={() => setDiasElegidos([])} type="button">
+                            Limpiar
+                          </button>
+                        </div>
+                      </>
+                    ) : huecosCierre.length ? (
+                      <p className="hydro-muted">Marca los días que quieras sumar a este pago.</p>
                     ) : null}
                   </div>
                 </div>

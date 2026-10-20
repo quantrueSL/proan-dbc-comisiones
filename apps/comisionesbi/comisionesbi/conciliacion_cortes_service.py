@@ -611,6 +611,31 @@ def recuperar_sugerencia(*, mes, key, pago_id, version, usuario) -> dict:
     return _guardar(mes, key, doc, usuario, "recuperar_sugerencia", pago_id=pago_id, descartadas=descartadas)
 
 
+def asignar_dias(*, mes, key, pago_id, dias: list[date], version, usuario) -> dict:
+    """Deja como días de cierre de este pago los dados (a mano, sin sugerencia); lista vacía = quitarlos todos."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    pago = _pago(fila, pago_id)
+    if pago.estado == CONSOLIDADO:
+        raise ErrorCorte("corte_congelado", "El pago está consolidado.")
+    if pago.ini is None:
+        raise ErrorCorte("sin_ventana", "El pago no tiene ventana.")
+    de_otros = {d for pid, ds in doc.dias_asignados.items() if pid != pago_id for d in ds}
+    libres = {
+        h.ini + timedelta(days=k)
+        for h in fila.huecos
+        if h.cierre
+        for k in range((h.fin - h.ini).days + 1)
+    } - de_otros
+    permitidos = libres | set(pago.dias_asignados)
+    if not set(dias) <= permitidos:
+        raise ErrorCorte("dia_no_libre", "Solo se asignan días de cierre de mes sin pago; alguno ya no está libre.")
+    nuevo = {k: v for k, v in doc.dias_asignados.items() if k != pago_id}
+    if dias:
+        nuevo[pago_id] = sorted(set(dias))
+    return _guardar(mes, key, doc, usuario, "asignar_dias", pago_id=pago_id, dias_asignados=nuevo,
+                    detalle={"dias": ",".join(_iso(d) for d in sorted(set(dias)))})
+
+
 def restablecer_pago(*, mes, key, pago_id, version, usuario) -> dict:
     """Vuelve la ventana de un pago a la que propone el texto, junto con el borde que comparte con sus vecinos."""
     doc, fila = _contexto_edicion(mes, key, version)

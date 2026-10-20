@@ -194,6 +194,8 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
 
   const hayPagosSinVentana = visibles.some((f) => f.pagos.some((p) => p.estado === "sinv"));
   const columnas = semanas.length + (hayPagosSinVentana ? 1 : 0);
+  // Total de cada semana de todos los comisionistas a la vista, para el encabezado.
+  const totalesSemana = useMemo(() => totalesPorColumna(visibles, semanas), [visibles, semanas]);
   const plantilla = { gridTemplateColumns: `minmax(210px, 270px) repeat(${columnas}, minmax(116px, 1fr))` };
 
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
@@ -452,10 +454,29 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
               <div className="cortes-matriz">
                 <div className="cortes-fila cortes-fila-cab" style={plantilla}>
                   <span className="cortes-cab-quien">Comisionista / división</span>
-                  {semanas.map((s) => (
-                    <span key={s.ini}>{rangoCorto(s.ini, s.fin)}</span>
-                  ))}
-                  {hayPagosSinVentana ? <span>Sin ventana</span> : null}
+                  {semanas.map((s, i) => {
+                    const t = totalesSemana[i];
+                    return (
+                      <span className="cortes-cab-col" key={s.ini}>
+                        {rangoCorto(s.ini, s.fin)}
+                        {t.n ? (
+                          <span className="cortes-cab-tot">
+                            <span>Pag. {pesos(t.pagado)}</span>
+                            <span>Calc. {pesos(t.calculado)}</span>
+                            <span>Dif. {textoDiferencia(t.calculado - t.pagado)}</span>
+                          </span>
+                        ) : null}
+                      </span>
+                    );
+                  })}
+                  {hayPagosSinVentana ? (
+                    <span className="cortes-cab-col">
+                      Sin ventana
+                      <span className="cortes-cab-tot">
+                        <span>Pag. {pesos(totalesSemana[semanas.length].pagado)}</span>
+                      </span>
+                    </span>
+                  ) : null}
                 </div>
 
                 {grupos.map((grupo) => {

@@ -205,10 +205,15 @@ describe("CortesWorkspace", () => {
     expect(pinta()).toContain("Proveedor 14917");
   });
 
+  it("el encabezado de cada semana trae el pagado, el calculado y la diferencia de todos los comisionistas", () => {
+    const html = pinta();
+    expect(html).toContain("<span>Pag. $30,000</span><span>Calc. $27,500</span><span>Dif. -$2,500</span>");
+  });
+
   it("aparece la columna de pagos sin ventana solo cuando hay alguno", () => {
-    expect(pinta()).toContain("<span>Sin ventana</span></div>");
+    expect(pinta()).toContain('cortes-cab-col">Sin ventana<');
     const sin = { ...RESPUESTA, filas: RESPUESTA.filas.slice(0, 2) };
-    expect(pinta(sin)).not.toContain("<span>Sin ventana</span></div>");
+    expect(pinta(sin)).not.toContain('cortes-cab-col">Sin ventana<');
   });
 
   it("sin pagos en el mes lo dice, y un error del servicio se muestra", () => {

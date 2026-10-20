@@ -12212,3 +12212,9 @@ body.proan-report-assistant-open .proan-content-scroll {
 .cortes-lista-centro h2 { margin: 0; }
 .cortes-semana-flecha { white-space: nowrap; }
 @media (max-width: 760px) { .cortes-lista-tit { grid-template-columns: 1fr 1fr; } .cortes-lista-centro { grid-column: 1 / -1; grid-row: 1; } }
+
+/* Total de la semana bajo su nombre en el encabezado de la tabla. */
+.cortes-fila-cab .cortes-cab-col { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.cortes-fila-cab .cortes-cab-tot { display: flex; flex-direction: column; gap: 1px; padding: 0; color: #303230; font-size: 9.5px; font-weight: 600; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cortes-fila-cab .cortes-cab-col { font-size: 12.5px; }
+.cortes-fila-cab .cortes-cab-tot span { padding: 0; font-size: 9.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: #303230; }

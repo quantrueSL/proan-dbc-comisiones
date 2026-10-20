@@ -641,6 +641,7 @@ export type CortesAccion =
   | "reabrir"
   | "consolidar-lote"
   | "fijar-ventana"
+  | "asignar-dias"
   | "quitar-huerfano";
 
 export type CortesEvento = {

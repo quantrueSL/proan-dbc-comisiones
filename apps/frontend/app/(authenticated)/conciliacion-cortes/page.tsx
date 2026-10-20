@@ -1,12 +1,18 @@
 import { requireSession } from "@/lib/auth/session";
 import { getComisionesCatalog, getCortesMes } from "@/lib/comisionesbi";
 import { CortesWorkspace } from "@/features/conciliacion-cortes/cortes-workspace";
-import { mesAnterior, mesPorDefecto, mesesDisponibles, tienePagosConVentana } from "@/features/conciliacion-cortes/cortes-logica";
+import { finDeVista, mesAnterior, mesPorDefecto, mesesDisponibles, tienePagosConVentana, vistaDeMes } from "@/features/conciliacion-cortes/cortes-logica";
 import { EMPTY_CATALOG, type ComisionesCatalog, type CortesMesResponse } from "@/types/comisiones";
 
 // Fecha de México, no la del servidor (mismo criterio que la pantalla de Conciliación).
 function fechaMexicoISO(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
+}
+
+// Las semanas que se ven en pantalla para un mes (la primera puede arrancar el mes anterior): igual que al elegirlo en el selector.
+function semanasDe(mes: string) {
+  const v = vistaDeMes(mes);
+  return { desde: v.ini, hasta: finDeVista(v) };
 }
 
 // Pestaña de pruebas de conciliación por cortes: convive con /conciliacion.
@@ -19,7 +25,7 @@ export default async function ConciliacionCortesPage() {
   let response: CortesMesResponse | null = null;
   let error: string | null = null;
 
-  const [catalogo, cortes] = await Promise.allSettled([getComisionesCatalog(), getCortesMes({ mes })]);
+  const [catalogo, cortes] = await Promise.allSettled([getComisionesCatalog(), getCortesMes(semanasDe(mes))]);
 
   if (catalogo.status === "fulfilled") {
     catalog = catalogo.value;
@@ -32,7 +38,7 @@ export default async function ConciliacionCortesPage() {
     for (let intento = 0; intento < 2 && response && !tienePagosConVentana(response); intento++) {
       try {
         const anterior = mesAnterior(mes);
-        const previa = await getCortesMes({ mes: anterior });
+        const previa = await getCortesMes(semanasDe(anterior));
         if (!tienePagosConVentana(previa)) break;
         mes = anterior;
         response = previa;

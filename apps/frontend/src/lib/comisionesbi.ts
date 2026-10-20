@@ -138,6 +138,7 @@ const RUTAS_EDICION: Record<CortesAccion | "historial", string> = {
   reabrir: "/v1/comisionesbi/cortes/reabrir",
   "consolidar-lote": "/v1/comisionesbi/cortes/consolidar-lote",
   "fijar-ventana": "/v1/comisionesbi/cortes/fijar-ventana",
+  "asignar-dias": "/v1/comisionesbi/cortes/asignar-dias",
   "quitar-huerfano": "/v1/comisionesbi/cortes/quitar-huerfano",
   historial: "/v1/comisionesbi/cortes/historial"
 };
