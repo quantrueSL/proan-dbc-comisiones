@@ -63,7 +63,8 @@ const PAGO = {
   estado: "ok",
   dias_asignados: ["2026-06-30"],
   consolidado_por: null,
-  consolidado_en: null
+  consolidado_en: null,
+  comentarios: [{ id: "c1", texto: "Error de captura del cliente", por: "ana", ts: "2026-10-20T16:00:00+00:00" }]
 } as unknown as CortesPago;
 
 describe("Excel de un pago de conciliación por cortes", () => {
@@ -87,6 +88,7 @@ describe("Excel de un pago de conciliación por cortes", () => {
     resumen.eachRow((f) => f.eachCell((c) => texto.push(String(c.value))));
     expect(texto.some((t) => t.includes("2026-06-30") && t.includes("incluidos en este pago"))).toBe(true);
     expect(texto).toContain("asignó los días de cierre 30 jun");
+    expect(texto).toContain("Error de captura del cliente");
 
     // hojas con título en la fila 1, encabezado en la 4, total en la 5 (SUBTOTAL) y datos desde la 6
     const conc = libro.getWorksheet("Conciliación")!;

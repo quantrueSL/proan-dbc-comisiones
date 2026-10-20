@@ -234,6 +234,10 @@ function describirEvento(e: CortesEvento): string {
       return "reabrió el pago consolidado";
     case "fijar_ventana":
       return `fijó la ventana del pago del ${e.detalle?.ini ? fechaConDia(e.detalle.ini) : ""} al ${e.detalle?.fin ? fechaConDia(e.detalle.fin) : ""}`;
+    case "comentar":
+      return `comentó: “${e.detalle?.texto ?? ""}”`;
+    case "borrar_comentario":
+      return "borró un comentario";
     case "asignar_dias":
       return e.detalle?.dias ? `asignó los días de cierre ${e.detalle.dias.split(",").map(fechaCorta).join(", ")}` : "quitó los días de cierre asignados";
     default:
@@ -271,6 +275,7 @@ export function CortesPanel({
   const [reabrir, setReabrir] = useState<string[] | null>(null);
   const [ventana, setVentana] = useState({ ini: "", fin: "" });
   const [exportando, setExportando] = useState(false);
+  const [comentario, setComentario] = useState("");
   // Días de cierre de mes que la persona marcó para incluirlos en este pago.
   const [diasElegidos, setDiasElegidos] = useState<string[]>([]);
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -301,6 +306,7 @@ export function CortesPanel({
     setReabrir(null);
     setVentana({ ini: "", fin: "" });
     setDiasElegidos([]);
+    setComentario("");
     cargarFila().catch((e) => vigente && setError(e instanceof Error ? e.message : "No se pudo cargar el pago."));
     return () => {
       vigente = false;
@@ -1101,6 +1107,61 @@ export function CortesPanel({
                   <span>{puedeEditar ? "Congela los dos cortes de este pago." : "Solo lectura: tu rol no puede editar los cortes."}</span>
                 </div>
               )}
+
+              <div className="cortes-bloque">
+                <div className="cortes-caja cortes-comentarios">
+                  <h3>Comentarios</h3>
+                  {(pago.comentarios ?? []).length ? (
+                    <ul>
+                      {(pago.comentarios ?? []).map((c) => (
+                        <li key={c.id}>
+                          <p>{c.texto}</p>
+                          <small>
+                            {c.por} · {c.ts ? formatoMomento.format(new Date(c.ts)) : "—"}
+                            {puedeEditar ? (
+                              <>
+                                {" · "}
+                                <button
+                                  className="cortes-ir"
+                                  disabled={!puedeActuar}
+                                  onClick={() => void editar("borrar-comentario", { pago_id: pago.pago_id, comentario_id: c.id }, "Comentario borrado.", false)}
+                                  type="button"
+                                >
+                                  Borrar
+                                </button>
+                              </>
+                            ) : null}
+                          </small>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {puedeEditar ? (
+                    <>
+                      <textarea
+                        aria-label="Comentario sobre este pago"
+                        maxLength={1000}
+                        onChange={(e) => setComentario(e.target.value)}
+                        placeholder="Escribe un comentario sobre este pago…"
+                        rows={3}
+                        value={comentario}
+                      />
+                      <div className="cortes-acciones">
+                        <button
+                          className="cortes-boton is-primario"
+                          disabled={!puedeActuar || !comentario.trim()}
+                          onClick={async () => {
+                            if (await editar("comentar", { pago_id: pago.pago_id, texto: comentario.trim() }, "Comentario guardado.", false)) setComentario("");
+                          }}
+                          type="button"
+                        >
+                          Agregar comentario
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </div>
 
               <details className="cortes-historial" onToggle={(e) => void abrirHistorial((e.target as HTMLDetailsElement).open)}>
                 <summary>Historial de esta fila</summary>

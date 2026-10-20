@@ -139,6 +139,8 @@ const RUTAS_EDICION: Record<CortesAccion | "historial" | "exportar", string> = {
   "consolidar-lote": "/v1/comisionesbi/cortes/consolidar-lote",
   "fijar-ventana": "/v1/comisionesbi/cortes/fijar-ventana",
   "asignar-dias": "/v1/comisionesbi/cortes/asignar-dias",
+  comentar: "/v1/comisionesbi/cortes/comentar",
+  "borrar-comentario": "/v1/comisionesbi/cortes/borrar-comentario",
   "quitar-huerfano": "/v1/comisionesbi/cortes/quitar-huerfano",
   exportar: "/v1/comisionesbi/cortes/exportar",
   historial: "/v1/comisionesbi/cortes/historial"

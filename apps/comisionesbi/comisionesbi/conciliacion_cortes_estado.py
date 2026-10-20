@@ -14,6 +14,7 @@ Un documento por fila (sociedad × comisionista × división):
     descartadas     {pago_id: {"por": usuario, "ts": iso}}
     dias_asignados  {pago_id: ["AAAA-MM-DD", ...]}  días sueltos (cierre de mes) que se le suman a un pago
     consolidados    {pago_id: {"ini", "fin", "pagado", "calculado", "por", "ts"}}
+    comentarios     {pago_id: [{"id", "texto", "por", "ts"}, ...]}  notas de quien concilia (p. ej. un error humano)
     actualizado_por / actualizado_en
     eventos/{auto}  tipo, usuario, ts, pago_id, antes, despues (solo se agrega)
 
@@ -68,6 +69,7 @@ class DocFila:
     # Quién consolidó cada pago y cuándo: {pago_id: {"por": usuario, "ts": iso}}.
     consolidados_info: dict[str, dict] = field(default_factory=dict)
     dias_asignados: dict[str, list[date]] = field(default_factory=dict)
+    comentarios: dict[str, list[dict]] = field(default_factory=dict)
 
     def a_estado(self) -> EstadoFila:
         return EstadoFila(
@@ -85,6 +87,7 @@ class DocFila:
             "overrides": {k: {b: f.isoformat() for b, f in v.items()} for k, v in self.overrides.items()},
             "descartadas": self.descartadas,
             "dias_asignados": {k: [d.isoformat() for d in v] for k, v in self.dias_asignados.items()},
+            "comentarios": self.comentarios,
             "consolidados": {
                 k: {
                     "ini": f.ini.isoformat(),
@@ -107,6 +110,7 @@ class DocFila:
                 for k, v in (datos.get("overrides") or {}).items()
             },
             descartadas=dict(datos.get("descartadas") or {}),
+            comentarios={k: [dict(c) for c in v] for k, v in (datos.get("comentarios") or {}).items()},
             dias_asignados={
                 k: [date.fromisoformat(d) for d in v] for k, v in (datos.get("dias_asignados") or {}).items()
             },

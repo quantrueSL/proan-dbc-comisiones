@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
@@ -325,6 +326,7 @@ def _pago_json(p: PagoResuelto, info_docs: dict | None = None, doc: DocFila | No
         "dias_asignados": [_iso(d) for d in p.dias_asignados],
         "drift": p.drift,
         "drift_pagado": p.drift_pagado,
+        "comentarios": (doc.comentarios.get(p.pago_id, []) if doc else []),
         "consolidado_por": quien.get("por"),
         "consolidado_en": quien.get("ts"),
         "descartada": p.descartada,
@@ -621,7 +623,7 @@ def _ov_json(overrides: dict, ids=None) -> dict:
 
 def _escribir(
     mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartadas=None, consolidados=None,
-    consolidados_info=None, dias_asignados=None, detalle=None,
+    consolidados_info=None, dias_asignados=None, comentarios=None, detalle=None,
 ) -> DocFila:
     """Guarda el nuevo estado de la fila (transacción con la versión que se leyó) y su evento en el historial."""
     nuevo = DocFila(
@@ -631,6 +633,7 @@ def _escribir(
         consolidados=doc.consolidados if consolidados is None else consolidados,
         consolidados_info=doc.consolidados_info if consolidados_info is None else consolidados_info,
         dias_asignados=doc.dias_asignados if dias_asignados is None else dias_asignados,
+        comentarios=doc.comentarios if comentarios is None else comentarios,
     )
     cambiados = {
         pid for pid in set(doc.overrides) | set(nuevo.overrides) if doc.overrides.get(pid) != nuevo.overrides.get(pid)
@@ -734,6 +737,42 @@ def asignar_dias(*, mes, key, pago_id, dias: list[date], version, usuario) -> di
         nuevo[pago_id] = sorted(set(dias))
     return _guardar(mes, key, doc, usuario, "asignar_dias", pago_id=pago_id, dias_asignados=nuevo,
                     detalle={"dias": ",".join(_iso(d) for d in sorted(set(dias)))})
+
+
+MAX_COMENTARIO = 1000
+
+
+def comentar(*, mes, key, pago_id, texto: str, version, usuario) -> dict:
+    """Agrega un comentario al pago (queda con quién y cuándo). Sirve para documentar, p. ej., un error humano."""
+    texto = (texto or "").strip()
+    if not texto:
+        raise ErrorCorte("comentario_vacio", "Escribe el comentario.")
+    if len(texto) > MAX_COMENTARIO:
+        raise ErrorCorte("comentario_largo", f"El comentario no puede pasar de {MAX_COMENTARIO} caracteres.")
+    doc, fila = _contexto_edicion(mes, key, version)
+    _pago(fila, pago_id)
+    nuevo = {"id": uuid.uuid4().hex[:10], "texto": texto, "por": usuario, "ts": ahora_iso()}
+    comentarios = {**doc.comentarios, pago_id: [*doc.comentarios.get(pago_id, []), nuevo]}
+    return _guardar(mes, key, doc, usuario, "comentar", pago_id=pago_id, comentarios=comentarios,
+                    detalle={"texto": texto[:200]})
+
+
+def borrar_comentario(*, mes, key, pago_id, comentario_id: str, version, usuario) -> dict:
+    """Quita un comentario; solo lo borra quien lo escribió (para corregir un error al teclear)."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    _pago(fila, pago_id)
+    propios = doc.comentarios.get(pago_id, [])
+    comentario = next((c for c in propios if c.get("id") == comentario_id), None)
+    if comentario is None:
+        raise ErrorCorte("comentario_inexistente", "Ese comentario ya no existe.")
+    if comentario.get("por") != usuario:
+        raise ErrorCorte("comentario_ajeno", "Solo quien escribió el comentario puede borrarlo.")
+    restantes = [c for c in propios if c.get("id") != comentario_id]
+    comentarios = {k: v for k, v in doc.comentarios.items() if k != pago_id}
+    if restantes:
+        comentarios[pago_id] = restantes
+    return _guardar(mes, key, doc, usuario, "borrar_comentario", pago_id=pago_id, comentarios=comentarios,
+                    detalle={"texto": str(comentario.get("texto", ""))[:200]})
 
 
 def restablecer_pago(*, mes, key, pago_id, version, usuario) -> dict:

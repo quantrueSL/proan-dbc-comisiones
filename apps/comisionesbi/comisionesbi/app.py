@@ -197,6 +197,16 @@ class CortesPagoBody(CortesEdicion):
     pago_id: str
 
 
+class CortesComentarBody(CortesEdicion):
+    pago_id: str
+    texto: str = Field(max_length=1000)
+
+
+class CortesBorrarComentarioBody(CortesEdicion):
+    pago_id: str
+    comentario_id: str
+
+
 class CortesReabrirBody(CortesEdicion):
     pago_ids: list[str] = Field(min_length=1, max_length=20)
 
@@ -497,6 +507,23 @@ def post_cortes_asignar_dias(body: CortesDiasBody, usuario: str = Depends(editor
     """Asigna a mano días de cierre de mes a un pago (o los quita con lista vacía)."""
     return cortes.asignar_dias(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id, dias=body.dias, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/comentar")
+def post_cortes_comentar(body: CortesComentarBody, usuario: str = Depends(editor)) -> dict:
+    """Deja un comentario en el pago (con quién y cuándo)."""
+    return cortes.comentar(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, texto=body.texto, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/borrar-comentario")
+def post_cortes_borrar_comentario(body: CortesBorrarComentarioBody, usuario: str = Depends(editor)) -> dict:
+    """Borra un comentario propio."""
+    return cortes.borrar_comentario(
+        mes=body.mes, key=_llave(body), pago_id=body.pago_id, comentario_id=body.comentario_id,
+        version=body.version, usuario=usuario,
     )
 
 

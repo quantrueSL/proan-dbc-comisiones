@@ -499,6 +499,9 @@ export type CortesDocumento = {
   fecha_pago: string | null;
 };
 
+/** Una nota de quien concilia sobre un pago (p. ej. "error de captura del cliente"). */
+export type CortesComentario = { id: string; texto: string; por: string; ts: string };
+
 export type CortesPago = {
   pago_id: string;
   /** Documentos de SAP que forman el pago (casi siempre uno). */
@@ -522,6 +525,7 @@ export type CortesPago = {
   drift_pagado?: number | null;
   /** Días sueltos (cierre de mes) que se le sumaron a este pago además de su ventana. */
   dias_asignados?: string[];
+  comentarios?: CortesComentario[];
   consolidado_por?: string | null;
   consolidado_en?: string | null;
   /** La persona descartó la sugerencia de este pago. */
@@ -642,6 +646,8 @@ export type CortesAccion =
   | "consolidar-lote"
   | "fijar-ventana"
   | "asignar-dias"
+  | "comentar"
+  | "borrar-comentario"
   | "quitar-huerfano";
 
 /** Respuesta de `exportar`: el detalle de un pago (ventana más días de cierre asignados) con el motivo de cada fila. */

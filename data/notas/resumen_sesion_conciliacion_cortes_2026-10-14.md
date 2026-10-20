@@ -110,3 +110,5 @@ resultados que la medición.
 6. Migración a D60: correr los DDL y repuntar `_TABLA_*` del servicio.
 7. Preguntas al cliente: quién puede reabrir, cómo se paga el último día del mes, acuerdos especiales de los ~12 comisionistas, los dos LIFNR sin calculado (0000014917 y 0000016385).
 8. Para después: sugerencia combinada de un clic para el cierre (bloque + borde) si el flujo en dos pasos resulta lento.
+
+**Comentarios por pago (20 oct, fuera del plan)**: bloque "Comentarios" en el panel del pago (cualquier admin agrega; solo el autor borra), marca 💬 en la celda de la tabla, sección "Comentarios" en la hoja Resumen del Excel. Se guardan en el mismo documento de la fila en Firestore (`comentarios: {pago_id: [{id, texto, por, ts}]}`), sin colección nueva; cada alta o baja queda en `eventos` ("comentar", "borrar_comentario") y sube la versión de la fila.

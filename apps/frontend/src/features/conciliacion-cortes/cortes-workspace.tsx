@@ -189,8 +189,13 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
     for (const g of agruparPorComisionista(filas.filter((f) => !division || f.division_code === division || (f.junta_con ?? []).includes(division)))) {
       vistos.set(g.filas[0].comisionista_id, g.nombre);
     }
+    // El comisionista elegido se queda en la lista aunque la división nueva no tenga filas suyas.
+    if (comisionistaId && !vistos.has(comisionistaId)) {
+      const g = agruparPorComisionista(filas.filter((f) => f.comisionista_id === comisionistaId))[0];
+      if (g) vistos.set(comisionistaId, g.nombre);
+    }
     return Array.from(vistos.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [filas, division]);
+  }, [filas, division, comisionistaId]);
 
   const hayPagosSinVentana = visibles.some((f) => f.pagos.some((p) => p.estado === "sinv"));
   const columnas = semanas.length + (hayPagosSinVentana ? 1 : 0);
@@ -318,10 +323,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
             <label>
               División
               <select
-                onChange={(e) => {
-                  setDivision(e.target.value);
-                  setComisionistaId("");
-                }}
+                onChange={(e) => setDivision(e.target.value)}
                 value={division}
               >
                 <option value="">Todas</option>
@@ -558,6 +560,11 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                       <span className="cortes-celda-estado">
                                         <i className={`cortes-punto is-${pago.estado}`} />
                                         {ETIQUETA_ESTADO[pago.estado]}
+                                        {pago.comentarios?.length ? (
+                                          <span className="cortes-celda-nota" title={`${pago.comentarios.length} comentario(s)`}>
+                                            💬 {pago.comentarios.length}
+                                          </span>
+                                        ) : null}
                                         {hayDrift(pago) ? (
                                           <span className="cortes-celda-cambio" title="Los datos cambiaron desde que se consolidó">
                                             ⚠ Cambió

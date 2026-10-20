@@ -243,6 +243,27 @@ function agregarResumen(libro: import("exceljs").Workbook, datos: CortesExportPa
   dato("Ventana del pago", `${datos.ini} a ${datos.fin}`);
   fila += 1;
 
+  // Comentarios de quien concilia (p. ej. un error humano), tal como se escribieron.
+  seccion("Comentarios");
+  const comentarios = p.comentarios ?? [];
+  if (comentarios.length) {
+    fijar(fila, 1, 1, "Cuándo", { negrita: true, fondo: GRIS_TOTAL });
+    fijar(fila, 2, 2, "Quién", { negrita: true, fondo: GRIS_TOTAL });
+    fijar(fila, 3, 6, "Comentario", { negrita: true, fondo: GRIS_TOTAL });
+    fila += 1;
+    for (const c of comentarios) {
+      fijar(fila, 1, 1, c.ts ? c.ts.slice(0, 16).replace("T", " ") : "");
+      fijar(fila, 2, 2, c.por);
+      fijar(fila, 3, 6, c.texto);
+      hoja.getRow(fila).height = Math.max(18, 15 * Math.ceil(c.texto.length / 70));
+      fila += 1;
+    }
+  } else {
+    fijar(fila, 1, 6, "Sin comentarios.", { tam: 10, letra: "FF6B7280" });
+    fila += 1;
+  }
+  fila += 1;
+
   // Todo lo que se tocó a mano, con color ámbar si hay algo.
   const AMBAR = "FFFEF3C7";
   seccion("Modificaciones a mano");

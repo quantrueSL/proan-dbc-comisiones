@@ -565,6 +565,30 @@ def test_el_export_de_un_pago_trae_su_ventana_y_los_dias_de_cierre_asignados(bq,
         ("2026-06-30", "2026-06-30", 225.0), ("2026-07-01", "2026-07-03", 450.0)]
 
 
+def test_comentar_un_pago_queda_con_quien_y_cuando_y_solo_el_autor_lo_borra(bq):
+    v = svc.comentar(mes="2026-07", key=KEY, pago_id=PAGO1, texto="  Error de captura del cliente  ", version=0, usuario="ana")
+    (c,) = _fila(v)[PAGO1]["comentarios"]
+    assert c["texto"] == "Error de captura del cliente" and c["por"] == "ana" and c["ts"] and c["id"]
+    assert _fila(v)[PAGO2]["comentarios"] == []
+    # sobrevive a una lectura nueva y queda en el historial
+    de_nuevo = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert _fila(de_nuevo)[PAGO1]["comentarios"][0]["id"] == c["id"]
+    assert svc.build_historial(key=KEY)["eventos"][0]["tipo"] == "comentar"
+    # otra persona no lo puede borrar; la que lo escribió, sí
+    with pytest.raises(ErrorCorte) as e:
+        svc.borrar_comentario(mes="2026-07", key=KEY, pago_id=PAGO1, comentario_id=c["id"], version=1, usuario="luis")
+    assert e.value.codigo == "comentario_ajeno"
+    v = svc.borrar_comentario(mes="2026-07", key=KEY, pago_id=PAGO1, comentario_id=c["id"], version=1, usuario="ana")
+    assert _fila(v)[PAGO1]["comentarios"] == []
+
+
+def test_un_comentario_vacio_o_muy_largo_se_rechaza(bq):
+    for texto, codigo in (("   ", "comentario_vacio"), ("x" * 1001, "comentario_largo")):
+        with pytest.raises(ErrorCorte) as e:
+            svc.comentar(mes="2026-07", key=KEY, pago_id=PAGO1, texto=texto, version=0, usuario="ana")
+        assert e.value.codigo == codigo
+
+
 def test_asignar_dias_a_mano_sin_sugerencia_y_quitarlos(bq, monkeypatch):
     _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
     v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 30)], version=0, usuario="ana")
