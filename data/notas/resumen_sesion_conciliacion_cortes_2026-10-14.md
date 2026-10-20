@@ -59,7 +59,7 @@ resultados que la medición.
 - La tabla se lee de `ZZ_PRUEBAS` (igual que la pestaña vieja). Al migrar a D60 hay que repuntar las
   constantes `_TABLA_*` del servicio y borrar el script de `Datos/sql`.
 
-## Pendiente
+## Pendiente (a 14 oct; el estado vigente está al final, a 20 oct)
 
 1. **Fase 5 — Consolidar:** congelar cortes con foto del pago, aviso de cambio posterior, reabrir con
    advertencia, consolidar en lote, avisar ajustes huérfanos (documento que ya no está en BSAK) y los 59
@@ -82,3 +82,31 @@ resultados que la medición.
 - **Fase 5 hecha:** consolidar y reabrir (solo admin), aviso si los datos cambian después de consolidar, "Consolidar lo que cuadra"
   en lote (izquierda a derecha, se detiene en el primer pago que no cuadra), ventana a mano para pagos sin texto legible y
   limpieza de ajustes huérfanos. Quedan la Fase 6 (Excel) y la 7.
+
+## Estado a 20 de octubre
+
+**Hecho desde el 14 de octubre**
+- **Fases 1 a 5 completas** (commits `f6b5151` backend y `1a94c2f` frontend): consolidar y reabrir, "Consolidar lo que cuadra" en lote
+  (izquierda a derecha, hasta el primer pago que no cuadra), ventana a mano para pagos sin texto legible, limpieza de ajustes huérfanos
+  y aviso "⚠ Cambió" si los datos cambian después de consolidar.
+- **Ventanas estándar:** la ventana por defecto es el texto acomodado a sábado-viernes y fin de mes, sin traslapes (cuadran
+  1,290 → 1,316, traslapes 56 → 0). Sección 8 de la nota de mediciones.
+- **Cierre de mes:** el último día con cobros de cada mes sale de su pago y queda como hueco "Cierre de mes, sin asignar". Una sugerencia
+  asigna el bloque de fin de mes a un pago posterior solo si lo deja exacto (nunca automática; se guarda en `dias_asignados`). Mediciones
+  en las secciones 9 a 12: 105 casos con el último día solo, 20 más con colas de 2-3 días.
+- **Pantalla:** rediseño (tabla por comisionista, KPIs, panel fijo), documento SAP y texto bajo el nombre, "Pago anterior/siguiente" que
+  cruzan meses, flechas ◀ ▶ para desplazar semanas, "Desplegar todo", mes por defecto = mes de hoy (o el anterior si no tiene pagos).
+  Backend: la lista y el lote aceptan `desde`/`hasta` además del mes (sin commit).
+- **Despliegue de prueba:** `bash deploy/cloudrun/deploy-dev.sh` (servicio `plataforma-comisiones-dbc-dev`, ver `deploy/cloudrun/README.md`).
+  Primer intento falló por un error pasajero de `next/font`; hay que reintentar.
+- **Roles:** para editar hace falta `admin` en `lists/dbc_comisiones_acceso`; el valor `generico` de Mailing-lists cuenta como viewer (LOGIN.md §3).
+
+**Falta (plan al 20 de octubre, en orden propuesto)**
+1. Cerrar lo ya hecho: commit de semanas con corte de fin de mes, orden fijo de divisiones y `desde`/`hasta`; reintentar el despliegue dev y que el senior lo revise (pendiente su explicación de las flechas).
+2. Cierre de mes a mano, sin sugerencia: poder elegir los días de cierre (el bloque libre) y asignarlos a cualquier pago, con el mismo `dias_asignados` y "Volver a la ventana estándar" para deshacer. Hoy solo se asigna aplicando la sugerencia exacta; los casos sin exacto (el 47%) no tienen cómo.
+3. Fase 6: Excel descargable por ventana, con columna "Pago asignado" (pago SAP, ventana, días asignados, calculado, pagado, diferencia, estado y consolidado por/en).
+4. Comodidad de trabajo: botón que aplique en bloque las sugerencias de borde y de cierre de un mes (con vista previa); flechas para bordes sueltos; textos de sugerencias más cortos; aviso de solo lectura más claro ("tu rol es viewer…"); carga en frío ~20 s.
+5. Fase 7: mostrar el 47% sin explicación (diferencia de monto en ~12 comisionistas de PAN-H/DBC-BO), reglas por comisionista, Firestore → BigQuery, destino de la pestaña vieja.
+6. Migración a D60: correr los DDL y repuntar `_TABLA_*` del servicio.
+7. Preguntas al cliente: quién puede reabrir, cómo se paga el último día del mes, acuerdos especiales de los ~12 comisionistas, los dos LIFNR sin calculado (0000014917 y 0000016385).
+8. Para después: sugerencia combinada de un clic para el cierre (bloque + borde) si el flujo en dos pasos resulta lento.

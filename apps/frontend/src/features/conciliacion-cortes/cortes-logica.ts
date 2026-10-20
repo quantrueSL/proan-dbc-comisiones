@@ -166,7 +166,7 @@ export type GrupoComisionista = {
   filas: CortesFila[];
 };
 
-/** Las filas agrupadas por comisionista (sin importar la sociedad), en el orden en que llegan (ya vienen ordenadas por nombre). */
+/** Las filas agrupadas por comisionista (sin importar la sociedad), en el orden en que llegan (ya vienen ordenadas por nombre); dentro de cada una, las divisiones van siempre en el mismo orden. */
 export function agruparPorComisionista(filas: CortesFila[]): GrupoComisionista[] {
   const grupos = new Map<string, GrupoComisionista>();
   for (const f of filas) {
@@ -175,7 +175,9 @@ export function agruparPorComisionista(filas: CortesFila[]): GrupoComisionista[]
     g.filas.push(f);
     grupos.set(clave, g);
   }
-  return Array.from(grupos.values());
+  // Mismo orden de divisiones en todos los comisionistas (sociedad y luego división) para comparar de un vistazo.
+  const orden = (f: CortesFila) => `${f.sociedad}|${f.division_code}`;
+  return Array.from(grupos.values()).map((g) => ({ ...g, filas: [...g.filas].sort((x, y) => orden(x).localeCompare(orden(y))) }));
 }
 
 export type TotalColumna = { n: number; pagado: number; calculado: number };
@@ -439,14 +441,69 @@ export function mesPorDefecto(hoyISO: string): string {
   return hoyISO.slice(0, 7);
 }
 
+// ─── Semanas a la vista ──────────────────────────────────────────────────
+
+/** Las semanas sábado-viernes que se ven: desde el sábado `ini`, `n` semanas seguidas. El selector de mes la coloca y las flechas la desplazan. */
+export type VistaSemanas = { ini: string; n: number };
+
+/** El sábado de la semana (sábado a viernes) a la que pertenece un día. */
+export function sabadoDeSemana(iso: string): string {
+  const dia = new Date(aMs(iso)).getUTCDay(); // 0 domingo ... 6 sábado
+  return sumarDias(iso, -((dia + 1) % 7));
+}
+
+/** Las semanas que cubre el mes (la primera arranca el sábado anterior al día 1 si hace falta). */
+export function vistaDeMes(mes: string): VistaSemanas {
+  const semanas = semanasDelMes(mes);
+  return { ini: semanas[0].ini, n: semanas.length };
+}
+
+/** Las columnas de la vista: una por semana sábado-viernes, pero la semana que cruza un fin de mes se parte ahí (29 a 31 ago, 1 a 4 sep). */
+export function semanasDeVista(v: VistaSemanas): SemanaColumna[] {
+  const columnas: SemanaColumna[] = [];
+  for (let i = 0; i < v.n; i++) {
+    const ini = sumarDias(v.ini, 7 * i);
+    const fin = sumarDias(ini, 6);
+    if (ini.slice(0, 7) === fin.slice(0, 7)) {
+      columnas.push({ ini, fin });
+      continue;
+    }
+    const primeroDelSiguiente = `${fin.slice(0, 7)}-01`;
+    columnas.push({ ini, fin: sumarDias(primeroDelSiguiente, -1) }, { ini: primeroDelSiguiente, fin });
+  }
+  return columnas;
+}
+
+export function finDeVista(v: VistaSemanas): string {
+  return sumarDias(v.ini, 7 * v.n - 1);
+}
+
+/** El mes que mejor describe la vista: el de la mitad de su semana central. */
+export function mesDeVista(v: VistaSemanas): string {
+  return sumarDias(v.ini, 7 * Math.floor(v.n / 2) + 3).slice(0, 7);
+}
+
+/** "Agosto 2026" si la vista son justo las semanas de ese mes; si no, el rango ("8 ago a 11 sep"). */
+export function etiquetaVista(v: VistaSemanas): string {
+  const mes = mesDeVista(v);
+  const delMes = vistaDeMes(mes);
+  return delMes.ini === v.ini && delMes.n === v.n ? etiquetaMes(mes) : rangoCorto(v.ini, finDeVista(v));
+}
+
+/** Mover la vista `semanas` semanas (negativo: hacia atrás). */
+export function desplazarVista(v: VistaSemanas, semanas: number): VistaSemanas {
+  return { ini: sumarDias(v.ini, 7 * semanas), n: v.n };
+}
+
 /**
- * El mes al que hay que cambiar para ver un pago, o `null` si el pago ya toca el mes en pantalla. Un pago anterior
- * al mes se ve en el mes de su fin; uno posterior, en el mes de su inicio.
+ * La vista a la que hay que ir para ver un pago, o `null` si el pago ya toca las semanas en pantalla. El pago queda
+ * en la semana central.
  */
-export function mesParaPago(pago: { ini: string | null; fin: string | null }, desde: string, hasta: string): string | null {
+export function vistaParaPago(pago: { ini: string | null; fin: string | null }, v: VistaSemanas): VistaSemanas | null {
   if (!pago.ini || !pago.fin) return null;
-  if (pago.ini <= hasta && pago.fin >= desde) return null;
-  return (pago.fin < desde ? pago.fin : pago.ini).slice(0, 7);
+  if (pago.ini <= finDeVista(v) && pago.fin >= v.ini) return null;
+  const base = pago.fin < v.ini ? pago.fin : pago.ini;
+  return { ini: sumarDias(sabadoDeSemana(base), -7 * Math.floor(v.n / 2)), n: v.n };
 }
 
 /** El mes `AAAA-MM` anterior. */

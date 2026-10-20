@@ -40,6 +40,10 @@ admin   → puede todo.
 viewer  → solo consulta.
 ```
 
+En la pestaña de conciliación por cortes solo `admin` puede mover cortes, consolidar, reabrir y aplicar sugerencias; `viewer` la ve en
+solo lectura. Ojo: el valor `generico`, que usa Mailing-lists, no se reconoce y degrada a `viewer`; para editar hay que poner `admin`
+en `roles` y volver a iniciar sesión (el rol va en la cookie).
+
 Todavía no se han definido con el cliente los roles reales de Comisiones DBC
 (por ejemplo, podría necesitarse algo más granular: por CEDIS, por función
 comercial, etc.). Ajustar en `apps/frontend/src/lib/auth/roles.ts` y

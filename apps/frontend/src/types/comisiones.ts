@@ -563,8 +563,10 @@ export type CortesFila = {
 };
 
 export type CortesMesFilters = {
-  /** `AAAA-MM`. */
-  mes: string;
+  /** `AAAA-MM`. Alternativa: `desde` y `hasta` (las semanas que se ven en pantalla). */
+  mes?: string;
+  desde?: string;
+  hasta?: string;
   sociedad?: string | null;
   division?: string | null;
   comisionista_id?: string | null;

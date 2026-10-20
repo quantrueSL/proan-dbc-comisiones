@@ -18,22 +18,31 @@ import {
   fechaCorta,
   filaTodoCuadra,
   filtrarFilas,
+  desplazarVista,
+  etiquetaVista,
+  finDeVista,
   hayDrift,
   huecosDelMes,
-  mesParaPago,
+  mesDeVista,
   pesos,
   posicionarPagos,
   rangoCorto,
   resumenLote,
+  semanasDeVista,
   semanasDelMes,
   siguientePendiente,
   textoDiferencia,
   totalesCortes,
   totalesPorColumna,
-  type RefPago
+  vistaDeMes,
+  vistaParaPago,
+  type RefPago,
+  type VistaSemanas
 } from "./cortes-logica";
 
 type Props = {
+  /** Hoy (fecha de México): las flechas no pasan de la semana en curso. */
+  hoy: string;
   initialCatalog: ComisionesCatalog;
   initialError: string | null;
   initialResponse: CortesMesResponse | null;
@@ -60,8 +69,10 @@ function conFilaNueva(respuesta: CortesMesResponse, nueva: CortesFila): CortesMe
   return { ...respuesta, filas: respuesta.filas.map((f) => (f.fila_id === nueva.fila_id ? { ...nueva, pagos } : f)) };
 }
 
-export function CortesWorkspace({ initialCatalog, initialError, initialResponse, mesInicial, meses, puedeEditar }: Props) {
-  const [mes, setMes] = useState(mesInicial);
+export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResponse, mesInicial, meses, puedeEditar }: Props) {
+  // Las semanas que se ven. El selector de mes las coloca y las flechas las desplazan de una en una.
+  const [vista, setVista] = useState<VistaSemanas>(() => vistaDeMes(mesInicial));
+  const mes = mesDeVista(vista);
   const [respuesta, setRespuesta] = useState(initialResponse);
   const [error, setError] = useState(initialError);
   const [cargando, setCargando] = useState(false);
@@ -81,9 +92,11 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   // Sube al recargar el mes después de un lote: el panel abierto vuelve a pedir su fila.
   const [refrescos, setRefrescos] = useState(0);
 
-  // `conservar`: al cambiar de mes porque se navegó a un pago de otro mes, ese pago queda elegido.
-  async function cargarMes(nuevo: string, conservar: Seleccion | null = null) {
-    setMes(nuevo);
+  const cuerpoDe = (v: VistaSemanas) => ({ desde: v.ini, hasta: finDeVista(v) });
+
+  // `conservar`: al ir a un pago que está en otras semanas, ese pago queda elegido.
+  async function cargarVista(nueva: VistaSemanas, conservar: Seleccion | null = null) {
+    setVista(nueva);
     setCargando(true);
     setError(null);
     setSeleccion(conservar);
@@ -92,7 +105,7 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
       const res = await fetch("/api/comisionesbi/cortes/mes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mes: nuevo })
+        body: JSON.stringify(cuerpoDe(nueva))
       });
       const payload = (await res.json().catch(() => null)) as (CortesMesResponse & { detail?: string }) | null;
       if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo cargar la conciliación.");
@@ -104,6 +117,12 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
     }
   }
 
+  const cargarMes = (nuevo: string) => cargarVista(vistaDeMes(nuevo));
+  const primeraSemana = vistaDeMes(meses[meses.length - 1] ?? mesInicial).ini;
+  const puedeIrAtras = vista.ini > primeraSemana;
+  const puedeIrAdelante = desplazarVista(vista, 1).ini <= hoy;
+  const mover = (semanas: number) => void cargarVista(desplazarVista(vista, semanas));
+
   async function consolidarLote() {
     setProcesandoLote(true);
     setConfirmandoLote(false);
@@ -112,14 +131,14 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
       const res = await fetch("/api/comisionesbi/cortes/editar/consolidar-lote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mes, fila_ids: filasFiltradas.map((f) => f.fila_id) })
+        body: JSON.stringify({ ...cuerpoDe(vista), fila_ids: filasFiltradas.map((f) => f.fila_id) })
       });
       const payload = (await res.json().catch(() => null)) as { consolidados?: number; filas?: number; omitidas?: number; detail?: string } | null;
       if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo consolidar.");
       const lista = await fetch("/api/comisionesbi/cortes/mes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mes })
+        body: JSON.stringify(cuerpoDe(vista))
       });
       const nueva = (await lista.json().catch(() => null)) as CortesMesResponse | null;
       if (lista.ok && nueva) setRespuesta(nueva);
@@ -134,9 +153,9 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   }
 
   const filas = respuesta?.filas ?? [];
-  const desde = respuesta?.desde ?? `${mes}-01`;
-  const hasta = respuesta?.hasta ?? `${mes}-28`;
-  const semanas = useMemo(() => semanasDelMes(mes), [mes]);
+  const desde = respuesta?.desde ?? vista.ini;
+  const hasta = respuesta?.hasta ?? finDeVista(vista);
+  const semanas = useMemo(() => semanasDeVista(vista), [vista]);
 
   const nombresDivision = useMemo(() => {
     const mapa: Record<string, string> = {};
@@ -180,17 +199,17 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
   const cola = useMemo(() => colaDePagos(grupos, semanas), [grupos, semanas]);
 
-  // Ir a otro pago de la fila elegida; si es de otro mes, la lista cambia de mes y el pago queda elegido.
+  // Ir a otro pago de la fila elegida; si está en otras semanas, la vista se desplaza hasta él y el pago queda elegido.
   function irAPago(pago: CortesPago) {
     if (!seleccion) return;
-    const destino = mesParaPago(pago, desde, hasta);
+    const destino = vistaParaPago(pago, vista);
     if (destino === null) {
       elegir({ filaId: seleccion.filaId, pagoId: pago.pago_id });
       return;
     }
     const fila = filas.find((f) => f.fila_id === seleccion.filaId);
     if (fila) setAbiertos((previos) => new Set(previos).add(fila.comisionista_id));
-    void cargarMes(destino, { filaId: seleccion.filaId, pagoId: pago.pago_id });
+    void cargarVista(destino, { filaId: seleccion.filaId, pagoId: pago.pago_id });
   }
 
   function elegir(ref: RefPago, mensaje: string | null = null) {
@@ -245,6 +264,19 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
     else setAviso(mensaje);
   }
 
+  // Con un solo comisionista a la vista ya está desplegado y no hay nada que contraer.
+  const todosAbiertos = grupos.length > 0 && (grupos.length === 1 || grupos.every((g) => abiertos.has(g.clave)));
+  function desplegarTodo() {
+    setAbiertos((previos) => {
+      const siguiente = new Set(previos);
+      for (const g of grupos) {
+        if (todosAbiertos) siguiente.delete(g.clave);
+        else siguiente.add(g.clave);
+      }
+      return siguiente;
+    });
+  }
+
   function alternarGrupo(clave: string) {
     setAbiertos((previos) => {
       const siguiente = new Set(previos);
@@ -274,7 +306,7 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
             <label>
               Mes
               <select disabled={cargando} onChange={(e) => void cargarMes(e.target.value)} value={mes}>
-                {meses.map((m) => (
+                {(meses.includes(mes) ? meses : [mes, ...meses]).map((m) => (
                   <option key={m} value={m}>
                     {etiquetaMes(m)}
                   </option>
@@ -385,11 +417,34 @@ export function CortesWorkspace({ initialCatalog, initialError, initialResponse,
       <div className={`cortes-cuerpo${filaSeleccionada ? " con-panel" : ""}`}>
         <section aria-busy={cargando} aria-label="Pagos del mes" className="hydro-table-card cortes-lista">
           <div className="cortes-lista-tit">
-            <h2>Pagos de {etiquetaMes(mes)} por comisionista</h2>
-            <span>
-              {grupos.length} comisionista(s) · el total muestra pagado y calculado; ábrelo para ver cada división con su diferencia
-              {cargando ? " · cargando…" : ""}
-            </span>
+            <button
+              aria-label="Una semana atrás"
+              className="cortes-boton cortes-semana-flecha"
+              disabled={cargando || !puedeIrAtras}
+              onClick={() => mover(-1)}
+              type="button"
+            >
+              ◀ Semana anterior
+            </button>
+            <div className="cortes-lista-centro">
+              <h2>Pagos de {etiquetaVista(vista)} por comisionista</h2>
+              <span>
+                {grupos.length} comisionista(s) · el total muestra pagado y calculado; ábrelo para ver cada división con su diferencia
+                {cargando ? " · cargando…" : ""}
+              </span>
+              <button className="cortes-ir" disabled={grupos.length < 2} onClick={desplegarTodo} type="button">
+                {todosAbiertos ? "Contraer todo" : "Desplegar todo"}
+              </button>
+            </div>
+            <button
+              aria-label="Una semana adelante"
+              className="cortes-boton cortes-semana-flecha"
+              disabled={cargando || !puedeIrAdelante}
+              onClick={() => mover(1)}
+              type="button"
+            >
+              Semana siguiente ▶
+            </button>
           </div>
 
           {grupos.length ? (

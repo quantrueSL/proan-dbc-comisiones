@@ -132,10 +132,24 @@ def editor(x_usuario: str | None = Header(default=None), x_rol: str | None = Hea
 class CortesMesQuery(BaseModel):
     """Mes en formato AAAA-MM; los demás filtros son opcionales (la pantalla filtra también en el cliente)."""
 
-    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    mes: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    # Alternativa al mes: las semanas que se ven en pantalla (la pantalla las desplaza de una en una).
+    desde: date | None = None
+    hasta: date | None = None
     sociedad: str | None = None
     division: str | None = None
     comisionista_id: str | None = None
+
+    @model_validator(mode="after")
+    def _periodo(self) -> "CortesMesQuery":
+        if self.desde and self.hasta:
+            if self.desde > self.hasta:
+                raise ValueError("desde no puede ser posterior a hasta.")
+            if (self.hasta - self.desde).days > 62:
+                raise ValueError("El rango no puede pasar de 62 días.")
+        elif not self.mes:
+            raise ValueError("Indica el mes (AAAA-MM) o el rango desde/hasta.")
+        return self
 
 
 class CortesFilaQuery(BaseModel):
@@ -190,8 +204,16 @@ class CortesReabrirBody(CortesEdicion):
 class CortesLoteBody(BaseModel):
     """Consolida lo que cuadra en las filas dadas (`sociedad|comisionista_id|división`); el plan lo arma el servidor."""
 
-    mes: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    mes: str | None = Field(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    desde: date | None = None
+    hasta: date | None = None
     fila_ids: list[str] = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _periodo(self) -> "CortesLoteBody":
+        if not ((self.desde and self.hasta) or self.mes):
+            raise ValueError("Indica el mes (AAAA-MM) o el rango desde/hasta.")
+        return self
 
 
 class CortesVentanaBody(CortesEdicion):
@@ -340,6 +362,8 @@ def post_cortes_mes(body: CortesMesQuery) -> dict:
     """La lista del mes: pagos por sociedad × comisionista × división con su estado y sugerencia."""
     return build_mes(
         mes=body.mes,
+        desde=body.desde,
+        hasta=body.hasta,
         sociedad=body.sociedad,
         division=body.division,
         comisionista_id=body.comisionista_id,
@@ -441,7 +465,7 @@ def post_cortes_reabrir(body: CortesReabrirBody, usuario: str = Depends(editor))
 @app.post("/v1/comisionesbi/cortes/consolidar-lote")
 def post_cortes_consolidar_lote(body: CortesLoteBody, usuario: str = Depends(editor)) -> dict:
     """Consolida lo que cuadra, de izquierda a derecha, en las filas pedidas."""
-    return cortes.consolidar_lote(mes=body.mes, fila_ids=body.fila_ids, usuario=usuario)
+    return cortes.consolidar_lote(mes=body.mes, desde=body.desde, hasta=body.hasta, fila_ids=body.fila_ids, usuario=usuario)
 
 
 @app.post("/v1/comisionesbi/cortes/fijar-ventana")

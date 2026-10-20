@@ -17,7 +17,14 @@ import {
   huecosDelMes,
   limitesDeCorte,
   mesAnterior,
-  mesParaPago,
+  desplazarVista,
+  etiquetaVista,
+  finDeVista,
+  mesDeVista,
+  sabadoDeSemana,
+  semanasDeVista,
+  vistaDeMes,
+  vistaParaPago,
   tienePagosConVentana,
   moverCorteLocal,
   mesPorDefecto,
@@ -456,19 +463,45 @@ describe("cierre de mes asignado a un pago", () => {
 });
 
 
-describe("navegar a un pago de otro mes", () => {
-  it("un pago que toca el mes en pantalla no cambia de mes", () => {
-    expect(mesParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, "2026-08-01", "2026-08-31")).toBeNull();
-    // uno que cruza el cambio de mes toca los dos
-    expect(mesParaPago({ ini: "2026-08-29", fin: "2026-09-04" }, "2026-09-01", "2026-09-30")).toBeNull();
+describe("semanas a la vista", () => {
+  it("el selector de mes coloca las semanas del mes y la etiqueta lo dice", () => {
+    const v = vistaDeMes("2026-08");
+    expect(v).toEqual({ ini: "2026-08-01", n: 5 });
+    expect(finDeVista(v)).toBe("2026-09-04");
+    expect(mesDeVista(v)).toBe("2026-08");
+    expect(etiquetaVista(v)).toBe("Agosto 2026");
+    // la semana que cruza el fin de mes se parte ahí: 29 a 31 ago y 1 a 4 sep
+    expect(semanasDeVista(v).slice(4)).toEqual([
+      { ini: "2026-08-29", fin: "2026-08-31" },
+      { ini: "2026-09-01", fin: "2026-09-04" }
+    ]);
   });
 
-  it("uno anterior se ve en el mes de su fin y uno posterior en el mes de su inicio", () => {
-    expect(mesParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, "2026-09-01", "2026-09-30")).toBe("2026-08");
-    expect(mesParaPago({ ini: "2026-10-01", fin: "2026-10-02" }, "2026-09-01", "2026-09-30")).toBe("2026-10");
+  it("las flechas desplazan una semana y la etiqueta pasa a ser el rango", () => {
+    const v = desplazarVista(vistaDeMes("2026-08"), 1);
+    expect(v).toEqual({ ini: "2026-08-08", n: 5 });
+    expect(finDeVista(v)).toBe("2026-09-11");
+    expect(etiquetaVista(v)).toBe("8 ago a 11 sep");
+    expect(desplazarVista(v, -2).ini).toBe("2026-07-25");
+    // vuelve a ser "el mes" cuando coincide con sus semanas
+    expect(etiquetaVista(desplazarVista(v, -1))).toBe("Agosto 2026");
   });
 
-  it("sin ventana no hay a qué mes ir", () => {
-    expect(mesParaPago({ ini: null, fin: null }, "2026-09-01", "2026-09-30")).toBeNull();
+  it("el sábado de una semana: los días de sábado a viernes comparten sábado", () => {
+    expect(sabadoDeSemana("2026-08-29")).toBe("2026-08-29");
+    expect(sabadoDeSemana("2026-09-04")).toBe("2026-08-29");
+    expect(sabadoDeSemana("2026-08-30")).toBe("2026-08-29");
+  });
+
+  it("un pago que ya toca la vista no la mueve; uno de fuera la mueve y lo deja en la semana central", () => {
+    const v = vistaDeMes("2026-09"); // 29 ago a 2 oct
+    expect(vistaParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, v)).toBeNull();
+    expect(vistaParaPago({ ini: null, fin: null }, v)).toBeNull();
+    const antes = vistaParaPago({ ini: "2026-08-15", fin: "2026-08-21" }, v)!;
+    expect(semanasDeVista(antes)[2].ini).toBe("2026-08-15");
+    const despues = vistaParaPago({ ini: "2026-10-10", fin: "2026-10-16" }, v)!;
+    // la columna 2 puede ser media semana si hubo fin de mes antes; se mira la semana central
+    expect(semanasDeVista(despues).some((s) => s.ini === "2026-10-10")).toBe(true);
+    expect(despues.ini).toBe("2026-09-26"); // dos semanas antes de la del pago
   });
 });

@@ -72,6 +72,7 @@ const RESPUESTA: CortesMesResponse = {
 function pinta(respuesta: CortesMesResponse | null = RESPUESTA, error: string | null = null) {
   return renderToStaticMarkup(
     <CortesWorkspace
+      hoy="2026-10-15"
       initialCatalog={EMPTY_CATALOG}
       initialError={error}
       initialResponse={respuesta}
@@ -121,6 +122,7 @@ describe("CortesWorkspace", () => {
     };
     const html = renderToStaticMarkup(
       <CortesWorkspace
+        hoy="2026-10-15"
         initialCatalog={{
           ...EMPTY_CATALOG,
           divisiones: [
@@ -185,6 +187,18 @@ describe("CortesWorkspace", () => {
     };
     expect(pinta(r)).toContain("⚠ Cambió");
     expect(pinta({ ...r, filas: [fila("0000001450", "EDGARDO TRUJILLO", [pago("a", "2026-07-04", "2026-07-10", "cons", 0)])] })).not.toContain("⚠ Cambió");
+  });
+
+  it("arriba de la tabla hay flechas para ir una semana atrás o adelante, y un desplegar todo", () => {
+    const html = pinta();
+    expect(html).toContain("◀ Semana anterior");
+    expect(html).toContain("Semana siguiente ▶");
+    expect(html).toContain("Desplegar todo");
+    expect(html).toContain("Pagos de Julio 2026 por comisionista");
+  });
+
+  it("con un solo comisionista a la vista ya está desplegado y el botón ofrece contraer", () => {
+    expect(pinta({ ...RESPUESTA, filas: [RESPUESTA.filas[0]] })).toContain("Contraer todo");
   });
 
   it("un comisionista sin nombre se muestra por su número, no vacío", () => {

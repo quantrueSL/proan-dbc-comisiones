@@ -132,6 +132,11 @@ def rango_mes(mes: str) -> tuple[date, date]:
     return ini, siguiente - timedelta(days=1)
 
 
+def rango_de(periodo) -> tuple[date, date]:
+    """El rango que se pide: un mes `AAAA-MM` o ya un par (desde, hasta), como el de las semanas que se ven en pantalla."""
+    return rango_mes(periodo) if isinstance(periodo, str) else periodo
+
+
 def _iso(valor) -> str | None:
     return valor.isoformat() if hasattr(valor, "isoformat") else valor
 
@@ -166,7 +171,7 @@ def _cache_ttl_seconds() -> int:
         return _CACHE_TTL_POR_DEFECTO
 
 
-def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = False):
+def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, con_cobertura: bool = False):
     """Lo crudo de BigQuery: (ini, fin, docs, diario, nombres, cobertura, partes, info_docs).
 
     `diario` ya suma las divisiones que se pagan juntas; `partes` guarda cada origen por separado
@@ -178,7 +183,7 @@ def _datos(mes: str, sociedad, division, comisionista_id, con_cobertura: bool = 
     if ttl and hit and hit[0] > time.monotonic():
         return hit[1]
 
-    ini, fin = rango_mes(mes)
+    ini, fin = rango_de(mes)
     params = {
         "ini": ("DATE", ini),
         "fin_pago": ("DATE", fin + timedelta(days=GRACIA_SIN_VENTANA_DIAS)),
@@ -392,10 +397,16 @@ def _toca_el_mes(p: PagoResuelto, ini: date, fin: date) -> bool:
 # ─── Puntos de entrada ───────────────────────────────────────────────────
 
 
-def build_mes(*, mes: str, sociedad=None, division=None, comisionista_id=None) -> dict:
-    """La lista del mes: una fila por sociedad × comisionista × división, con los pagos que tocan el mes."""
+def build_mes(*, mes: str | None = None, desde: date | None = None, hasta: date | None = None, sociedad=None, division=None, comisionista_id=None) -> dict:
+    """La lista del mes (o de las semanas pedidas con desde/hasta): una fila por sociedad × comisionista × división, con los pagos que tocan el rango."""
+    if desde and hasta:
+        periodo = (desde, hasta)
+    elif mes:
+        periodo = mes
+    else:
+        raise ValueError("Falta el mes o el rango de fechas.")
     ini, fin, filas, nombres, _, cobertura_datos, versiones, info_docs, guardados = _cargar(
-        mes, sociedad, division, comisionista_id, con_cobertura=True
+        periodo, sociedad, division, comisionista_id, con_cobertura=True
     )
     salida = []
     for key, fila in filas.items():
@@ -409,7 +420,7 @@ def build_mes(*, mes: str, sociedad=None, division=None, comisionista_id=None) -
             )
     salida.sort(key=lambda f: (f["comisionista"] is None, f["comisionista"] or f["comisionista_id"], f["division_code"] or ""))
     return {
-        "mes": mes,
+        "mes": mes or ini.strftime("%Y-%m"),
         "desde": ini.isoformat(),
         "hasta": fin.isoformat(),
         "cobertura": cobertura_datos,
@@ -666,9 +677,10 @@ def reabrir(*, mes, key, pago_ids, version, usuario) -> dict:
     )
 
 
-def consolidar_lote(*, mes: str, fila_ids: list[str], usuario: str) -> dict:
+def consolidar_lote(*, mes: str | None = None, desde: date | None = None, hasta: date | None = None, fila_ids: list[str], usuario: str) -> dict:
     """Consolida lo que cuadra en las filas pedidas, con el plan que arma el servidor (izquierda a derecha)."""
-    ini, fin, filas, _, _, _, versiones, _, guardados = _cargar(mes, None, None, None)
+    periodo = (desde, hasta) if desde and hasta else mes
+    ini, fin, filas, _, _, _, versiones, _, guardados = _cargar(periodo, None, None, None)
     pedidas = set(fila_ids)
     total = filas_tocadas = omitidas = 0
     for key, fila in filas.items():

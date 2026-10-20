@@ -525,3 +525,31 @@ def test_el_cierre_se_toma_del_ultimo_dia_con_cobros_de_todos_los_comisionistas(
     # la consulta de cierres no lleva filtros de fila: igual para todos los comisionistas
     svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
     assert svc._cierres() == {date(2026, 6, 30)}
+
+
+# ─── Rango de semanas en vez de mes ──────────────────────────────────────
+
+
+def test_la_lista_se_puede_pedir_por_semanas_en_vez_de_por_mes(bq):
+    # del 4 al 17 jul: tocan el pago 2 (29 jun a 10 jul) y no el de 27 jun a 3 jul
+    r = svc.build_mes(desde=date(2026, 7, 4), hasta=date(2026, 7, 17))
+    assert (r["desde"], r["hasta"], r["mes"]) == ("2026-07-04", "2026-07-17", "2026-07")
+    (fila,) = r["filas"]
+    assert {p["ini"] for p in fila["pagos"] if p["ini"]} == {"2026-07-04"}
+    nombre, params = bq[0]
+    assert params["ini_ext"][1] == date(2026, 7, 4) - timedelta(days=svc.MARGEN_DIAS)
+    assert params["fin_ext"][1] == date(2026, 7, 17) + timedelta(days=svc.MARGEN_DIAS)
+
+
+def test_endpoint_mes_acepta_desde_hasta_y_rechaza_peticiones_sin_periodo(bq):
+    ok = client.post("/v1/comisionesbi/cortes/mes", json={"desde": "2026-07-04", "hasta": "2026-07-31"})
+    assert ok.status_code == 200 and ok.json()["desde"] == "2026-07-04"
+    assert client.post("/v1/comisionesbi/cortes/mes", json={}).status_code == 422
+    assert client.post("/v1/comisionesbi/cortes/mes", json={"desde": "2026-07-31", "hasta": "2026-07-04"}).status_code == 422
+    assert client.post("/v1/comisionesbi/cortes/mes", json={"desde": "2026-01-01", "hasta": "2026-06-30"}).status_code == 422
+
+
+def test_consolidar_lo_que_cuadra_tambien_vale_para_un_rango_de_semanas(bq):
+    svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
+    r = svc.consolidar_lote(desde=date(2026, 6, 27), hasta=date(2026, 7, 10), fila_ids=[FILA_ID], usuario="ana")
+    assert r["consolidados"] == 2

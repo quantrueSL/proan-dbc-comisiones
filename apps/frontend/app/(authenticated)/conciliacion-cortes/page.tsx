@@ -51,6 +51,7 @@ export default async function ConciliacionCortesPage() {
       initialCatalog={catalog}
       initialError={error}
       initialResponse={response}
+      hoy={hoy}
       mesInicial={mes}
       meses={meses}
       puedeEditar={sesion.role === "admin"}

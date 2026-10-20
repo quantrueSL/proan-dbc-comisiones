@@ -12205,3 +12205,10 @@ body.proan-report-assistant-open .proan-content-scroll {
 /* Día de cierre de mes asignado a un pago. */
 .cortes-dia.is-asignado { border-style: dashed; border-color: #92400e; background: #fdf1d4; }
 .cortes-incluye { color: #92400e; font-size: 11px; font-weight: 700; }
+
+/* Flechas para desplazar las semanas a la vista, a cada lado del título de la tabla. */
+.cortes-lista-tit { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px 14px; }
+.cortes-lista-centro { display: grid; justify-items: center; gap: 2px; text-align: center; }
+.cortes-lista-centro h2 { margin: 0; }
+.cortes-semana-flecha { white-space: nowrap; }
+@media (max-width: 760px) { .cortes-lista-tit { grid-template-columns: 1fr 1fr; } .cortes-lista-centro { grid-column: 1 / -1; grid-row: 1; } }
