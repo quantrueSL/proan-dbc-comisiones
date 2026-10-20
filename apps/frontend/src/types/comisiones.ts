@@ -644,6 +644,18 @@ export type CortesAccion =
   | "asignar-dias"
   | "quitar-huerfano";
 
+/** Respuesta de `exportar`: el detalle de un pago (ventana más días de cierre asignados) con el motivo de cada fila. */
+export type CortesExportPagoResponse = {
+  ini: string;
+  fin: string;
+  /** Días de cierre de mes asignados a este pago. */
+  dias: string[];
+  /** Por periodo (la ventana del pago y cada día de cierre asignado) y producto, como la hoja "Conciliación" de la pestaña vigente. */
+  productos: (Omit<ConciliacionDiarioRow, "fecha"> & { semana: string; periodo_fin: string })[];
+  diario: (ConciliacionDiarioRow & { asignacion: string })[];
+  factura: (ConciliacionFacturaRow & { asignacion: string })[];
+};
+
 export type CortesEvento = {
   tipo: string;
   usuario: string | null;

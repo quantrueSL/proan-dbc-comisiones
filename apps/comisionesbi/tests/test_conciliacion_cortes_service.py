@@ -521,6 +521,50 @@ def test_aplicar_un_cierre_que_la_persona_no_vio_se_rechaza(bq, monkeypatch):
     assert e.value.codigo == "sugerencia_distinta"
 
 
+def _fila_cobro(fecha, division, comision):
+    return {
+        "fecha": fecha, "sociedad": "DBC", "division_code": division, "division": division, "cedis": "Norte",
+        "oficina": "0023", "comisionista_id": LIFNR, "comisionista": "X", "tipo_venta": "RUTA", "matnr": "1",
+        "descripcion": "A", "unidad_venta": "caja", "unidad_tarifa": "kg", "tarifa": 1.5, "num_lineas": 1,
+        "cantidad_venta_total": 5.0, "monto_total": 50.0, "cantidad_base_total": 150.0, "comision_total": comision,
+        "lineas_sin_comision": 0,
+    }
+
+
+def test_el_export_de_un_pago_trae_su_ventana_y_los_dias_de_cierre_asignados(bq, monkeypatch):
+    original = svc.run_query
+    filas_diario = [
+        _fila_cobro(date(2026, 6, 30), "H", 225.0),
+        _fila_cobro(date(2026, 7, 1), "A", 450.0),
+        _fila_cobro(date(2026, 6, 20), "H", 45.0),
+    ]
+    filas_factura = [
+        {**_fila_cobro(date(2026, 6, 28), "A", 450.0), "billing_document": "9001", "item_number": "10",
+         "fecha_cobro": date(2026, 7, 1), "cantidad_venta": 10.0, "cantidad_base": 300.0, "monto": 100.0,
+         "comision": 450.0, "comision_estado": "ok", "se_cobro": True, "monto_cobrado": 100.0,
+         "cantidad_cobrada": 10.0, "comision_cobrada": 450.0},
+    ]
+
+    def fake(sql, nombre, parametros=None):
+        if "detalle diario del pago" in nombre:
+            assert "IF(sociedad = 'DBC'" in sql  # Abarrotes de DBC va dentro de Huevo
+            return filas_diario
+        if "detalle de factura del pago" in nombre:
+            return filas_factura
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+    r = svc.build_export_pago(sociedad="DBC", comisionista_id=LIFNR, division_code="H",
+                              ini=date(2026, 7, 1), fin=date(2026, 7, 3), dias=[date(2026, 6, 30)])
+    assert [(d["fecha"], d["asignacion"]) for d in r["diario"]] == [
+        ("2026-06-30", "Cierre de mes asignado"), ("2026-07-01", "Ventana del pago")]
+    assert r["dias"] == ["2026-06-30"]
+    assert [(f["billing_document"], f["fecha_cobro"], f["asignacion"]) for f in r["factura"]] == [("9001", "2026-07-01", "Ventana del pago")]
+    # por periodo y producto: la ventana del pago y, aparte, el día de cierre asignado
+    assert sorted((p["semana"], p["periodo_fin"], p["comision_total"]) for p in r["productos"]) == [
+        ("2026-06-30", "2026-06-30", 225.0), ("2026-07-01", "2026-07-03", 450.0)]
+
+
 def test_asignar_dias_a_mano_sin_sugerencia_y_quitarlos(bq, monkeypatch):
     _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
     v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 30)], version=0, usuario="ana")

@@ -123,6 +123,33 @@ GROUP BY division_code, cedis, oficina, tipo_venta, matnr, descripcion, unidad_v
 """
 
 
+# Detalle de un pago para el Excel: mismas columnas que la pestaña vigente, con Abarrotes de DBC dentro de Huevo.
+_TABLA_FACTURA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`"
+
+_DIARIO_PAGO_SQL = f"""
+SELECT fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
+  matnr, descripcion, unidad_venta, unidad_tarifa, tarifa,
+  num_lineas, cantidad_venta_total, monto_total, cantidad_base_total, comision_total, lineas_sin_comision
+FROM {_TABLA_DIARIA}
+WHERE fecha BETWEEN @ini AND @fin
+  AND sociedad = @sociedad
+  AND comisionista_id = @comisionista_id
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
+"""
+
+_FACTURA_PAGO_SQL = f"""
+SELECT billing_document, item_number, fecha, sociedad, division_code, division, cedis,
+  oficina, comisionista_id, comisionista, tipo_venta, matnr, descripcion, unidad_venta,
+  cantidad_venta, unidad_tarifa, cantidad_base, tarifa, monto, comision,
+  comision_estado, se_cobro, monto_cobrado, cantidad_cobrada, comision_cobrada, fecha_cobro
+FROM {_TABLA_FACTURA}
+WHERE fecha_cobro BETWEEN @ini AND @fin
+  AND sociedad = @sociedad
+  AND comisionista_id = @comisionista_id
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
+"""
+
+
 def rango_mes(mes: str) -> tuple[date, date]:
     m = _MES.match(mes)
     if not m:
@@ -425,6 +452,79 @@ def build_mes(*, mes: str | None = None, desde: date | None = None, hasta: date 
         "hasta": fin.isoformat(),
         "cobertura": cobertura_datos,
         "filas": salida,
+    }
+
+
+def _num(v):
+    return float(v) if hasattr(v, "as_tuple") else v
+
+
+_SUMAS_PRODUCTO = ("num_lineas", "cantidad_venta_total", "monto_total", "cantidad_base_total", "comision_total", "lineas_sin_comision")
+
+
+def _productos(diario: list[dict], ini: date, fin: date) -> list[dict]:
+    """El diario sumado por periodo y producto (la hoja "Conciliación" de la pestaña vigente): la ventana del pago es un
+    periodo y cada día de cierre asignado a mano, otro."""
+    grupos: dict[tuple, dict] = {}
+    for r in diario:
+        dia = date.fromisoformat(r["fecha"])
+        desde, hasta = (ini, fin) if ini <= dia <= fin else (dia, dia)
+        llave = (desde, hasta) + tuple(r.get(c) for c in ("division_code", "cedis", "oficina", "tipo_venta", "matnr", "descripcion", "unidad_venta", "unidad_tarifa"))
+        g = grupos.setdefault(
+            llave,
+            {**{k: v for k, v in r.items() if k not in ("fecha", "asignacion")}, **{c: 0.0 for c in _SUMAS_PRODUCTO},
+             "semana": desde.isoformat(), "periodo_fin": hasta.isoformat()},
+        )
+        for c in _SUMAS_PRODUCTO:
+            g[c] += r.get(c) or 0.0
+    return sorted(grupos.values(), key=lambda g: (g["semana"], g["cedis"] is None, g["cedis"] or "", g["oficina"] or "", -(g["cantidad_venta_total"] or 0)))
+
+
+def build_export_pago(
+    *, sociedad: str, comisionista_id: str, division_code: str | None, ini: date, fin: date, dias: list[date] | None = None
+) -> dict:
+    """Todo lo que lleva el Excel de UN pago: los cobros de su ventana (más los días de cierre que tenga asignados)
+    por producto, por día y por línea de factura, con su división de origen (Huevo y Abarrotes juntos)."""
+    asignados = sorted(set(dias or ()))
+    params = {
+        "ini": ("DATE", min([ini, *asignados])),
+        "fin": ("DATE", max([fin, *asignados])),
+        "sociedad": ("STRING", sociedad),
+        "comisionista_id": ("STRING", comisionista_id),
+        "division": ("STRING", division_code),
+    }
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_diario = pool.submit(run_query, _DIARIO_PAGO_SQL, "el detalle diario del pago", params)
+        f_factura = pool.submit(run_query, _FACTURA_PAGO_SQL, "el detalle de factura del pago", params)
+        diario, factura = f_diario.result(), f_factura.result()
+
+    def motivo(dia: date) -> str | None:
+        if ini <= dia <= fin:
+            return "Ventana del pago"
+        return "Cierre de mes asignado" if dia in asignados else None
+
+    def limpio(r: dict, campo: str) -> dict | None:
+        m = motivo(r[campo]) if r.get(campo) else None
+        if m is None:
+            return None
+        salida = {k: _num(v) for k, v in r.items()}
+        for c in ("fecha", "fecha_cobro"):
+            if c in salida:
+                salida[c] = _iso(salida[c])
+        salida["asignacion"] = m
+        return salida
+
+    diario_p = [x for x in (limpio(r, "fecha") for r in diario) if x]
+    factura_p = [x for x in (limpio(r, "fecha_cobro") for r in factura) if x]
+    diario_p.sort(key=lambda r: (r["fecha"], r["cedis"] or "", r["oficina"] or ""))
+    factura_p.sort(key=lambda r: (r["fecha_cobro"], r["cedis"] or "", r["oficina"] or "", str(r["billing_document"]), str(r["item_number"])))
+    return {
+        "ini": ini.isoformat(),
+        "fin": fin.isoformat(),
+        "dias": [_iso(d) for d in asignados],
+        "productos": _productos(diario_p, ini, fin),
+        "diario": diario_p,
+        "factura": factura_p,
     }
 
 

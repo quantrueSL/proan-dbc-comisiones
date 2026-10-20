@@ -104,7 +104,7 @@ resultados que la medición.
 **Falta (plan al 20 de octubre, en orden propuesto)**
 1. Cerrar lo ya hecho: commit de semanas con corte de fin de mes, orden fijo de divisiones y `desde`/`hasta`; reintentar el despliegue dev y que el senior lo revise (pendiente su explicación de las flechas).
 2. HECHO (sin commit) — Cierre de mes a mano, sin sugerencia (bloque "Cierre de mes" del panel, endpoint `asignar-dias`): poder elegir los días de cierre (el bloque libre) y asignarlos a cualquier pago, con el mismo `dias_asignados` y "Volver a la ventana estándar" para deshacer. Hoy solo se asigna aplicando la sugerencia exacta; los casos sin exacto (el 47%) no tienen cómo.
-3. Fase 6: Excel descargable por ventana, con columna "Pago asignado" (pago SAP, ventana, días asignados, calculado, pagado, diferencia, estado y consolidado por/en).
+3. HECHO (sin commit) — Fase 6: botón "Descargar Excel" en el panel de cada pago (junto a las pestañas), un libro por pago con el nivel de la pestaña vieja: hojas Pago, Conciliación (por producto), Detalle diario y Detalle de factura, con columna "Pago asignado" y motivo (ventana / cierre asignado). Endpoint `exportar` (Abarrotes dentro de Huevo en DBC). No hay Excel general de la lista: se quitó por ruido.
 4. Comodidad de trabajo: botón que aplique en bloque las sugerencias de borde y de cierre de un mes (con vista previa); flechas para bordes sueltos; textos de sugerencias más cortos; aviso de solo lectura más claro ("tu rol es viewer…"); carga en frío ~20 s.
 5. Fase 7: mostrar el 47% sin explicación (diferencia de monto en ~12 comisionistas de PAN-H/DBC-BO), reglas por comisionista, Firestore → BigQuery, destino de la pestaña vieja.
 6. Migración a D60: correr los DDL y repuntar `_TABLA_*` del servicio.

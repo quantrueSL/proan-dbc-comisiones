@@ -13,6 +13,7 @@ import type {
   CortesAccion,
   CortesDetalleResponse,
   CortesEvento,
+  CortesExportPagoResponse,
   CortesFila,
   CortesFilaResponse,
   CortesHistorialResponse,
@@ -225,6 +226,16 @@ function describirEvento(e: CortesEvento): string {
       return "recuperó la sugerencia";
     case "restablecer_pago":
       return "devolvió un pago a su ventana estándar";
+    case "consolidar":
+      return "consolidó el pago";
+    case "consolidar_lote":
+      return "consolidó el pago en lote";
+    case "reabrir":
+      return "reabrió el pago consolidado";
+    case "fijar_ventana":
+      return `fijó la ventana del pago del ${e.detalle?.ini ? fechaConDia(e.detalle.ini) : ""} al ${e.detalle?.fin ? fechaConDia(e.detalle.fin) : ""}`;
+    case "asignar_dias":
+      return e.detalle?.dias ? `asignó los días de cierre ${e.detalle.dias.split(",").map(fechaCorta).join(", ")}` : "quitó los días de cierre asignados";
     default:
       return e.tipo;
   }
@@ -259,6 +270,7 @@ export function CortesPanel({
   // Pagos consolidados que la persona quiere reabrir: se pide confirmar antes.
   const [reabrir, setReabrir] = useState<string[] | null>(null);
   const [ventana, setVentana] = useState({ ini: "", fin: "" });
+  const [exportando, setExportando] = useState(false);
   // Días de cierre de mes que la persona marcó para incluirlos en este pago.
   const [diasElegidos, setDiasElegidos] = useState<string[]>([]);
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -394,6 +406,51 @@ export function CortesPanel({
       }
       void editar("mover", { izq_pago_id: ultima.izqId, fecha: ultima.fecha });
     }, PAUSA_PARA_GUARDAR_MS);
+  }
+
+  // Excel del pago: lo de la pestaña de Conciliación (por producto, por día y por línea de factura) de su ventana.
+  async function descargarExcel() {
+    if (!pago?.ini || !pago.fin) return;
+    setExportando(true);
+    setAviso(null);
+    try {
+      const datos = await pedir<CortesExportPagoResponse>("/api/comisionesbi/cortes/editar/exportar", {
+        sociedad: filaResumen.sociedad,
+        comisionista_id: filaResumen.comisionista_id,
+        division_code: filaResumen.division_code,
+        ini: pago.ini,
+        fin: pago.fin,
+        dias: pago.dias_asignados ?? []
+      });
+      // Lo que se tocó a mano en este pago, del historial de la fila (de lo más viejo a lo más nuevo).
+      const hist = await pedir<CortesHistorialResponse>("/api/comisionesbi/cortes/editar/historial", {
+        sociedad: filaResumen.sociedad,
+        comisionista_id: filaResumen.comisionista_id,
+        division_code: filaResumen.division_code,
+        limite: 100
+      }).catch(() => ({ eventos: [] as CortesEvento[] }));
+      const modificaciones = hist.eventos
+        .filter((e) => e.pago_id === pago.pago_id || !!e.antes?.[pago.pago_id] || !!e.despues?.[pago.pago_id] || (e.detalle?.pagos ?? "").split(",").includes(pago.pago_id))
+        .reverse()
+        .map((e) => ({
+          cuando: e.ts ? formatoMomento.format(new Date(e.ts)) : "—",
+          quien: e.usuario ?? "—",
+          que: describirEvento(e)
+        }));
+      const { construirExcelPago, descargarBlob } = await import("./cortes-excel");
+      const blob = await construirExcelPago(datos, {
+        comisionista: nombreComisionista(filaResumen),
+        division: etiquetaDivision,
+        pago,
+        modificaciones
+      });
+      const nombre = nombreComisionista(filaResumen).replace(/\s+/g, "_");
+      descargarBlob(`conciliacion_${nombre}_${filaResumen.division_code ?? "sd"}_${pago.ini}_${pago.fin}.xlsx`, blob);
+    } catch (causa) {
+      setAviso(causa instanceof Error ? causa.message : "No se pudo preparar el Excel.");
+    } finally {
+      setExportando(false);
+    }
   }
 
   async function abrirHistorial(abierto: boolean) {
@@ -605,6 +662,15 @@ export function CortesPanel({
         </button>
         <button aria-selected={tab === "detalle"} disabled={sinVentana} onClick={() => setTab("detalle")} role="tab" type="button">
           Detalle por producto
+        </button>
+        <button
+          className="cortes-excel"
+          disabled={sinVentana || exportando}
+          onClick={() => void descargarExcel()}
+          title="Excel de este pago: por producto, por día y por línea de factura"
+          type="button"
+        >
+          {exportando ? "Preparando Excel…" : "Descargar Excel"}
         </button>
       </div>
 

@@ -127,7 +127,7 @@ export async function getCortesDetalle(filters: CortesDetalleFilters): Promise<C
 
 // ── Edición de cortes ───────────────────────────────────────────────────────
 
-const RUTAS_EDICION: Record<CortesAccion | "historial", string> = {
+const RUTAS_EDICION: Record<CortesAccion | "historial" | "exportar", string> = {
   mover: "/v1/comisionesbi/cortes/mover",
   "mover-borde": "/v1/comisionesbi/cortes/mover-borde",
   aplicar: "/v1/comisionesbi/cortes/sugerencia/aplicar",
@@ -140,10 +140,11 @@ const RUTAS_EDICION: Record<CortesAccion | "historial", string> = {
   "fijar-ventana": "/v1/comisionesbi/cortes/fijar-ventana",
   "asignar-dias": "/v1/comisionesbi/cortes/asignar-dias",
   "quitar-huerfano": "/v1/comisionesbi/cortes/quitar-huerfano",
+  exportar: "/v1/comisionesbi/cortes/exportar",
   historial: "/v1/comisionesbi/cortes/historial"
 };
 
-export function esAccionDeEdicion(valor: string): valor is CortesAccion | "historial" {
+export function esAccionDeEdicion(valor: string): valor is CortesAccion | "historial" | "exportar" {
   return Object.prototype.hasOwnProperty.call(RUTAS_EDICION, valor);
 }
 
@@ -154,7 +155,7 @@ export function esAccionDeEdicion(valor: string): valor is CortesAccion | "histo
  * `usuario` y `rol` salen de la sesión del servidor, nunca del cuerpo de la petición.
  */
 export async function postCortesEdicion(
-  accion: CortesAccion | "historial",
+  accion: CortesAccion | "historial" | "exportar",
   cuerpo: unknown,
   sesion: { usuario: string; rol: string }
 ): Promise<{ status: number; payload: unknown }> {

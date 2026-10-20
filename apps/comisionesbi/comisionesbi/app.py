@@ -216,6 +216,16 @@ class CortesLoteBody(BaseModel):
         return self
 
 
+class CortesExportarBody(BaseModel):
+    sociedad: str
+    comisionista_id: str
+    division_code: str | None = None
+    ini: date
+    fin: date
+    # Días de cierre de mes que el pago tiene asignados (se suman a su ventana).
+    dias: list[date] = Field(default_factory=list, max_length=31)
+
+
 class CortesVentanaBody(CortesEdicion):
     pago_id: str
     ini: date
@@ -495,6 +505,17 @@ def post_cortes_quitar_huerfano(body: CortesPagoBody, usuario: str = Depends(edi
     """Borra el ajuste o la foto de un documento que ya no existe en SAP."""
     return cortes.quitar_huerfano(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id, version=body.version, usuario=usuario
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/exportar")
+def post_cortes_exportar(body: CortesExportarBody) -> dict:
+    """El detalle de un pago (por producto, por día y por línea de factura) para su Excel."""
+    if body.fin < body.ini or (body.fin - body.ini).days > 62:
+        raise HTTPException(status_code=422, detail="La ventana del pago no es válida.")
+    return cortes.build_export_pago(
+        sociedad=body.sociedad, comisionista_id=body.comisionista_id, division_code=body.division_code,
+        ini=body.ini, fin=body.fin, dias=body.dias,
     )
 
 
