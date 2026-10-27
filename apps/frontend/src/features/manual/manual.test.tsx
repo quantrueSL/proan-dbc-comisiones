@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { ETIQUETA_ESTADO } from "@/features/conciliacion-cortes/cortes-logica";
 import { FlujoManual } from "@/features/flujo-producto/flujo-manual";
+import { ManualCortes } from "@/features/manual/manual-cortes";
 import { CAPAS, CORRIDA, ManualRecorrido } from "@/features/manual/manual-recorrido";
 import { ManualGlosario, ManualIntro, ManualModulos } from "@/features/manual/manual-intro";
 import { CON_CEDIS, PORCENTAJE_SIN, SIN_CEDIS, TOTAL } from "@/features/manual/manual-demos";
@@ -25,6 +27,7 @@ function html() {
       <ManualIntro />
       <ManualRecorrido />
       <ManualModulos />
+      <ManualCortes />
       <FlujoManual cobertura={COBERTURA} />
       <ManualGlosario />
     </>
@@ -67,7 +70,7 @@ describe("qué es la plataforma", () => {
 });
 
 describe("estado real de los módulos", () => {
-  it("presenta los tres módulos como activos, no como bloqueados", () => {
+  it("presenta los cuatro módulos como activos, no como bloqueados", () => {
     // Comisiones y Conciliación dejaron de devolver 501 el 24/08 y el 08/09:
     // si el manual sigue diciendo "bloqueado" está mintiendo sobre el producto.
     const marcado = html();
@@ -77,16 +80,41 @@ describe("estado real de los módulos", () => {
 
   it("cada módulo enlaza a su pantalla real", () => {
     const marcado = html();
-    for (const ruta of ["/flujo-producto", "/comisiones", "/conciliacion"]) {
+    for (const ruta of ["/flujo-producto", "/comisiones", "/conciliacion-cortes", "/conciliacion"]) {
       expect(marcado, `no enlaza a ${ruta}`).toContain(`href="${ruta}"`);
     }
   });
 
   it("dice qué falta en Comisiones y Conciliación, en términos de negocio", () => {
     const contenido = texto();
-    for (const pendiente of [/no se sabe qué comisionista cobra ahí/, /fecha que junta ambos lados es la de la venta/]) {
+    for (const pendiente of [/oficinas que no comisionan/, /fecha de cobro como la que junta los dos lados/]) {
       expect(contenido).toMatch(pendiente);
     }
+  });
+
+  it("ya no dice que la conciliación empareja por fecha de venta", () => {
+    // Desde el 30-sep el cruce es por fecha de cobro; el manual lo dijo mal durante un mes.
+    expect(texto()).not.toMatch(/fecha de (la )?venta/);
+  });
+});
+
+describe("conciliación por cortes", () => {
+  it("explica los cinco estados con las mismas palabras que la pantalla", () => {
+    const contenido = texto();
+    for (const etiqueta of Object.values(ETIQUETA_ESTADO)) {
+      expect(contenido, `falta el estado ${etiqueta}`).toContain(etiqueta);
+    }
+  });
+
+  it("cuenta el recorrido completo de un pago", () => {
+    const contenido = texto();
+    for (const boton of ["Siguiente pendiente", "Aplicar", "Volver a la ventana estándar", "Incluir en este pago", "Consolidar lo que cuadra", "Reabrir", "Descargar Excel"]) {
+      expect(contenido, `falta ${boton}`).toContain(boton);
+    }
+  });
+
+  it("dice quién puede editar", () => {
+    expect(texto()).toMatch(/Solo el rol admin puede/);
   });
 });
 

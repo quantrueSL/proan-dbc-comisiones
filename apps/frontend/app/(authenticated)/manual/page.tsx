@@ -2,6 +2,7 @@ import { requireSession } from "@/lib/auth/session";
 import { getComisionesCatalog, getFlujoProducto } from "@/lib/comisionesbi";
 import { FlujoManual } from "@/features/flujo-producto/flujo-manual";
 import { ManualGlosario, ManualIntro, ManualModulos } from "@/features/manual/manual-intro";
+import { ManualCortes } from "@/features/manual/manual-cortes";
 import { ManualIndice } from "@/features/manual/manual-indice";
 import { ManualRecorrido } from "@/features/manual/manual-recorrido";
 import type { FlujoCobertura } from "@/types/comisiones";
@@ -51,7 +52,7 @@ export default async function ManualPage() {
           <p className="manual-portada-texto">
             DBC recibe producto del grupo Proan y lo distribuye por sus CEDIS. Esta plataforma sigue
             ese producto desde que entra hasta que se cobra, calcula la comisión que toca pagar —solo
-            sobre lo cobrado— y guarda el respaldo documental de cada pago.
+            sobre lo cobrado— y concilia cada pago de comisión contra los cobros que lo justifican.
           </p>
         </div>
         <div className="manual-portada-datos">
@@ -59,7 +60,7 @@ export default async function ManualPage() {
             <b>4</b> capas de datos
           </span>
           <span>
-            <b>3</b> módulos
+            <b>4</b> módulos
           </span>
           {cedis ? (
             <span>
@@ -88,6 +89,7 @@ export default async function ManualPage() {
           <ManualIntro />
           <ManualRecorrido />
           <ManualModulos />
+          <ManualCortes />
           <FlujoManual cobertura={cobertura} />
           <ManualGlosario />
         </div>

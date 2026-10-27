@@ -1,6 +1,6 @@
 "use client";
 
-// Conciliación por cortes (pestaña de pruebas, convive con la de Conciliación).
+// Conciliación por cortes: la forma de conciliar (la de Conciliación queda como vista de consulta).
 // Cabecera con filtros y totales; tabla con un total por comisionista que se abre
 // por división (una celda por pago, un solo estado); y, al elegir un pago, su
 // panel a la derecha, fijo mientras se recorre la lista.
@@ -298,7 +298,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
 
       <header className="cortes-cab">
         <div className="cortes-cab-titulo">
-          <p>Conciliación por cortes · pestaña de pruebas</p>
+          <p>Conciliación por cortes</p>
           <h1>Comisión calculada frente a comisión pagada</h1>
           <span>
             Cada celda es un pago del mes. El valor es calculado − pagado.

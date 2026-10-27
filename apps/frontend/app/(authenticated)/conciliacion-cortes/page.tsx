@@ -15,7 +15,7 @@ function semanasDe(mes: string) {
   return { desde: v.ini, hasta: finDeVista(v) };
 }
 
-// Pestaña de pruebas de conciliación por cortes: convive con /conciliacion.
+// Conciliación por cortes, la forma de conciliar; /conciliacion queda como vista de consulta.
 export default async function ConciliacionCortesPage() {
   const sesion = requireSession();
 

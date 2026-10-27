@@ -20,7 +20,7 @@ export interface ClientConfig {
     flujoProducto: { enabled: boolean };
     comisiones: { enabled: boolean };
     conciliacion: { enabled: boolean };
-    // Pestaña de pruebas: convive con `conciliacion` hasta decidir qué hacer con la vieja.
+    // La forma de conciliar; `conciliacion` queda como vista de consulta.
     conciliacionCortes: { enabled: boolean };
   };
 }

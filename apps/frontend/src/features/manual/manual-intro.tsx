@@ -34,16 +34,24 @@ const MODULOS: {
     titulo: "Comisiones",
     ruta: "/comisiones",
     estado: "activo",
-    que: "Cuánto se le debe a cada comisionista: un importe fijo por caja o por kilo, según el producto, el CEDIS y quién vende. Cubre ya cerca del 92% de lo facturado en las divisiones que opera DBC.",
-    falta: "En una parte de las oficinas todavía no se sabe qué comisionista cobra ahí, así que esas líneas se agrupan como «sin comisionista» en vez de repartirse a alguien al azar. Y de lo que sí se calcula, solo una parte ya tiene un pago real con el que compararse — el resto es venta que aún no se ha cobrado, no un error de cálculo."
+    que: "Cuánto se le debe a cada comisionista: un importe fijo por kilo, caja, saco, paquete o pieza, con la tarifa oficial de SAP para la división, la oficina, el SET y el tipo de venta. Separa siempre DBC de PAN, y lo facturado de lo cobrado.",
+    falta: "Las oficinas que no comisionan —la 0130 y las de México— no entran en el total. Algunos acuerdos especiales con comisionistas siguen en revisión con el cliente."
+  },
+  {
+    clave: "cortes",
+    titulo: "Conciliación por cortes",
+    ruta: "/conciliacion-cortes",
+    estado: "activo",
+    que: "La forma de conciliar: cada pago de comisión de SAP contra los cobros de su ventana de fechas. Se ajustan los cortes entre pagos, se asigna el cierre de mes y se consolida lo revisado, con historial y Excel por pago.",
+    falta: "Las sugerencias solo resuelven diferencias de fechas. Las de monto se revisan a mano, y conviene dejarlas explicadas en un comentario."
   },
   {
     clave: "conciliacion",
     titulo: "Conciliación",
     ruta: "/conciliacion",
     estado: "activo",
-    que: "La hoja que hoy se arma a mano cada semana —qué se vendió, a qué tarifa, cuánta comisión— ya sale sola, lista para comparar contra lo que de verdad se le pagó a cada comisionista.",
-    falta: "Compara el total de la semana contra el pago, no factura por factura. La fecha que junta ambos lados es la de la venta, no la del cobro — parece razonable, pero falta que el cliente lo confirme. Y hay un puñado de comisionistas (~$5.1 M) con comisión calculada pero sin ningún pago encontrado: vale la pena revisarlos antes de dar ese número por bueno."
+    que: "La vista por semana: la comisión calculada por producto contra lo pagado, con la fecha de cobro como la que junta los dos lados. Sirve para consultar y exportar; para conciliar, Conciliación por cortes.",
+    falta: "Compara semanas fijas: no mueve fechas ni guarda lo que se revisa."
   }
 ];
 
@@ -66,11 +74,11 @@ export function ManualIntro() {
             },
             {
               titulo: "Calcula la comisión",
-              texto: "Un importe fijo por caja o por kilo, según el producto, el CEDIS y quién vende. Ya cubre cerca del 92% de lo facturado."
+              texto: "Un importe fijo por kilo o por caja, con la tarifa oficial de SAP para el producto, la oficina y el tipo de venta."
             },
             {
-              titulo: "Guarda el respaldo",
-              texto: "La comisión calculada de cada comisionista, comparada contra lo que de verdad se le pagó, exportable a Excel con el detalle de cada factura."
+              titulo: "Concilia cada pago",
+              texto: "Lo que de verdad se le pagó a cada comisionista contra los cobros que lo justifican, con historial de quién ajustó qué y Excel con el detalle de cada factura."
             }
           ].map((tarjeta, i) => (
             <Revelar className="manual-tarjeta" key={tarjeta.titulo} orden={i}>
@@ -84,7 +92,8 @@ export function ManualIntro() {
           Los datos no se teclean en ningún sitio: se leen de SAP a través de BigQuery (proyecto{" "}
           <code>proan-quantrue</code>), que es del grupo entero — Proan, Superdoña, Malta y el resto.
           Por eso todo lo que se enseña aquí pasa antes por un filtro maestro,{" "}
-          <code>company_code = &apos;DBC&apos;</code>, y arranca en enero de 2026.
+          <code>company_code = &apos;DBC&apos;</code>, y arranca en enero de 2026. Se actualizan solos
+          una vez al día.
         </p>
       </section>
 
@@ -145,11 +154,11 @@ export function ManualIntro() {
 export function ManualModulos() {
   return (
     <section className="manual-seccion" id="modulos">
-        <h2>Los tres módulos</h2>
+        <h2>Los cuatro módulos</h2>
         <p>
-          Los tres corren sobre datos reales de BigQuery. Cada uno tiene huecos conocidos —
-          documentados abajo y, para Comisiones y Conciliación, también en el panel{" "}
-          <b>ⓘ</b> de su propia pantalla.
+          Los cuatro corren sobre datos reales de BigQuery. Cada uno tiene huecos conocidos,
+          documentados abajo. Conciliación por cortes tiene además sus dos apartados propios en este
+          manual.
         </p>
 
         <div className="manual-modulos">
@@ -180,7 +189,9 @@ export function ManualModulos() {
           dirección de la página —se puede guardar el enlace o mandarlo—. <b>Comisiones</b> filtra
           igual, pulsando CEDIS o mes en sus gráficas, pero ese filtro no se guarda todavía en el
           enlace. <b>Conciliación</b> no tiene gráficas que pulsar: se filtra con los desplegables del
-          panel, y un clic en una fila abre el detalle de ese comisionista.
+          panel, y un clic en una fila abre el detalle de ese comisionista. <b>Conciliación por
+          cortes</b> elige el mes y filtra arriba, y cada pago se trabaja en el panel que abre al
+          pulsarlo.
         </p>
     </section>
   );
@@ -203,10 +214,9 @@ export function ManualGlosario() {
       termino: "Comisionista",
       definicion: (
         <>
-          Quien vende el producto y cobra comisión por ello. Antes era difícil saber quién, en
-          algunas oficinas: se deducía por texto de una tabla que no estaba pensada para eso. Ahora
-          hay una tabla propia que identifica a cada comisionista de forma directa; queda un resto de
-          oficinas sin resolver, repartido entre todas las divisiones.
+          Quien vende el producto y cobra comisión por ello. Se identifica por su número de
+          proveedor en SAP (<code>LIFNR</code>), el mismo con el que se le paga, y quién comisiona
+          en cada lugar sale de una tabla por sociedad, división y oficina.
         </>
       )
     },
@@ -215,8 +225,9 @@ export function ManualGlosario() {
       definicion: (
         <>
           La empresa del grupo que factura la venta. Huevo se factura por las dos, y la comisión de
-          PAN es la mayor parte del total — por eso Comisiones y Conciliación la llevan siempre como
-          filtro o columna aparte, para no mezclar los dos negocios en un solo número.
+          PAN es la mayor parte del total — por eso las pantallas de comisión y de conciliación la
+          llevan siempre como filtro o columna aparte, para no mezclar los dos negocios en un solo
+          número.
         </>
       )
     },
@@ -273,13 +284,48 @@ export function ManualGlosario() {
       )
     },
     {
+      termino: "Pago de comisión",
+      definicion: (
+        <>
+          Un documento de pago al comisionista en SAP. Es la unidad de trabajo de Conciliación por
+          cortes, y se identifica por su número de documento, no por su texto.
+        </>
+      )
+    },
+    {
+      termino: "Ventana y corte",
+      definicion: (
+        <>
+          La ventana son los días de cobro que cubre un pago; el corte, el borde que comparten dos
+          pagos seguidos. Mover un corte pasa los cobros de un día de un pago a su vecino.
+        </>
+      )
+    },
+    {
+      termino: "Consolidar",
+      definicion: (
+        <>
+          Dar un pago por revisado. Sus dos cortes quedan congelados hasta que alguien lo reabra, y
+          si los datos cambian después, la pantalla lo marca con «⚠ Cambió».
+        </>
+      )
+    },
+    {
+      termino: "Cierre de mes",
+      definicion: (
+        <>
+          Lo cobrado el último día del mes con cobros. No entra en el pago de su semana: se paga en
+          un pago posterior, y hasta que se asigna queda como «Cierre de mes, sin asignar».
+        </>
+      )
+    },
+    {
       termino: "Tabla gold",
       definicion: (
         <>
-          La tabla ya agregada por día (o por periodo de pago) que lee cada pantalla —
-          <code>DBC_gold_flujo_producto_diario</code> en Flujo de producto, y su propia tabla gold en
-          Comisiones y Conciliación. Se construyen a partir de la vista que junta las fuentes de SAP,
-          y por eso la pantalla responde rápido sin volver a recorrer millones de líneas en cada clic.
+          La tabla ya agregada por día (o por pago) que lee cada pantalla. Se rehacen solas una vez
+          al día a partir de SAP, y por eso la pantalla responde rápido sin volver a recorrer
+          millones de líneas en cada clic.
         </>
       )
     }
@@ -288,7 +334,7 @@ export function ManualGlosario() {
   return (
     <section className="manual-seccion" id="glosario">
       <h2>Glosario</h2>
-      <p>Las diez palabras que hacen falta para entender el resto.</p>
+      <p>Las palabras que hacen falta para entender el resto.</p>
       <div className="manual-glosario">
         {TERMINOS.map((entrada) => (
           <details key={entrada.termino}>

@@ -3,7 +3,7 @@
 // No es un "acerca de": está escrito para que alguien que abre esto por primera
 // vez entienda qué está viendo y, sobre todo, no saque conclusiones falsas.
 // Dos apartados: `lectura` (qué entra, las tres líneas, cómo se lee) y
-// `trampas` (las tres cosas que no se adivinan mirándola: vendido va atrás,
+// `trampas` (las tres cosas que no se adivinan mirándola: cada fase llega hasta su fecha,
 // dos tercios del importe no tenían CEDIS asignado y hoy es residual, y las
 // cantidades no se suman entre unidades). Cada trampa lleva su porqué y un
 // juguete al lado que hace la cosa MAL a propósito para que se vea el tamaño
@@ -41,6 +41,7 @@ const FASES: { clave: string; titulo: string; texto: string }[] = [
 export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
   const hastaVendido = cobertura.vendido?.hasta;
   const hastaFacturado = cobertura.facturado?.hasta;
+  const hastaCobrado = cobertura.cobrado?.hasta;
 
   return (
     <>
@@ -96,30 +97,19 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
       <section className="manual-seccion" id="trampas">
         <h2>Tres trampas de la pantalla</h2>
 
-        <h3>Vendido va atrás</h3>
+        <h3>Cada fase llega hasta su propia fecha</h3>
         <div className="manual-doble">
           <div>
             <p>
-              La tabla de pedidos de SAP dejó de recibir datos nuevos
-              {hastaVendido ? (
-                <>
-                  {" "}
-                  el <b>{hastaVendido}</b>
-                </>
-              ) : null}
-              , mientras que facturado sigue llegando
-              {hastaFacturado ? (
-                <>
-                  {" "}
-                  hasta el <b>{hastaFacturado}</b>
-                </>
-              ) : null}
-              . No es un fallo de esta herramienta: es la ingesta de SAP, compartida con el resto del
-              grupo.
+              Las tres fases salen de tablas distintas de SAP y no se cargan al mismo ritmo. Hoy hay
+              vendido hasta el <b>{hastaVendido ?? "—"}</b>, facturado hasta el{" "}
+              <b>{hastaFacturado ?? "—"}</b> y cobrado hasta el <b>{hastaCobrado ?? "—"}</b>. Si una
+              se atrasa no es un fallo de esta herramienta: es la carga de SAP, compartida con el
+              resto del grupo.
             </p>
             <p className="manual-nota">
-              Mientras dure, no compares vendido con facturado en las fechas recientes: parecerá un
-              desplome de ventas y solo es una laguna de datos. Y{" "}
+              En los días más recientes, compara solo las fases que ya tienen dato: si no, parecerá
+              un desplome y solo es una laguna. Y{" "}
               <b>si falta la barra de una fase, es que no hay dato de ese día, no que fuera cero</b> —
               por eso no se dibuja nada en vez de una barra a ras del suelo, que diría que ese día no
               hubo movimiento y sería mentira.
@@ -162,8 +152,8 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
             </p>
             <p>
               La única cantidad comparable es la de <b>cajas</b>, y ya existe en las tres etapas. Es
-              también la unidad en la que se paga la comisión —la misma que usan Comisiones y
-              Conciliación para calcular la tarifa—, así que no es un detalle menor.
+              también la unidad en la que se paga la comisión —la misma que usan las pantallas de
+              comisión y de conciliación para calcular la tarifa—, así que no es un detalle menor.
             </p>
             <p className="manual-nota">
               Con precisión: es la cantidad en la <b>unidad de manejo</b> de cada producto, que suele
@@ -189,15 +179,13 @@ export function FlujoManual({ cobertura }: { cobertura: FlujoCobertura }) {
             sistema.
           </li>
           <li>
-            <b>Comisiones</b> — en una parte de las oficinas no se sabe todavía a quién pagarle. Y del
-            total calculado, solo una parte tiene ya un pago real con el que compararse: el resto es
-            cartera que aún no se cobra, no un error.
+            <b>Comisiones</b> — algunos acuerdos especiales con comisionistas siguen en revisión con el
+            cliente. Mientras tanto, esos pagos no cuadran contra lo calculado y se explican a mano.
           </li>
           <li>
-            <b>Conciliación</b> — compara el total de la semana, no factura por factura. Usa la fecha
-            de venta para emparejar el pago, pendiente de confirmar con el cliente. Y unos pocos
-            comisionistas salen con comisión calculada pero sin ningún pago encontrado — a revisar
-            caso por caso.
+            <b>Conciliación por cortes</b> — falta confirmar con el cliente quién puede reabrir un pago
+            consolidado y cómo se decide a qué pago va el cierre de cada mes. Hoy ese cierre se asigna
+            a mano, pago por pago.
           </li>
         </ul>
       </section>

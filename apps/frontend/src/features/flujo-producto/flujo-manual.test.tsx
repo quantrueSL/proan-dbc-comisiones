@@ -42,6 +42,7 @@ describe("fechas de corte", () => {
     // ingesta de SAP y vendido vuelva a estar al día.
     expect(manual()).toMatch(/2026-07-20/);
     expect(manual()).toMatch(/2026-08-13/);
+    expect(manual()).toMatch(/2026-08-12/);
 
     const otra = manual({
       vendido: { desde: "2026-01-01", hasta: "2026-09-30" },
@@ -58,12 +59,12 @@ describe("fechas de corte", () => {
 });
 
 describe("pendientes", () => {
-  it("deja documentado, en términos de negocio, lo que falta en los 3 módulos", () => {
+  it("deja documentado, en términos de negocio, lo que falta en los módulos", () => {
     const texto = manual();
     for (const pendiente of [
       /entrada de mercancía al CEDIS/,
-      /no se sabe todavía a quién pagarle/,
-      /fecha de venta para emparejar el pago/
+      /acuerdos especiales con comisionistas/,
+      /quién puede reabrir un pago consolidado/
     ]) {
       expect(texto).toMatch(pendiente);
     }
