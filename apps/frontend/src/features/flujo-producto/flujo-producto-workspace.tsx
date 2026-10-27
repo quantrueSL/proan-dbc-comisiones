@@ -1,7 +1,7 @@
 "use client";
 
 // Módulo 0 · Flujo de producto — vendido, facturado y cobrado por CEDIS.
-// Datos de ZZ_PRUEBAS.DBC_gold_flujo_producto_diario (ver flujo_engine.py).
+// Datos de D60_REPORTING.DBC_gold_flujo_producto_diario (ver flujo_engine.py).
 //
 // La pantalla es de gráficas, no de tablas: las tablas están detrás de botones
 // porque casi nadie las mira y apiladas tapaban lo que sí se mira. Pulsar una

@@ -24,7 +24,7 @@ export type ComisionesCatalog = {
 export const EMPTY_CATALOG: ComisionesCatalog = { divisiones: [], cedis: [] };
 
 // ─── Flujo de producto (M0) — vendido, facturado y cobrado ────────────────
-// Sale de ZZ_PRUEBAS.DBC_gold_flujo_producto_diario (ver flujo_engine.py).
+// Sale de D60_REPORTING.DBC_gold_flujo_producto_diario (ver flujo_engine.py).
 // Falta la cuarta capa, traspasos: depende de validar sap_mseg contra MB51.
 
 export type FlujoFilters = {

@@ -102,7 +102,7 @@ resultados que la medición.
 - **Roles:** para editar hace falta `admin` en `lists/dbc_comisiones_acceso`; el valor `generico` de Mailing-lists cuenta como viewer (LOGIN.md §3).
 
 **Falta (plan al 20 de octubre, en orden propuesto)**
-1. Cerrar lo ya hecho: commit de semanas con corte de fin de mes, orden fijo de divisiones y `desde`/`hasta`; reintentar el despliegue dev y que el senior lo revise (pendiente su explicación de las flechas).
+1. HECHO (20 oct): commits al día y despliegue a producción (`plataforma-comisiones-dbc`, `bash deploy/cloudrun/deploy.sh`). Falta que el senior revise en dev y explique lo de las flechas.
 2. HECHO (sin commit) — Cierre de mes a mano, sin sugerencia (bloque "Cierre de mes" del panel, endpoint `asignar-dias`): poder elegir los días de cierre (el bloque libre) y asignarlos a cualquier pago, con el mismo `dias_asignados` y "Volver a la ventana estándar" para deshacer. Hoy solo se asigna aplicando la sugerencia exacta; los casos sin exacto (el 47%) no tienen cómo.
 3. HECHO (sin commit) — Fase 6: botón "Descargar Excel" en el panel de cada pago (junto a las pestañas), un libro por pago con el nivel de la pestaña vieja: hojas Pago, Conciliación (por producto), Detalle diario y Detalle de factura, con columna "Pago asignado" y motivo (ventana / cierre asignado). Endpoint `exportar` (Abarrotes dentro de Huevo en DBC). No hay Excel general de la lista: se quitó por ruido.
 4. Comodidad de trabajo: botón que aplique en bloque las sugerencias de borde y de cierre de un mes (con vista previa); flechas para bordes sueltos; textos de sugerencias más cortos; aviso de solo lectura más claro ("tu rol es viewer…"); carga en frío ~20 s.

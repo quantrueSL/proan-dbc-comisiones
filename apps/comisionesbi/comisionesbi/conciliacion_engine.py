@@ -14,8 +14,8 @@ sociedad en la llave). SIGUE SIN SER LA FUENTE ESTRUCTURADA que se buscó en su
 momento (`Datos/Comisiones_DBC_Borrador_Tecnico.md`, sección 16.3) -- es texto
 libre, con sus límites (ver el archivo SQL).
 
-Lee `ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario` (grano día) con JOIN a
-`DBC_dim_periodo_pago` (fecha -> periodo de pago, `Datos/sql/v1_dim_periodo_pago.sql`
+Lee `D60_REPORTING.DBC_gold_conciliacion_producto_diario` (grano día) con JOIN a
+`dm_DBC_periodo_pago` (fecha -> periodo de pago, `Datos/sql/v1_dim_periodo_pago.sql`
 -- ahí está el porqué de cada corte de mes) y agrupa por periodo × sociedad ×
 comisionista × CEDIS × oficina × tipo de venta × producto — el mismo grano
 que ella escribe en su hoja. La diferencia con antes (2026-09-09, pedido de
@@ -70,10 +70,10 @@ from datetime import date
 
 from comisionesbi.db import run_query
 
-_TABLA_DIARIA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario`"
-_TABLA_FACTURA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`"
-_TABLA_PAGO = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_pago_semanal`"
-_TABLA_DIM_PERIODO = "`proan-quantrue.ZZ_PRUEBAS.DBC_dim_periodo_pago`"
+_TABLA_DIARIA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_producto_diario`"
+_TABLA_FACTURA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`"
+_TABLA_PAGO = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_semanal`"
+_TABLA_DIM_PERIODO = "`proan-quantrue.D60_REPORTING.dm_DBC_periodo_pago`"
 
 # Grano día (filtro `fecha BETWEEN`, no `semana BETWEEN`) agrupado por periodo
 # de pago solo para mostrarse -- 2026-09-09, pedido de Silvana: antes leía la

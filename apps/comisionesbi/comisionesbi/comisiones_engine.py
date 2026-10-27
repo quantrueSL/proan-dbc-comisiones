@@ -1,6 +1,6 @@
 """Módulo 1 · Comisión — cuánto se ha devengado, y qué falta para el resto.
 
-Lee `ZZ_PRUEBAS.DBC_gold_comision_diaria_v2` (`Datos/sql/v1_comision_dbc_gold_v2.sql`),
+Lee `D60_REPORTING.DBC_gold_comision_diaria_v2` (`Datos/sql/v1_comision_dbc_gold_v2.sql`),
 agregado sobre `dbc_comisiones_calculadas_cobro`
 (`Datos/sql/v1_comision_dbc_completo_cobro.sql`) — reemplaza a partir del
 2026-09-01 la cadena anterior (`v1_comision_linea` → `DBC_gold_comision_diaria`,
@@ -74,7 +74,7 @@ from comisionesbi.db import BigQueryError, run_query
 
 log = logging.getLogger(__name__)
 
-_TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_comision_diaria_v2`"
+_TABLA = "`proan-quantrue.D60_REPORTING.DBC_gold_comision_diaria_v2`"
 
 # Mismo patrón que flujo_engine: `(@x IS NULL OR columna = @x)` para que un solo
 # SQL sirva a todas las combinaciones de filtro sin construir la cadena a trozos.

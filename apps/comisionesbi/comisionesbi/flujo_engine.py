@@ -1,6 +1,6 @@
 """Módulo 0 · Flujo de producto — vendido, facturado y cobrado.
 
-Lee `ZZ_PRUEBAS.DBC_gold_flujo_producto_diario`, la tabla agregada por día que
+Lee `D60_REPORTING.DBC_gold_flujo_producto_diario`, la tabla agregada por día que
 construye `data/consultas/DBC_gold_flujo_producto_diario.sql`. No se consulta la
 vista `v1_flujo_producto_dbc_resumen_diario` de Silvana directamente porque cada
 consulta a esa vista escanea 8,98 GiB (rehace el UNION ALL de las tres capas
@@ -59,7 +59,7 @@ from comisionesbi.db import BigQueryError, run_query
 
 log = logging.getLogger(__name__)
 
-_TABLA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_flujo_producto_diario`"
+_TABLA = "`proan-quantrue.D60_REPORTING.DBC_gold_flujo_producto_diario`"
 
 # Unidad de manejo real por división (confirmado 2026-09-07, ver docstring del
 # módulo). Solo cubre las 5 divisiones que opera DBC a propósito -- una

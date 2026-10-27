@@ -51,8 +51,8 @@ from comisionesbi.conciliacion_cortes_estado import (
 from comisionesbi.conciliacion_engine import cobertura
 from comisionesbi.db import run_query
 
-_TABLA_PAGO_DOC = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_pago_documento`"
-_TABLA_DIARIA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_producto_diario`"
+_TABLA_PAGO_DOC = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_documento`"
+_TABLA_DIARIA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_producto_diario`"
 _TABLA_VENDORS = "`proan-quantrue.D20_DIMENSION.dm_vendors`"
 
 # Divisiones que se pagan en el mismo documento que otra: el pago de Huevo de DBC cubre también Abarrotes
@@ -125,7 +125,7 @@ GROUP BY division_code, cedis, oficina, tipo_venta, matnr, descripcion, unidad_v
 
 
 # Detalle de un pago para el Excel: mismas columnas que la pestaña vigente, con Abarrotes de DBC dentro de Huevo.
-_TABLA_FACTURA = "`proan-quantrue.ZZ_PRUEBAS.DBC_gold_conciliacion_factura_linea`"
+_TABLA_FACTURA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_factura_linea`"
 
 _DIARIO_PAGO_SQL = f"""
 SELECT fecha, sociedad, division_code, division, cedis, oficina, comisionista_id, comisionista, tipo_venta,
