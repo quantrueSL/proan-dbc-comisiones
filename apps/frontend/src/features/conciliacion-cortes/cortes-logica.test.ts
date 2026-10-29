@@ -9,6 +9,7 @@ import {
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
+  totalesCubiertos,
   limitesDeFin,
   esPendiente,
   fechaConDia,
@@ -563,5 +564,24 @@ describe("fin de mes entre dos pagos", () => {
     expect(elementosDeLinea(f, [a, b]).map((e) => e.tipo)).toEqual(["pago", "salto", "pago"]);
     // no hacia atrás de su inicio ni sobre el día que el siguiente ya tiene asignado
     expect(limitesDeFin(f, "a", "b")).toEqual({ min: "2026-02-21", max: "2026-02-27" });
+  });
+});
+
+describe("columnas cubiertas por un pago que termina en otra", () => {
+  it("el pago 22 a 30 ago cubre la semana 22-28 y la cola 29-31: la primera queda 'incluida en' la segunda", () => {
+    const semanas = [
+      { ini: "2026-08-15", fin: "2026-08-21" },
+      { ini: "2026-08-22", fin: "2026-08-28" },
+      { ini: "2026-08-29", fin: "2026-08-31" },
+      { ini: "2026-09-01", fin: "2026-09-04" }
+    ];
+    const f = fila("1", [
+      pago("a", "2026-08-15", "2026-08-21"),
+      pago("b", "2026-08-22", "2026-08-30"),
+      pago("c", "2026-09-01", "2026-09-04")
+    ]);
+    const t = totalesCubiertos([f], semanas);
+    expect(t.map((c) => c.n)).toEqual([0, 1, 0, 0]);
+    expect(t[1].hasta).toBe(2);
   });
 });

@@ -12281,3 +12281,9 @@ body.proan-report-assistant-open .proan-content-scroll {
 .cortes-anio .pos { color: #1d7a4a; } .cortes-anio .neg { color: #b42318; }
 .cortes-anio-nota { margin: 0 12px 8px; font-size: 11.5px; color: #777068; }
 .cortes-corte.is-salto { border-style: dashed; }
+.cortes-asignar { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; font-weight: 600; }
+.cortes-asignar .is-cierre { color: #b45309; }
+.cortes-asignar .is-skus { color: #0e7490; }
+.cortes-celda-asignar { display: flex; flex-direction: column; justify-content: center; padding: 4px 8px; border-bottom: 1px solid #e2ddd5; }
+.cortes-cab-tot.is-cubierto, .cortes-total-col.is-cubierto { opacity: .6; font-style: italic; }
+.cortes-cab-aclara { font-size: 9px; font-weight: 400; color: #777068; text-transform: none; letter-spacing: 0; line-height: 1.1; }

@@ -5,7 +5,7 @@
 // por división (una celda por pago, un solo estado); y, al elegir un pago, su
 // panel a la derecha, fijo mientras se recorre la lista.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ComisionesCatalog, CortesAnioResponse, CortesEstado, CortesFila, CortesMesResponse, CortesPago, DivisionRow } from "@/types/comisiones";
 import { CortesPanel } from "./cortes-panel";
 import {
@@ -13,6 +13,7 @@ import {
   ETIQUETA_TOTAL,
   agruparPorComisionista,
   cierresSinAsignar,
+  totalesCubiertos,
   skusSinPagar,
   colaDePagos,
   esPendiente,
@@ -58,11 +59,12 @@ type Props = {
 
 type Seleccion = { filaId: string; pagoId: string };
 
+const VIGENCIA_PRECARGA_MS = 90_000;
 const ETIQUETA_KPI: Record<string, string> = { ok: "cuadran", sug: "sugeridos", sin: "sin explicación" };
 const ETIQUETA_DIVISION: Record<string, string> = { BO: "Botana", H: "Huevo", IA: "Croqueta", L: "Leche" };
 
 /** Año del mes elegido: pagado, calculado y diferencia por división. Se pide al montarse y se pliega con un clic. */
-function ResumenAnio({ anio }: { anio: number }) {
+function ResumenAnio({ anio, division, comisionistaId }: { anio: number; division: string; comisionistaId: string }) {
   const [datos, setDatos] = useState<CortesAnioResponse | null>(null);
   const [fallo, setFallo] = useState(false);
   useEffect(() => {
@@ -72,7 +74,7 @@ function ResumenAnio({ anio }: { anio: number }) {
     fetch("/api/comisionesbi/cortes/editar/anio", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ anio })
+      body: JSON.stringify({ anio, division: division || null, comisionista_id: comisionistaId || null })
     })
       .then((r) => (r.ok ? (r.json() as Promise<CortesAnioResponse>) : Promise.reject(new Error("anio"))))
       .then((d) => vigente && setDatos(d))
@@ -80,7 +82,7 @@ function ResumenAnio({ anio }: { anio: number }) {
     return () => {
       vigente = false;
     };
-  }, [anio]);
+  }, [anio, division, comisionistaId]);
 
   if (fallo) return <p className="cortes-anio-nota">No se pudo cargar el total del año {anio}.</p>;
   const filas = datos?.filas ?? [];
@@ -88,9 +90,12 @@ function ResumenAnio({ anio }: { anio: number }) {
   const calculado = filas.reduce((t, f) => t + f.calculado, 0);
   const dif = calculado - pagado;
   return (
-    <details className="cortes-anio" open>
+    <details className="cortes-anio">
       <summary>
-        <b>Año {anio}</b>
+        <b>
+          Año {anio}
+          {division || comisionistaId ? " · con los filtros" : ""}
+        </b>
         {datos ? (
           <>
             <span>
@@ -145,7 +150,7 @@ function ResumenAnio({ anio }: { anio: number }) {
           <p className="cortes-anio-nota">
             Diferencia = calculado − pagado, por división en neto: lo de más y lo de menos se compensan.
             {datos.skus_apartados > 0
-              ? ` El calculado de Botana no incluye ${pesos(datos.skus_apartados)} de los 4 SKUs de enero a agosto, que no se pagaron en su semana.`
+              ? ` El calculado de Botana no incluye ${pesos(datos.skus_apartados)} de los 4 SKUs de enero a agosto, que no se pagaron en su semana. Con ellos, la diferencia sería ${textoDiferencia(dif + datos.skus_apartados)}.`
               : ""}
           </p>
         </>
@@ -226,7 +231,37 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   // Sube al recargar el mes después de un lote: el panel abierto vuelve a pedir su fila.
   const [refrescos, setRefrescos] = useState(0);
 
+  const primeraSemana = vistaDeMes(meses[meses.length - 1] ?? mesInicial).ini;
   const cuerpoDe = (v: VistaSemanas) => ({ desde: v.ini, hasta: finDeVista(v) });
+
+  // Las semanas de al lado se piden mientras se mira la pantalla: al pasar a una, ya está lista. Cualquier edición las descarta.
+  const precarga = useRef(new Map<string, { en: number; promesa: Promise<CortesMesResponse> }>());
+  function pedirVista(v: VistaSemanas): Promise<CortesMesResponse> {
+    const cuerpo = cuerpoDe(v);
+    const llave = `${cuerpo.desde}|${cuerpo.hasta}`;
+    const guardada = precarga.current.get(llave);
+    if (guardada && Date.now() - guardada.en < VIGENCIA_PRECARGA_MS) return guardada.promesa;
+    const promesa = fetch("/api/comisionesbi/cortes/mes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cuerpo)
+    }).then(async (res) => {
+      const payload = (await res.json().catch(() => null)) as (CortesMesResponse & { detail?: string }) | null;
+      if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo cargar la conciliación.");
+      return payload;
+    });
+    precarga.current.set(llave, { en: Date.now(), promesa });
+    promesa.catch(() => precarga.current.delete(llave));
+    return promesa;
+  }
+  // De las más cercanas a las más lejanas (2 de cada lado), una tras otra, para que las de al lado estén listas primero.
+  async function precargarVecinas(v: VistaSemanas) {
+    for (const delta of [1, -1, 2, -2]) {
+      const vecina = desplazarVista(v, delta);
+      if (delta > 0 ? vecina.ini > hoy : vecina.ini < primeraSemana) continue;
+      await pedirVista(vecina).catch(() => undefined);
+    }
+  }
 
   // `conservar`: al ir a un pago que está en otras semanas, ese pago queda elegido.
   async function cargarVista(nueva: VistaSemanas, conservar: Seleccion | null = null) {
@@ -236,14 +271,8 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
     setSeleccion(conservar);
     setAviso(null);
     try {
-      const res = await fetch("/api/comisionesbi/cortes/mes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cuerpoDe(nueva))
-      });
-      const payload = (await res.json().catch(() => null)) as (CortesMesResponse & { detail?: string }) | null;
-      if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo cargar la conciliación.");
-      setRespuesta(payload);
+      setRespuesta(await pedirVista(nueva));
+      void precargarVecinas(nueva);
     } catch (causa) {
       setError(causa instanceof Error ? causa.message : "No se pudo cargar la conciliación.");
     } finally {
@@ -252,7 +281,12 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   }
 
   const cargarMes = (nuevo: string) => cargarVista(vistaDeMes(nuevo, hoy));
-  const primeraSemana = vistaDeMes(meses[meses.length - 1] ?? mesInicial).ini;
+
+  // Al abrir la pantalla también se van pidiendo las semanas de al lado.
+  useEffect(() => {
+    if (!initialError) void precargarVecinas(vista);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const puedeIrAtras = vista.ini > primeraSemana;
   const puedeIrAdelante = desplazarVista(vista, 1).ini <= hoy;
   const mover = (semanas: number) => void cargarVista(desplazarVista(vista, semanas));
@@ -275,6 +309,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
         body: JSON.stringify(cuerpoDe(vista))
       });
       const nueva = (await lista.json().catch(() => null)) as CortesMesResponse | null;
+      precarga.current.clear();
       if (lista.ok && nueva) setRespuesta(nueva);
       setRefrescos((n) => n + 1);
       const omitidas = payload.omitidas ? ` ${payload.omitidas} fila(s) se saltaron porque alguien más las estaba editando.` : "";
@@ -346,9 +381,45 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   }, [filas, division, comisionistaId]);
 
   const hayPagosSinVentana = visibles.some((f) => f.pagos.some((p) => p.estado === "sinv"));
-  const columnas = semanas.length + (hayPagosSinVentana ? 1 : 0);
+  // Lo que todavía no está asignado a ningún pago: el cierre de fin de mes y los 4 SKUs, de las semanas que se ven.
+  const sinAsignarDe = (f: CortesFila) => ({
+    cierre: cierresSinAsignar(f)
+      .filter((h) => h.ini <= hasta && h.fin >= desde)
+      .reduce((t, h) => t + h.comision, 0),
+    skus: skusSinPagar(f, desde, hasta).comision
+  });
+  const sumaSinAsignar = (lista: CortesFila[]) =>
+    lista.reduce(
+      (t, f) => {
+        const a = sinAsignarDe(f);
+        return { cierre: t.cierre + a.cierre, skus: t.skus + a.skus };
+      },
+      { cierre: 0, skus: 0 }
+    );
+  const totalSinAsignar = sumaSinAsignar(visibles);
+  const haySinAsignar = totalSinAsignar.cierre > 0 || totalSinAsignar.skus > 0;
+  const columnasSemanas = semanas.length + (hayPagosSinVentana ? 1 : 0);
+  const columnas = columnasSemanas + (haySinAsignar ? 1 : 0);
+  const celdaSinAsignar = (a: { cierre: number; skus: number }) =>
+    a.cierre > 0 || a.skus > 0 ? (
+      <>
+        {a.cierre > 0 ? (
+          <span className="is-cierre" title="El cierre de fin de mes que aún no está asignado a ningún pago">
+            Cierre {pesos(a.cierre)}
+          </span>
+        ) : null}
+        {a.skus > 0 ? (
+          <span className="is-skus" title="Comisión de los 4 SKUs de Botana que aún no está incluida en ningún pago">
+            4 SKUs {pesos(a.skus)}
+          </span>
+        ) : null}
+      </>
+    ) : (
+      "—"
+    );
   // Total de cada semana de todos los comisionistas a la vista, para el encabezado.
   const totalesSemana = useMemo(() => totalesPorColumna(visibles, semanas), [visibles, semanas]);
+  const cubiertasTodas = useMemo(() => totalesCubiertos(visibles, semanas), [visibles, semanas]);
   const plantilla = { gridTemplateColumns: `minmax(210px, 270px) repeat(${columnas}, minmax(116px, 1fr))` };
 
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
@@ -410,6 +481,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   });
 
   function filaActualizada(nueva: CortesFila) {
+    precarga.current.clear();
     setRespuesta((actual) => (actual ? conFilaNueva(actual, nueva) : actual));
   }
 
@@ -576,7 +648,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
               </span>
             ) : null}
           </div>
-          <ResumenAnio anio={Number(mes.slice(0, 4))} />
+          <ResumenAnio anio={Number(mes.slice(0, 4))} comisionistaId={comisionistaId} division={division} />
         </div>
       </section>
 
@@ -623,6 +695,16 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                     return (
                       <span className={`cortes-cab-col${fueraDelMes(s.ini, s.fin) ? " is-fuera" : " is-mes"}`} key={s.ini}>
                         {rangoCorto(s.ini, s.fin)}
+                        {!t.n && cubiertasTodas[i].n ? (
+                          <span
+                            className="cortes-cab-tot is-cubierto"
+                            title={`Su pago cubre esta semana y se cuenta en ${rangoCorto(semanas[cubiertasTodas[i].hasta].ini, semanas[cubiertasTodas[i].hasta].fin)}`}
+                          >
+                            <span>Pag. {pesos(cubiertasTodas[i].pagado)}</span>
+                            <span>Calc. {pesos(cubiertasTodas[i].calculado)}</span>
+                            <span>Dif. {textoDiferencia(cubiertasTodas[i].calculado - cubiertasTodas[i].pagado)}</span>
+                          </span>
+                        ) : null}
                         {t.n ? (
                           <span className="cortes-cab-tot">
                             <span>Pag. {pesos(t.pagado)}</span>
@@ -641,6 +723,13 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                       </span>
                     </span>
                   ) : null}
+                  {haySinAsignar ? (
+                    <span className="cortes-cab-col">
+                      Sin asignar
+                      <small className="cortes-cab-aclara">semanas en pantalla</small>
+                      <span className="cortes-cab-tot cortes-asignar">{celdaSinAsignar(totalSinAsignar)}</span>
+                    </span>
+                  ) : null}
                 </div>
 
                 {grupos.map((grupo) => {
@@ -648,6 +737,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                   const abierto = abiertos.has(grupo.clave) || grupos.length === 1;
                   const porRevisar = grupo.filas.reduce((n, f) => n + f.pagos.filter((p) => p.estado !== "ok" && p.estado !== "cons").length, 0);
                   const totalesCol = totalesPorColumna(grupo.filas, semanas);
+                  const cubiertasGrupo = totalesCubiertos(grupo.filas, semanas);
                   const contiene = seleccion ? grupo.filas.some((f) => f.fila_id === seleccion.filaId) : false;
                   const nDivisiones = grupo.filas.length;
                   return (
@@ -664,7 +754,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                             {nDivisiones} {nDivisiones === 1 ? "división" : "divisiones"} · {porRevisar ? `${porRevisar} pago(s) por revisar` : "todo cuadra"}
                           </span>
                         </div>
-                        {totalesCol.slice(0, columnas).map((c, i) =>
+                        {totalesCol.slice(0, columnasSemanas).map((c, i) =>
                           c.n ? (
                             <div className="cortes-total-col" key={i}>
                               <span>
@@ -677,11 +767,31 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                               ) : null}
                             </div>
                           ) : (
-                            <div className="cortes-total-col is-vacio" key={i}>
-                              —
+                            <div
+                              className={`cortes-total-col${i < semanas.length && cubiertasGrupo[i].n ? " is-cubierto" : " is-vacio"}`}
+                              key={i}
+                              title={
+                                i < semanas.length && cubiertasGrupo[i].n
+                                  ? `Su pago cubre esta semana y se cuenta en ${rangoCorto(semanas[cubiertasGrupo[i].hasta].ini, semanas[cubiertasGrupo[i].hasta].fin)}`
+                                  : undefined
+                              }
+                            >
+                              {i < semanas.length && cubiertasGrupo[i].n ? (
+                                <>
+                                  <span>
+                                    <em>Pag.</em> {pesos(cubiertasGrupo[i].pagado)}
+                                  </span>
+                                  <span>
+                                    <em>Calc.</em> {pesos(cubiertasGrupo[i].calculado)}
+                                  </span>
+                                </>
+                              ) : (
+                                "—"
+                              )}
                             </div>
                           )
                         )}
+                        {haySinAsignar ? <div className="cortes-total-col cortes-asignar">{celdaSinAsignar(sumaSinAsignar(grupo.filas))}</div> : null}
                       </div>
 
                       {abierto
@@ -689,7 +799,6 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                             const posicionados = posicionarPagos(fila.pagos, semanas);
                             const sinVentana = fila.pagos.filter((p) => p.estado === "sinv");
                             const hueco = huecosDelMes(fila, desde, hasta);
-                            const skusPend = skusSinPagar(fila, desde, hasta);
                             const cierresPend = cierresSinAsignar(fila).filter((h) => h.ini <= hasta && h.fin >= desde);
                             const cubiertas = new Set<number>();
                             posicionados.forEach(({ colIni, colFin }) => {
@@ -706,16 +815,6 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                     {filaTodoCuadra(fila) ? " · todo cuadra" : ""}
                                   </span>
                                   {hueco.n ? <em>Comisión calculada sin pago: {pesos(hueco.comision)}</em> : null}
-                                  {skusPend.n ? (
-                                    <em className="cortes-quien-skus">
-                                      ● 4 SKUs sin pagar: {pesos(skusPend.comision)} ({skusPend.n} {skusPend.n === 1 ? "semana" : "semanas"})
-                                    </em>
-                                  ) : null}
-                                  {cierresPend.map((h) => (
-                                    <em className="cortes-quien-cierre" key={h.ini}>
-                                      ● Cierre del {h.ini === h.fin ? fechaCorta(h.ini) : rangoCorto(h.ini, h.fin)} sin asignar: {pesos(h.comision)}
-                                    </em>
-                                  ))}
                                   {fila.huerfanos?.length ? <em>⚠ {fila.huerfanos.length} guardado(s) de un documento que ya no está</em> : null}
                                 </div>
                                 {posicionados.map(({ pago, colIni, colFin }) => {
@@ -772,6 +871,11 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                     </div>
                                   )
                                 )}
+                                {haySinAsignar ? (
+                                  <div className="cortes-celda-asignar cortes-asignar" style={{ gridColumn: columnas + 1 }}>
+                                    {celdaSinAsignar(sinAsignarDe(fila))}
+                                  </div>
+                                ) : null}
                                 {hayPagosSinVentana
                                   ? sinVentana.map((pago) => {
                                       const elegida = seleccion?.pagoId === pago.pago_id && esFilaElegida;

@@ -205,6 +205,25 @@ export function totalesPorColumna(filas: CortesFila[], semanas: SemanaColumna[])
   return columnas;
 }
 
+/**
+ * Lo que enseñan, atenuado, las columnas que cubre un pago que termina en otra: el pagado y calculado de esos pagos.
+ * No se suma a los totales (cada pago cuenta una vez, donde termina); es para que la columna no salga vacía.
+ */
+export function totalesCubiertos(filas: CortesFila[], semanas: SemanaColumna[]): (TotalColumna & { hasta: number })[] {
+  const columnas = Array.from({ length: semanas.length }, () => ({ n: 0, pagado: 0, calculado: 0, hasta: -1 }));
+  for (const fila of filas) {
+    for (const { pago, colIni, colFin } of posicionarPagos(fila.pagos, semanas)) {
+      for (let c = colIni; c < colFin; c++) {
+        columnas[c].n += 1;
+        columnas[c].pagado += pago.pagado;
+        columnas[c].calculado += pago.calculado ?? 0;
+        columnas[c].hasta = colFin;
+      }
+    }
+  }
+  return columnas;
+}
+
 /** Pagos que piden que alguien haga algo: una sugerencia por revisar o un pago sin explicación. */
 export function esPendiente(pago: CortesPago): boolean {
   return pago.estado === "sug" || pago.estado === "sin";

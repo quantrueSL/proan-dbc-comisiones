@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from datetime import date
 
 from typing import Literal
@@ -102,6 +103,21 @@ class ReconciliationQuery(BaseModel):
 
 
 # ─── Errores de la conciliación por cortes ───────────────────────────────
+
+
+@app.on_event("startup")
+def _precalentar_cortes() -> None:
+    """Al arrancar, baja en segundo plano los datos del mes en curso: la primera pantalla no espera a BigQuery."""
+    if os.getenv("COMISIONESBI_PRECALENTAR", "1") != "1":
+        return
+
+    def _trabajo() -> None:
+        try:
+            cortes.precalentar()
+        except Exception:  # el precalentado nunca debe tumbar el servicio
+            logging.getLogger("comisionesbi").exception("No se pudo precalentar la caché de cortes")
+
+    threading.Thread(target=_trabajo, daemon=True).start()
 
 
 @app.exception_handler(ErrorCorte)
@@ -276,6 +292,8 @@ class CortesSkusBody(CortesEdicion):
 
 class CortesAnioBody(BaseModel):
     anio: int = Field(ge=2020, le=2100)
+    division: str | None = None
+    comisionista_id: str | None = None
 
 
 class CortesHistorialBody(BaseModel):
@@ -601,7 +619,7 @@ def post_cortes_lineas(body: CortesLineasBody) -> dict:
 @app.post("/v1/comisionesbi/cortes/anio")
 def post_cortes_anio(body: CortesAnioBody) -> dict:
     """Pagado y calculado del año por división (cualquier rol puede verlo)."""
-    return cortes.build_anio(anio=body.anio)
+    return cortes.build_anio(anio=body.anio, division=body.division or None, comisionista_id=body.comisionista_id or None)
 
 
 @app.post("/v1/comisionesbi/cortes/historial")

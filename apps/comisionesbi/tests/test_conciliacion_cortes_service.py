@@ -1,5 +1,6 @@
 """Conciliación por cortes: capa de datos (BigQuery simulado) y endpoints."""
 
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -85,6 +86,9 @@ def bq(monkeypatch):
     # Sin caché entre pruebas y con el estado guardado en memoria, no en Firestore.
     svc._CACHE.clear()
     svc._ANIO_CACHE.clear()
+    svc._CRUDO_CACHE.clear()
+    svc._SKUS_CACHE.clear()
+    svc._COBERTURA_CACHE.clear()
     monkeypatch.setattr(estado, "_store", estado.MemoriaStore())
     return llamadas
 
@@ -122,8 +126,9 @@ def test_los_pagos_que_no_tocan_el_mes_no_se_devuelven(bq):
 def test_el_rango_cargado_lleva_margen_a_cada_lado(bq):
     svc.build_mes(mes="2026-07")
     nombre, params = bq[0]
-    assert params["ini_ext"][1] == date(2026, 7, 1) - timedelta(days=svc.MARGEN_DIAS)
-    assert params["fin_ext"][1] == date(2026, 7, 31) + timedelta(days=svc.MARGEN_DIAS)
+    # se baja un bloque de meses completos que cubre julio con su margen
+    assert params["ini_ext"][1] <= date(2026, 7, 1) - timedelta(days=svc.MARGEN_DIAS) and params["ini_ext"][1].day == 1
+    assert params["fin_ext"][1] >= date(2026, 7, 31) + timedelta(days=svc.MARGEN_DIAS)
 
 
 def test_el_panel_trae_los_pagos_de_la_fila_y_sus_cobros_diarios(bq):
@@ -627,8 +632,8 @@ def test_la_lista_se_puede_pedir_por_semanas_en_vez_de_por_mes(bq):
     (fila,) = r["filas"]
     assert {p["ini"] for p in fila["pagos"] if p["ini"]} == {"2026-07-04"}
     nombre, params = bq[0]
-    assert params["ini_ext"][1] == date(2026, 7, 4) - timedelta(days=svc.MARGEN_DIAS)
-    assert params["fin_ext"][1] == date(2026, 7, 17) + timedelta(days=svc.MARGEN_DIAS)
+    assert params["ini_ext"][1] <= date(2026, 7, 4) - timedelta(days=svc.MARGEN_DIAS)
+    assert params["fin_ext"][1] >= date(2026, 7, 17) + timedelta(days=svc.MARGEN_DIAS)
 
 
 def test_endpoint_mes_acepta_desde_hasta_y_rechaza_peticiones_sin_periodo(bq):
@@ -796,4 +801,56 @@ def test_soltar_el_ultimo_dia_del_pago_anterior_lo_deja_libre_para_sumarlo_al_si
     v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 29), date(2026, 6, 30)], version=2, usuario="ana")
     assert _fila(v)[PAGO2]["dias_asignados"] == ["2026-06-29", "2026-06-30"] and v["fila"]["huecos"] == []
     assert _fila(v)[PAGO1]["fin"] == "2026-06-28"
+
+
+def test_el_total_del_ano_respeta_los_filtros_de_division_y_comisionista(bq, monkeypatch):
+    original = svc.run_query
+    vistos = []
+
+    def fake(sql, nombre, parametros=None):
+        if "del año" in nombre:
+            vistos.append((parametros["division"][1], parametros["sociedad"][1], parametros["comisionista_id"][1]))
+            assert "@division IS NULL OR" in sql and "@comisionista_id IS NULL OR" in sql
+            return []
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+    svc.build_anio(anio=2026, division="BO", comisionista_id="0000018853")
+    svc.build_anio(anio=2026, division="A")  # Abarrotes se paga dentro de Huevo
+    svc.build_anio(anio=2026)
+    assert sorted(set(vistos), key=str) == sorted({("BO", None, "0000018853"), ("H", "DBC", None), (None, None, None)}, key=str)
+
+
+def test_mover_la_ventana_una_semana_no_vuelve_a_consultar_bigquery(bq):
+    svc.build_mes(desde=date(2026, 7, 4), hasta=date(2026, 7, 17))
+    consultas = len(bq)
+    svc.build_mes(desde=date(2026, 7, 11), hasta=date(2026, 7, 24))
+    # el bloque del año ya estaba en caché
+    assert len(bq) == consultas
+
+
+def test_el_recorte_del_bloque_deja_fuera_los_cobros_y_pagos_de_otro_rango(bq):
+    # el bloque trae todo el mes; la ventana de la semana solo debe ver sus pagos
+    r = svc.build_mes(desde=date(2026, 7, 4), hasta=date(2026, 7, 10))
+    pagos = [p for f in r["filas"] for p in f["pagos"] if p["ini"]]
+    # solo los que tocan la semana pedida, aunque el bloque trajo todo el año
+    assert pagos and all(p["fin"] >= "2026-07-04" and p["ini"] <= "2026-07-10" for p in pagos)
+
+
+def test_una_cache_vencida_entrega_lo_guardado_y_se_renueva_aparte():
+    cache: dict = {}
+    llamadas = []
+
+    def cargar():
+        llamadas.append(1)
+        return f"valor{len(llamadas)}"
+
+    assert svc._cacheado(cache, ("k",), cargar) == "valor1"
+    cache[("k",)] = (0.0, "viejo")  # vencida
+    assert svc._cacheado(cache, ("k",), cargar) == "viejo"  # no espera
+    for _ in range(100):  # la renovación corre en un hilo
+        if cache[("k",)][1] != "viejo":
+            break
+        time.sleep(0.02)
+    assert cache[("k",)][1] == "valor2"
 

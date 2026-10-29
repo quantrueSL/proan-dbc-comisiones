@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import re
+import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -203,7 +205,7 @@ def _iso(valor) -> str | None:
 # ─── Carga ───────────────────────────────────────────────────────────────
 
 
-_CACHE_TTL_POR_DEFECTO = 120
+_CACHE_TTL_POR_DEFECTO = 300
 # (mes, sociedad, división, comisionista, cobertura) -> (vence, datos crudos). Solo lo que viene de BigQuery.
 _CACHE: dict[tuple, tuple[float, tuple]] = {}
 
@@ -230,6 +232,115 @@ def _cache_ttl_seconds() -> int:
         return _CACHE_TTL_POR_DEFECTO
 
 
+# Cada caché guarda (vence, valor). Vencido, se sigue entregando lo guardado y se renueva en segundo plano: nadie espera a BigQuery
+# por haber pasado unos minutos; solo la primera carga de cada bloque.
+_CRUDO_CACHE: dict[tuple, tuple[float, tuple]] = {}
+_SKUS_CACHE: dict[tuple, tuple[float, list]] = {}
+_COBERTURA_CACHE: dict[tuple, tuple[float, dict]] = {}
+_RENOVANDO: set = set()
+_RENOVANDO_LOCK = threading.Lock()
+
+
+def _cacheado(cache: dict, llave: tuple, cargar):
+    ttl = _cache_ttl_seconds()
+    if not ttl:
+        return cargar()
+    hit = cache.get(llave)
+    ahora = time.monotonic()
+    if hit and hit[0] > ahora:
+        return hit[1]
+    if hit:
+        with _RENOVANDO_LOCK:
+            renovar = (id(cache), llave) not in _RENOVANDO
+            if renovar:
+                _RENOVANDO.add((id(cache), llave))
+        if renovar:
+            def _trabajo():
+                try:
+                    cache[llave] = (time.monotonic() + ttl, cargar())
+                except Exception:  # si falla, se sigue con lo anterior y se reintenta en la siguiente petición
+                    logging.getLogger("comisionesbi").exception("No se pudo renovar la caché de cortes")
+                finally:
+                    with _RENOVANDO_LOCK:
+                        _RENOVANDO.discard((id(cache), llave))
+
+            threading.Thread(target=_trabajo, daemon=True).start()
+        return hit[1]
+    valor = cargar()
+    cache[llave] = (ahora + ttl, valor)
+    return valor
+
+
+def _filtrar_filas(filas: list, sociedad, division, comisionista_id) -> list:
+    """Los renglones de una sociedad, división y comisionista (los filtros en None no filtran)."""
+    if sociedad is None and division is None and comisionista_id is None:
+        return filas
+    return [
+        r for r in filas
+        if (sociedad is None or r["sociedad"] == sociedad)
+        and (division is None or r["division_code"] == division)
+        and (comisionista_id is None or r["comisionista_id"] == comisionista_id)
+    ]
+
+
+def _bloque(ini: date, fin: date) -> tuple[date, date]:
+    """El año de `ini` y el siguiente: el bloque depende solo del año en que arranca el rango, así que mover la ventana o abrir
+    el panel de una fila casi nunca cambia de bloque (y se reutiliza lo ya bajado)."""
+    return date(ini.year, 1, 1), date(max(fin.year, ini.year + 1), 12, 31)
+
+
+def _crudo(ini_ext: date, fin_pago: date, sociedad, division, comisionista_id) -> tuple[list, list]:
+    """Pagos por documento y cobros diarios del bloque de años que cubre el rango."""
+    b_ini, b_fin = _bloque(ini_ext, fin_pago)
+
+    def cargar():
+        params = {
+            "ini": ("DATE", b_ini),
+            "fin_pago": ("DATE", b_fin),
+            "ini_ext": ("DATE", b_ini),
+            "fin_ext": ("DATE", b_fin),
+            "sociedad": ("STRING", sociedad),
+            "division": ("STRING", division),
+            "comisionista_id": ("STRING", comisionista_id),
+        }
+        # Las consultas son independientes: en paralelo, la espera es la de la más lenta.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_docs = pool.submit(run_query, _DOCS_SQL, "los pagos por documento", params)
+            f_diario = pool.submit(
+                run_query,
+                _DIARIO_SQL,
+                "los cobros diarios por comisionista",
+                {k: v for k, v in params.items() if k not in ("ini", "fin_pago")},
+            )
+            return f_docs.result(), f_diario.result()
+
+    return _cacheado(_CRUDO_CACHE, (b_ini, b_fin, sociedad, division, comisionista_id), cargar)
+
+
+def _crudo_skus(sociedad, division, comisionista_id) -> list:
+    """La comisión diaria de los 4 SKUs (enero al corte): no depende del rango, se consulta una vez por filtro."""
+    return _cacheado(
+        _SKUS_CACHE,
+        (sociedad, division, comisionista_id),
+        lambda: run_query(
+            _SKUS_SQL,
+            "la comisión de los 4 SKUs",
+            {"sociedad": ("STRING", sociedad), "division": ("STRING", division), "comisionista_id": ("STRING", comisionista_id)},
+        ),
+    )
+
+
+def _cobertura_cacheada() -> dict:
+    return _cacheado(_COBERTURA_CACHE, ("cobertura",), cobertura)
+
+
+def precalentar(hoy: date | None = None) -> None:
+    """Deja en caché lo que la pantalla pide al abrirse (el mes en curso con su contexto), para que la primera carga no espere."""
+    hoy = hoy or date.today()
+    _datos((hoy - timedelta(days=80), hoy + timedelta(days=14)), None, None, None, True)
+    _cierres()
+
+
 def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, con_cobertura: bool = False):
     """Lo crudo de BigQuery: (ini, fin, docs, diario, nombres, cobertura, partes, info_docs).
 
@@ -243,33 +354,21 @@ def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, 
         return hit[1]
 
     ini, fin = rango_de(mes)
-    params = {
-        "ini": ("DATE", ini),
-        "fin_pago": ("DATE", fin + timedelta(days=GRACIA_SIN_VENTANA_DIAS)),
-        "ini_ext": ("DATE", ini - timedelta(days=MARGEN_DIAS)),
-        "fin_ext": ("DATE", fin + timedelta(days=MARGEN_DIAS)),
-        "sociedad": ("STRING", sociedad),
-        "division": ("STRING", division),
-        "comisionista_id": ("STRING", comisionista_id),
-    }
-    # Las consultas son independientes: en paralelo, la espera es la de la más lenta.
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        f_docs = pool.submit(run_query, _DOCS_SQL, "los pagos por documento", params)
-        f_diario = pool.submit(
-            run_query,
-            _DIARIO_SQL,
-            "los cobros diarios por comisionista",
-            {k: v for k, v in params.items() if k not in ("ini", "fin_pago")},
-        )
-        f_cobertura = pool.submit(cobertura) if con_cobertura else None
-        f_skus = pool.submit(
-            run_query,
-            _SKUS_SQL,
-            "la comisión de los 4 SKUs",
-            {k: v for k, v in params.items() if k in ("sociedad", "division", "comisionista_id")},
-        )
-        filas_docs, filas_diario, filas_skus = f_docs.result(), f_diario.result(), f_skus.result()
-        cobertura_datos = f_cobertura.result() if f_cobertura else None
+    ini_ext, fin_ext, fin_pago = ini - timedelta(days=MARGEN_DIAS), fin + timedelta(days=MARGEN_DIAS), fin + timedelta(days=GRACIA_SIN_VENTANA_DIAS)
+    # Lo que se baja de BigQuery es un bloque de meses completos que cubre el rango: mover la ventana una semana casi
+    # nunca cambia de bloque, así que casi nunca hay que volver a consultar. Después se recorta al rango pedido.
+    # Siempre se baja (y se guarda) todo sin filtros y se filtra aquí: abrir el panel de una fila o filtrar no cuesta otra consulta.
+    docs_bloque, diario_bloque = _crudo(ini_ext, fin_ext + timedelta(days=GRACIA_SIN_VENTANA_DIAS), None, None, None)
+    docs_bloque = _filtrar_filas(docs_bloque, sociedad, division, comisionista_id)
+    diario_bloque = _filtrar_filas(diario_bloque, sociedad, division, comisionista_id)
+    filas_skus = _filtrar_filas(_crudo_skus(None, None, None), sociedad, division, comisionista_id)
+    cobertura_datos = _cobertura_cacheada() if con_cobertura else None
+    filas_docs = [
+        r for r in docs_bloque
+        if (r["ventana_valida"] and r["desde_texto"] <= fin_ext and r["hasta_texto"] >= ini_ext)
+        or (not r["ventana_valida"] and ini <= r["fecha_pago"] <= fin_pago)
+    ]
+    filas_diario = [r for r in diario_bloque if ini_ext <= r["fecha"] <= fin_ext]
     nombres = {r["comisionista_id"]: r.get("comisionista") for r in filas_docs}
     info_docs = {
         r["doc_id"]: {
@@ -682,6 +781,9 @@ SELECT sociedad, division_code, SUM(pagado) AS pagado
 FROM {_TABLA_PAGO_DOC}
 WHERE IF(ventana_valida, EXTRACT(YEAR FROM desde_texto), EXTRACT(YEAR FROM fecha_pago)) = @anio
   AND {_FILTRO_DOCS_EXCLUIDOS}
+  AND (@division IS NULL OR division_code = @division)
+  AND (@sociedad IS NULL OR sociedad = @sociedad)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
 GROUP BY 1, 2
 """
 
@@ -691,22 +793,36 @@ SELECT sociedad, {_DIVISION_PAGO_SQL} AS division_code,
   SUM(IF({_ES_SKU_DIFERIDO_SQL}, comision_total, 0)) AS skus
 FROM {_TABLA_DIARIA}
 WHERE EXTRACT(YEAR FROM fecha) = @anio
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
+  AND (@sociedad IS NULL OR sociedad = @sociedad)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
 GROUP BY 1, 2
 """
 
+_ANIO_CACHE: dict[tuple, tuple[float, dict]] = {}
 
-_ANIO_CACHE: dict[int, tuple[float, dict]] = {}
 
-
-def build_anio(*, anio: int) -> dict:
-    """Pagado y calculado del año por sociedad y división, y lo que quedó apartado de los 4 SKUs de Botana."""
-    hit = _ANIO_CACHE.get(anio)
+def build_anio(*, anio: int, division: str | None = None, comisionista_id: str | None = None) -> dict:
+    """Pagado y calculado del año por sociedad y división (con los mismos filtros de la pantalla), y lo que quedó
+    apartado de los 4 SKUs de Botana. Abarrotes de DBC se paga dentro de Huevo, así que pedir "A" es pedir esa fila."""
+    sociedad = None
+    if division == "A":
+        # solo DBC junta Abarrotes con Huevo; PAN no tiene esa división
+        division, sociedad = "H", "DBC"
+    llave = (anio, division, sociedad, comisionista_id)
+    hit = _ANIO_CACHE.get(llave)
     ttl = _cache_ttl_seconds()
     if ttl and hit and hit[0] > time.monotonic():
         return hit[1]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        f_pagado = pool.submit(run_query, _ANIO_PAGADO_SQL, "el pagado del año", {"anio": ("INT64", anio)})
-        f_calc = pool.submit(run_query, _ANIO_CALCULADO_SQL, "el calculado del año", {"anio": ("INT64", anio)})
+        params = {
+            "anio": ("INT64", anio),
+            "division": ("STRING", division),
+            "sociedad": ("STRING", sociedad),
+            "comisionista_id": ("STRING", comisionista_id),
+        }
+        f_pagado = pool.submit(run_query, _ANIO_PAGADO_SQL, "el pagado del año", params)
+        f_calc = pool.submit(run_query, _ANIO_CALCULADO_SQL, "el calculado del año", params)
         pagado, calculado = f_pagado.result(), f_calc.result()
     filas: dict[tuple, dict] = {}
     skus = 0.0
@@ -724,7 +840,7 @@ def build_anio(*, anio: int) -> dict:
     ]
     resultado = {"anio": anio, "filas": salida, "skus_apartados": round(skus, 2)}
     if ttl:
-        _ANIO_CACHE[anio] = (time.monotonic() + 5 * ttl, resultado)
+        _ANIO_CACHE[llave] = (time.monotonic() + 5 * ttl, resultado)
     return resultado
 
 
