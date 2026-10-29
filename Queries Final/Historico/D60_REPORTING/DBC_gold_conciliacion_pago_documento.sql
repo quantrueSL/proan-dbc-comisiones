@@ -112,6 +112,9 @@ doc AS (
   FROM bsak b
   JOIN pago_kz k ON k.BUKRS = b.BUKRS AND k.LIFNR = b.LIFNR AND k.AUGBL = b.AUGBL
   WHERE b.BUKRS IN ('DBC', 'PAN') AND b.BLART = 'RE' AND UPPER(b.SGTXT) LIKE '%COMISION%'
+    -- Dos documentos que el cliente no quiere ver: "COMISION DE LECHE" ($575, 13-mar-2026) y "COMISION RUTA
+    -- ESPECIALIZADA CROQUETA" ($5,105, dic-2025). Su texto no sigue el patrón y quedaban sin división ni ventana.
+    AND CONCAT(b.BUKRS, '|', b.GJAHR, '|', b.BELNR) NOT IN ('DBC|2026|5100003892', 'DBC|2025|5100019700')
 ),
 doc_mes AS (
   SELECT *,

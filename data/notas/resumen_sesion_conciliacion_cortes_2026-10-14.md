@@ -112,3 +112,5 @@ resultados que la medición.
 8. Para después: sugerencia combinada de un clic para el cierre (bloque + borde) si el flujo en dos pasos resulta lento.
 
 **Comentarios por pago (20 oct, fuera del plan)**: bloque "Comentarios" en el panel del pago (cualquier admin agrega; solo el autor borra), marca 💬 en la celda de la tabla, sección "Comentarios" en la hoja Resumen del Excel. Se guardan en el mismo documento de la fila en Firestore (`comentarios: {pago_id: [{id, texto, por, ts}]}`), sin colección nueva; cada alta o baja queda en `eventos` ("comentar", "borrar_comentario") y sube la versión de la fila.
+
+**Reunión con el cliente (27-28 oct)**: el cliente paga lo que da SAP y luego paga diferencias. Hallazgos, plantilla de tarifas faltantes y decisiones en `data/notas/analisis_arrastres_pagos_2026-10-28.md`. Siguiente en el plan: sugerencia por producto y saldo acumulado por fila (aprobadas, sin implementar), y pedir BSEG/BSAS para ver las líneas de pasivo temporal.

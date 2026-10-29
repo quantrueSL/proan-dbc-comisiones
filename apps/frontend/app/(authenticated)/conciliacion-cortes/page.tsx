@@ -10,8 +10,8 @@ function fechaMexicoISO(): string {
 }
 
 // Las semanas que se ven en pantalla para un mes (la primera puede arrancar el mes anterior): igual que al elegirlo en el selector.
-function semanasDe(mes: string) {
-  const v = vistaDeMes(mes);
+function semanasDe(mes: string, hoy: string) {
+  const v = vistaDeMes(mes, hoy);
   return { desde: v.ini, hasta: finDeVista(v) };
 }
 
@@ -25,7 +25,7 @@ export default async function ConciliacionCortesPage() {
   let response: CortesMesResponse | null = null;
   let error: string | null = null;
 
-  const [catalogo, cortes] = await Promise.allSettled([getComisionesCatalog(), getCortesMes(semanasDe(mes))]);
+  const [catalogo, cortes] = await Promise.allSettled([getComisionesCatalog(), getCortesMes(semanasDe(mes, hoy))]);
 
   if (catalogo.status === "fulfilled") {
     catalog = catalogo.value;
@@ -38,7 +38,7 @@ export default async function ConciliacionCortesPage() {
     for (let intento = 0; intento < 2 && response && !tienePagosConVentana(response); intento++) {
       try {
         const anterior = mesAnterior(mes);
-        const previa = await getCortesMes(semanasDe(anterior));
+        const previa = await getCortesMes(semanasDe(anterior, hoy));
         if (!tienePagosConVentana(previa)) break;
         mes = anterior;
         response = previa;

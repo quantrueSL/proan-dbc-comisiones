@@ -216,9 +216,15 @@ export function hayDrift(pago: CortesPago): boolean {
 }
 
 /** Lo que "Consolidar lo que cuadra" cerraría en las filas dadas: pagos y filas (el plan lo arma el servidor). */
-export function resumenLote(filas: CortesFila[]): { pagos: number; filas: number } {
-  const conLote = filas.filter((f) => (f.lote?.length ?? 0) > 0);
-  return { pagos: conLote.reduce((n, f) => n + (f.lote?.length ?? 0), 0), filas: conLote.length };
+export function resumenLote(filas: CortesFila[], rango?: { ini: string; fin: string }): { pagos: number; filas: number } {
+  // Con `rango`, solo cuentan los pagos que tocan esas fechas (el mes elegido, no sus semanas de contexto).
+  const delRango = (f: CortesFila) =>
+    (f.lote ?? []).filter((id) => {
+      const p = f.pagos.find((x) => x.pago_id === id);
+      return !rango || !p || !p.ini || !p.fin || (p.ini <= rango.fin && p.fin >= rango.ini);
+    });
+  const conLote = filas.map(delRango).filter((l) => l.length > 0);
+  return { pagos: conLote.reduce((n, l) => n + l.length, 0), filas: conLote.length };
 }
 
 export type RefPago = { filaId: string; pagoId: string };
@@ -317,6 +323,22 @@ export function huecosDelMes(fila: CortesFila, desde: string, hasta: string): { 
   return { n: hs.length, comision: hs.reduce((s, h) => s + h.comision, 0) };
 }
 
+/** Semanas de los 4 SKUs de Botana que nadie ha incluido en un pago y caen en las semanas que se ven. */
+export function skusSinPagar(fila: CortesFila, desde: string, hasta: string): { n: number; comision: number } {
+  const l = (fila.skus ?? []).filter((b) => !b.pago_id && b.ini <= hasta && b.fin >= desde);
+  return { n: l.length, comision: l.reduce((t, b) => t + b.comision, 0) };
+}
+
+/** Huecos de cierre de mes con comisión que ningún pago de la fila ha incluido todavía. */
+export function cierresSinAsignar(fila: CortesFila): CortesHueco[] {
+  const asignados = new Set(fila.pagos.flatMap((p) => p.dias_asignados ?? []));
+  return fila.huecos.filter((h) => {
+    if (!h.cierre || h.comision <= 0) return false;
+    for (let d = h.ini; d <= h.fin; d = sumarDias(d, 1)) if (!asignados.has(d)) return true;
+    return false;
+  });
+}
+
 // ─── Línea de tiempo ─────────────────────────────────────────────────────
 
 /** Pagos con ventana ordenados como los muestra el panel. */
@@ -337,8 +359,10 @@ export function pagosEnVista(fila: CortesFila, pagoId: string, contexto: number)
 export type ElementoLinea =
   | { tipo: "pago"; pago: CortesPago }
   | { tipo: "corte"; izq: string; fecha: string; congelado: boolean }
-  | { tipo: "hueco"; ini: string; fin: string; comision: number; cierre: boolean }
-  | { tipo: "traslape"; ini: string; fin: string };
+  | { tipo: "hueco"; ini: string; fin: string; comision: number; cierre: boolean; izq: string; der: string }
+  | { tipo: "traslape"; ini: string; fin: string }
+  // Dos pagos separados solo por días ya asignados a mano (el cierre de mes): sin hueco que dibujar, pero el fin del de la izquierda se puede mover.
+  | { tipo: "salto"; izq: string; der: string };
 
 /** Pagos en vista con lo que hay entre cada par: un corte compartido, un hueco o un traslape. */
 export function elementosDeLinea(fila: CortesFila, vista: CortesPago[]): ElementoLinea[] {
@@ -354,13 +378,29 @@ export function elementosDeLinea(fila: CortesFila, vista: CortesPago[]): Element
     }
     const hueco = fila.huecos.find((h) => h.despues_de === pago.pago_id && h.antes_de === sig.pago_id);
     if (hueco) {
-      salida.push({ tipo: "hueco", ini: hueco.ini, fin: hueco.fin, comision: hueco.comision, cierre: hueco.cierre });
+      salida.push({ tipo: "hueco", ini: hueco.ini, fin: hueco.fin, comision: hueco.comision, cierre: hueco.cierre, izq: pago.pago_id, der: sig.pago_id });
       return;
     }
     const traslape = fila.traslapes.find((t) => t.pagos[0] === pago.pago_id && t.pagos[1] === sig.pago_id);
-    if (traslape) salida.push({ tipo: "traslape", ini: traslape.ini, fin: traslape.fin });
+    if (traslape) {
+      salida.push({ tipo: "traslape", ini: traslape.ini, fin: traslape.fin });
+      return;
+    }
+    if (pago.fin && sig.ini && pago.fin < sig.ini) salida.push({ tipo: "salto", izq: pago.pago_id, der: sig.pago_id });
   });
   return salida;
+}
+
+/**
+ * Hasta dónde se puede mover el fin del pago `izqId` cuando no comparte corte con el siguiente: no más atrás de su
+ * inicio y no más adelante del día anterior al primero del siguiente (ni de un día que ese ya tiene asignado).
+ */
+export function limitesDeFin(fila: CortesFila, izqId: string, derId: string): { min: string; max: string } | null {
+  const izq = fila.pagos.find((p) => p.pago_id === izqId);
+  const der = fila.pagos.find((p) => p.pago_id === derId);
+  if (!izq?.ini || !der?.ini) return null;
+  const primero = [der.ini, ...(der.dias_asignados ?? [])].sort()[0];
+  return { min: izq.ini, max: sumarDias(primero, -1) };
 }
 
 /** Días que cambian de pago si se aplica la sugerencia (se dibujan con borde punteado). */
@@ -377,6 +417,15 @@ export function diasQueCambian(s: CortesSugerencia | null): Set<string> {
     for (let d = desde; d <= hasta; d = sumarDias(d, 1)) dias.add(d);
   }
   return dias;
+}
+
+/** Frase de una sugerencia de 4 SKUs: "incluir los 4 SKUs de 25 jul a 21 ago ($1,556) en este pago". */
+export function describirSkus(s: CortesSugerencia, semanas: { ini: string; fin: string }[]): string {
+  const inis = [...(s.bloques_asignar ?? [])].sort();
+  const fines = inis.map((i) => semanas.find((b) => b.ini === i)?.fin ?? i);
+  const monto = s.afectados.length ? s.afectados[0].diferencia_despues - s.afectados[0].diferencia_antes : null;
+  const cuando = inis.length === 1 ? `de la semana del ${fechaCorta(inis[0])}` : `de las ${inis.length} semanas de ${rangoCorto(inis[0], fines[fines.length - 1])}`;
+  return `incluir los 4 SKUs ${cuando}${monto === null ? "" : ` (${pesos(monto)})`} en este pago`;
 }
 
 /** Frase de una sugerencia de cierre: "incluir el cierre del vie 31 ago ($12,030) en este pago". */
@@ -452,10 +501,25 @@ export function sabadoDeSemana(iso: string): string {
   return sumarDias(iso, -((dia + 1) % 7));
 }
 
-/** Las semanas que cubre el mes (la primera arranca el sábado anterior al día 1 si hace falta). */
-export function vistaDeMes(mes: string): VistaSemanas {
+/** Semanas de contexto que se ven antes y después del mes elegido. */
+export const SEMANAS_DE_CONTEXTO = 2;
+
+/**
+ * Las semanas del mes (la primera arranca el sábado anterior al día 1 si hace falta) con 2 semanas de contexto a cada
+ * lado. Con `hoy`, las semanas posteriores que todavía no empiezan no se enseñan.
+ */
+export function vistaDeMes(mes: string, hoy?: string): VistaSemanas {
   const semanas = semanasDelMes(mes);
-  return { ini: semanas[0].ini, n: semanas.length };
+  const ini = sumarDias(semanas[0].ini, -7 * SEMANAS_DE_CONTEXTO);
+  let n = semanas.length + 2 * SEMANAS_DE_CONTEXTO;
+  while (hoy && n > semanas.length + SEMANAS_DE_CONTEXTO && sumarDias(ini, 7 * (n - 1)) > hoy) n--;
+  return { ini, n };
+}
+
+/** Primer y último día del mes `AAAA-MM`. */
+export function rangoDelMes(mes: string): { ini: string; fin: string } {
+  const [a, m] = mes.split("-").map(Number);
+  return { ini: `${mes}-01`, fin: deMs(Date.UTC(a, m, 0)) };
 }
 
 /** Las columnas de la vista: una por semana sábado-viernes, pero la semana que cruza un fin de mes se parte ahí (29 a 31 ago, 1 a 4 sep). */
@@ -478,15 +542,15 @@ export function finDeVista(v: VistaSemanas): string {
   return sumarDias(v.ini, 7 * v.n - 1);
 }
 
-/** El mes que mejor describe la vista: el de la mitad de su semana central. */
+/** El mes que describe la vista: el de la mitad de la tercera semana del mes (las dos primeras columnas son contexto). */
 export function mesDeVista(v: VistaSemanas): string {
-  return sumarDias(v.ini, 7 * Math.floor(v.n / 2) + 3).slice(0, 7);
+  return sumarDias(v.ini, 7 * (SEMANAS_DE_CONTEXTO + 2) + 3).slice(0, 7);
 }
 
-/** "Agosto 2026" si la vista son justo las semanas de ese mes; si no, el rango ("8 ago a 11 sep"). */
-export function etiquetaVista(v: VistaSemanas): string {
+/** "Agosto 2026" si la vista son justo las semanas de ese mes con su contexto; si no, el rango ("25 jul a 25 sep"). */
+export function etiquetaVista(v: VistaSemanas, hoy?: string): string {
   const mes = mesDeVista(v);
-  const delMes = vistaDeMes(mes);
+  const delMes = vistaDeMes(mes, hoy);
   return delMes.ini === v.ini && delMes.n === v.n ? etiquetaMes(mes) : rangoCorto(v.ini, finDeVista(v));
 }
 

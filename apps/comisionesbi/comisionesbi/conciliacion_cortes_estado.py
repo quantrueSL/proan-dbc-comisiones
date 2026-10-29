@@ -70,6 +70,8 @@ class DocFila:
     consolidados_info: dict[str, dict] = field(default_factory=dict)
     dias_asignados: dict[str, list[date]] = field(default_factory=dict)
     comentarios: dict[str, list[dict]] = field(default_factory=dict)
+    # 4 SKUs de Botana: {primer día de la semana: pago_id al que se movió}.
+    skus_movidos: dict[date, str] = field(default_factory=dict)
 
     def a_estado(self) -> EstadoFila:
         return EstadoFila(
@@ -77,6 +79,7 @@ class DocFila:
             consolidados=dict(self.consolidados),
             descartadas=set(self.descartadas),
             dias_asignados={k: list(v) for k, v in self.dias_asignados.items()},
+            skus_movidos=dict(self.skus_movidos),
         )
 
     # --- Firestore guarda fechas como texto ISO ---
@@ -88,6 +91,7 @@ class DocFila:
             "descartadas": self.descartadas,
             "dias_asignados": {k: [d.isoformat() for d in v] for k, v in self.dias_asignados.items()},
             "comentarios": self.comentarios,
+            "skus_movidos": {d.isoformat(): pid for d, pid in self.skus_movidos.items()},
             "consolidados": {
                 k: {
                     "ini": f.ini.isoformat(),
@@ -114,6 +118,7 @@ class DocFila:
             dias_asignados={
                 k: [date.fromisoformat(d) for d in v] for k, v in (datos.get("dias_asignados") or {}).items()
             },
+            skus_movidos={date.fromisoformat(d): pid for d, pid in (datos.get("skus_movidos") or {}).items()},
             consolidados={
                 k: Foto(
                     date.fromisoformat(v["ini"]),

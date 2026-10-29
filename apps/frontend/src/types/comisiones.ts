@@ -486,6 +486,8 @@ export type CortesSugerencia = {
   cambios: CortesCambioBorde[];
   /** Tipo `cierre`: los días de cierre de mes que se le asignan al pago (no hay cambios de borde). */
   dias_asignar?: string[];
+  /** Tipo `skus`: las semanas de los 4 SKUs (por su primer día) que se le mueven al pago. */
+  bloques_asignar?: string[];
   afectados: CortesAfectado[];
 };
 
@@ -525,6 +527,9 @@ export type CortesPago = {
   drift_pagado?: number | null;
   /** Días sueltos (cierre de mes) que se le sumaron a este pago además de su ventana. */
   dias_asignados?: string[];
+  /** 4 SKUs de Botana: las semanas que este pago incluye (de la suya o de otra) y las de su propia ventana, con su destino. */
+  skus_incluidos?: CortesSkusSemana[];
+  skus_propios?: CortesSkusSemana[];
   comentarios?: CortesComentario[];
   consolidado_por?: string | null;
   consolidado_en?: string | null;
@@ -533,6 +538,9 @@ export type CortesPago = {
   ajustado: boolean;
   sugerencia: CortesSugerencia | null;
 };
+
+/** Una semana (sáb-vie, cortada en fin de mes) de la comisión de los 4 SKUs de Botana; `pago_id` es el pago al que se movió (null = sin pagar). */
+export type CortesSkusSemana = { ini: string; fin: string; comision: number; pago_id?: string | null };
 
 export type CortesHueco = {
   ini: string;
@@ -562,6 +570,8 @@ export type CortesFila = {
   lote?: string[];
   pagos: CortesPago[];
   huecos: CortesHueco[];
+  /** Semanas con comisión de los 4 SKUs de Botana (hasta agosto), con el pago al que se movió cada una. */
+  skus?: CortesSkusSemana[];
   traslapes: CortesTraslape[];
   cortes: CortesCorte[];
 };
@@ -646,6 +656,7 @@ export type CortesAccion =
   | "consolidar-lote"
   | "fijar-ventana"
   | "asignar-dias"
+  | "mover-skus"
   | "comentar"
   | "borrar-comentario"
   | "quitar-huerfano";
@@ -656,10 +667,26 @@ export type CortesExportPagoResponse = {
   fin: string;
   /** Días de cierre de mes asignados a este pago. */
   dias: string[];
+  /** Semanas de los 4 SKUs que este pago incluye. */
+  skus?: { ini: string; fin: string }[];
   /** Por periodo (la ventana del pago y cada día de cierre asignado) y producto, como la hoja "Conciliación" de la pestaña vigente. */
   productos: (Omit<ConciliacionDiarioRow, "fecha"> & { semana: string; periodo_fin: string })[];
   diario: (ConciliacionDiarioRow & { asignacion: string })[];
   factura: (ConciliacionFacturaRow & { asignacion: string })[];
+};
+
+/** Respuesta de `lineas`: lo que SAP pagó en cada línea del pedido contra lo calculado por familia (solo Botana). */
+export type CortesLineasPagoResponse = {
+  posicion?: string | null;
+  lineas: { linea: string; familia: string; pagado: number; calculado: number; diferencia: number }[];
+};
+
+/** Respuesta de `anio`: pagado y calculado del año por sociedad y división. */
+export type CortesAnioResponse = {
+  anio: number;
+  filas: { sociedad: string; division_code: string | null; pagado: number; calculado: number }[];
+  /** Comisión de los 4 SKUs de Botana que se aparta del calculado hasta agosto (no se pagó en su semana). */
+  skus_apartados: number;
 };
 
 export type CortesEvento = {

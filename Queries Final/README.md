@@ -37,10 +37,10 @@ Queries Final/
 ├─ Historico/
 │  ├─ D20_DIMENSION/     dm_DBC_base_comision_v1
 │  ├─ D50_AGGREGATE/     v1_flujo_producto_dbc · DBC_silver_flujo_producto · DBC_comisiones_calculadas_cobro
-│  └─ D60_REPORTING/     6 gold + dm_DBC_periodo_pago
+│  └─ D60_REPORTING/     7 gold + dm_DBC_periodo_pago
 └─ Airflow/
    ├─ D50_AGGREGATE/     2 gemelos
-   └─ D60_REPORTING/     6 gemelos
+   └─ D60_REPORTING/     7 gemelos
 ```
 
 **`Airflow/` no tiene `D20_DIMENSION`** y es correcto: de esa capa, dos tablas
@@ -65,6 +65,7 @@ los últimos 12 meses completos.
 | `D60/DBC_gold_conciliacion_producto_diario.sql` | ✔ | `fecha` | `>= ventana_desde` |
 | `D60/DBC_gold_conciliacion_pago_semanal.sql` | ✔ | `periodo` | `>= ventana_desde` |
 | `D60/DBC_gold_conciliacion_pago_documento.sql` | ✔ | `fecha_pago` | `>= ventana_desde` |
+| `D60/DBC_gold_conciliacion_pago_linea.sql` | ✔ | `fecha_pago` | `>= ventana_desde` |
 | `D60/dm_DBC_periodo_pago.sql` | — | vista | — |
 
 **Por qué 12 meses y no 3.** El cobro llega tarde: medido sobre las compensaciones de 2026,
@@ -95,6 +96,7 @@ refrescar a diario: basta con que el DDL se haya corrido una vez.
                            DBC_gold_flujo_producto_diario       ← silver flujo
 
 4  gold ← gold             DBC_gold_conciliacion_producto_diario ← gold_conciliacion_factura_linea
+                           DBC_gold_conciliacion_pago_linea      ← gold_conciliacion_pago_documento + BKPF/EKBE/pedidos
 ```
 
 El paso 4 es la trampa: `producto_diario` no sale de la silver sino de otra gold, así que

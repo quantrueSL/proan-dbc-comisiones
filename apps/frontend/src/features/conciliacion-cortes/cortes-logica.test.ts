@@ -9,16 +9,20 @@ import {
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
+  limitesDeFin,
   esPendiente,
   fechaConDia,
   filaTodoCuadra,
   filtrarFilas,
   hayDrift,
+  cierresSinAsignar,
+  skusSinPagar,
   huecosDelMes,
   limitesDeCorte,
   mesAnterior,
   desplazarVista,
   etiquetaVista,
+  rangoDelMes,
   finDeVista,
   mesDeVista,
   sabadoDeSemana,
@@ -466,12 +470,13 @@ describe("cierre de mes asignado a un pago", () => {
 describe("semanas a la vista", () => {
   it("el selector de mes coloca las semanas del mes y la etiqueta lo dice", () => {
     const v = vistaDeMes("2026-08");
-    expect(v).toEqual({ ini: "2026-08-01", n: 5 });
-    expect(finDeVista(v)).toBe("2026-09-04");
+    // 5 semanas del mes y 2 de contexto a cada lado
+    expect(v).toEqual({ ini: "2026-07-18", n: 9 });
+    expect(finDeVista(v)).toBe("2026-09-18");
     expect(mesDeVista(v)).toBe("2026-08");
     expect(etiquetaVista(v)).toBe("Agosto 2026");
     // la semana que cruza el fin de mes se parte ahí: 29 a 31 ago y 1 a 4 sep
-    expect(semanasDeVista(v).slice(4)).toEqual([
+    expect(semanasDeVista(v).slice(6, 8)).toEqual([
       { ini: "2026-08-29", fin: "2026-08-31" },
       { ini: "2026-09-01", fin: "2026-09-04" }
     ]);
@@ -479,10 +484,10 @@ describe("semanas a la vista", () => {
 
   it("las flechas desplazan una semana y la etiqueta pasa a ser el rango", () => {
     const v = desplazarVista(vistaDeMes("2026-08"), 1);
-    expect(v).toEqual({ ini: "2026-08-08", n: 5 });
-    expect(finDeVista(v)).toBe("2026-09-11");
-    expect(etiquetaVista(v)).toBe("8 ago a 11 sep");
-    expect(desplazarVista(v, -2).ini).toBe("2026-07-25");
+    expect(v).toEqual({ ini: "2026-07-25", n: 9 });
+    expect(finDeVista(v)).toBe("2026-09-25");
+    expect(etiquetaVista(v)).toBe("25 jul a 25 sep");
+    expect(desplazarVista(v, -2).ini).toBe("2026-07-11");
     // vuelve a ser "el mes" cuando coincide con sus semanas
     expect(etiquetaVista(desplazarVista(v, -1))).toBe("Agosto 2026");
   });
@@ -494,14 +499,69 @@ describe("semanas a la vista", () => {
   });
 
   it("un pago que ya toca la vista no la mueve; uno de fuera la mueve y lo deja en la semana central", () => {
-    const v = vistaDeMes("2026-09"); // 29 ago a 2 oct
+    const v = vistaDeMes("2026-09"); // 15 ago a 16 oct, con el contexto
     expect(vistaParaPago({ ini: "2026-08-22", fin: "2026-08-30" }, v)).toBeNull();
     expect(vistaParaPago({ ini: null, fin: null }, v)).toBeNull();
-    const antes = vistaParaPago({ ini: "2026-08-15", fin: "2026-08-21" }, v)!;
-    expect(semanasDeVista(antes)[2].ini).toBe("2026-08-15");
-    const despues = vistaParaPago({ ini: "2026-10-10", fin: "2026-10-16" }, v)!;
-    // la columna 2 puede ser media semana si hubo fin de mes antes; se mira la semana central
-    expect(semanasDeVista(despues).some((s) => s.ini === "2026-10-10")).toBe(true);
-    expect(despues.ini).toBe("2026-09-26"); // dos semanas antes de la del pago
+    const antes = vistaParaPago({ ini: "2026-08-01", fin: "2026-08-07" }, v)!;
+    expect(semanasDeVista(antes).some((s) => s.ini === "2026-08-01")).toBe(true);
+    const despues = vistaParaPago({ ini: "2026-10-24", fin: "2026-10-30" }, v)!;
+    // la columna puede ser media semana si hubo fin de mes antes; se mira la semana central
+    expect(semanasDeVista(despues).some((s) => s.ini === "2026-10-24")).toBe(true);
+    expect(despues.ini).toBe("2026-09-26"); // cuatro semanas antes de la del pago, que queda al centro
+  });
+});
+
+describe("cierresSinAsignar", () => {
+  it("deja fuera el cierre ya asignado a un pago", () => {
+    const huecos = [{ ini: "2026-07-31", fin: "2026-07-31", comision: 500, despues_de: "e1", antes_de: "e2", cierre: true }];
+    const sin = fila("7", [pago("e1", "2026-07-04", "2026-07-10", "ok")], { huecos });
+    expect(cierresSinAsignar(sin)).toHaveLength(1);
+    const con = fila("8", [pago("e1", "2026-08-01", "2026-08-07", "ok", { dias_asignados: ["2026-07-31"] })], { huecos });
+    expect(cierresSinAsignar(con)).toHaveLength(0);
+  });
+});
+
+describe("skusSinPagar", () => {
+  it("cuenta solo las semanas sin pagar que caen en lo que se ve", () => {
+    const skus = [
+      { ini: "2026-07-18", fin: "2026-07-24", comision: 491.25, pago_id: null },
+      { ini: "2026-07-25", fin: "2026-07-31", comision: 426, pago_id: "x" },
+      { ini: "2026-08-08", fin: "2026-08-14", comision: 396.75, pago_id: null }
+    ];
+    const f = fila("9", [], { skus });
+    expect(skusSinPagar(f, "2026-07-01", "2026-07-31")).toEqual({ n: 1, comision: 491.25 });
+    expect(skusSinPagar(f, "2026-09-01", "2026-09-30")).toEqual({ n: 0, comision: 0 });
+  });
+});
+
+describe("ventana con semanas de contexto", () => {
+  it("sin semanas posteriores todavía, no se enseñan las que no han empezado", () => {
+    // octubre 2026: 26 sep a 6 nov + 2 semanas antes; hoy 29 oct, así que las dos de después (7 y 14 nov) no aparecen
+    expect(vistaDeMes("2026-10")).toEqual({ ini: "2026-09-12", n: 10 });
+    expect(vistaDeMes("2026-10", "2026-10-29")).toEqual({ ini: "2026-09-12", n: 8 });
+    // con hoy dentro de la primera semana del mes siguiente aparece solo esa semana de contexto
+    expect(vistaDeMes("2026-10", "2026-11-09").n).toBe(9);
+    expect(mesDeVista(vistaDeMes("2026-10", "2026-10-29"))).toBe("2026-10");
+    expect(etiquetaVista(vistaDeMes("2026-10", "2026-10-29"), "2026-10-29")).toBe("Octubre 2026");
+  });
+
+  it("rango del mes y lote solo del mes", () => {
+    expect(rangoDelMes("2026-02")).toEqual({ ini: "2026-02-01", fin: "2026-02-28" });
+    const dentro = pago("p1", "2026-10-03", "2026-10-09");
+    const fuera = pago("p2", "2026-09-12", "2026-09-18");
+    const f = fila("1", [dentro, fuera], { lote: ["p1", "p2"] });
+    expect(resumenLote([f])).toEqual({ pagos: 2, filas: 1 });
+    expect(resumenLote([f], rangoDelMes("2026-10"))).toEqual({ pagos: 1, filas: 1 });
+  });
+});
+
+describe("fin de mes entre dos pagos", () => {
+  it("dos pagos separados solo por un día de cierre ya asignado dejan mover el fin del primero", () => {
+    const a = pago("a", "2026-02-21", "2026-02-27");
+    const b = pago("b", "2026-03-01", "2026-03-06", "ok", { dias_asignados: ["2026-02-28"] });
+    const f = fila("1", [a, b]);
+    expect(elementosDeLinea(f, [a, b]).map((e) => e.tipo)).toEqual(["pago", "salto", "pago"]);
+    // no hacia atrás de su inicio ni sobre el día que el siguiente ya tiene asignado
+    expect(limitesDeFin(f, "a", "b")).toEqual({ min: "2026-02-21", max: "2026-02-27" });
   });
 });

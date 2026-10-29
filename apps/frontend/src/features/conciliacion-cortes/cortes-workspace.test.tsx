@@ -144,12 +144,12 @@ describe("CortesWorkspace", () => {
 
   it("la cabecera cuenta los pagos por estado con su monto en pesos", () => {
     const html = pinta();
-    expect(html).toContain("Cuadran");
-    expect(html).toContain("Con sugerencia");
-    expect(html).toContain("Dif. $4,100");
-    expect(html).toContain("$20,000 calculado");
-    expect(html).toContain("Comisión calculada sin pago");
-    expect(html).toContain("$1,800 de comisión");
+    expect(html).toContain("cuadran");
+    expect(html).toContain("sugeridos");
+    expect(html).toContain("$4,100");
+    expect(html).toContain("$20,000");
+    expect(html).toContain("sin pago");
+    expect(html).toContain("$1,800");
   });
 
   it("lo cobrado el último día del mes se enseña aparte, no como cobros sin pago", () => {
@@ -162,8 +162,8 @@ describe("CortesWorkspace", () => {
       ]
     };
     const html = pinta(r);
-    expect(html).toContain("Cierre de mes: $4,200");
-    expect(html).toContain("$0 de comisión");
+    expect(html).toContain("cierre mes sin asignar");
+    expect(html).toContain("$4,200");
     expect(html).not.toContain("Comisión calculada sin pago:");
   });
 

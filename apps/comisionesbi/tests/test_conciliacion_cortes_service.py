@@ -65,6 +65,8 @@ def bq(monkeypatch):
             return diario
         if "días de cierre" in nombre:
             return [{"fecha": r["fecha"], "comision": r["comision"]} for r in diario]
+        if "4 SKUs" in nombre:
+            return []
         if "detalle por producto" in nombre:
             return [
                 {"cedis": "Norte", "oficina": "0023", "tipo_venta": "VTA EN RUTA", "matnr": "1", "descripcion": "A",
@@ -82,6 +84,7 @@ def bq(monkeypatch):
     monkeypatch.setattr(svc, "cobertura", lambda: {"desde": "2026-01-02", "hasta": "2026-10-06"})
     # Sin caché entre pruebas y con el estado guardado en memoria, no en Firestore.
     svc._CACHE.clear()
+    svc._ANIO_CACHE.clear()
     monkeypatch.setattr(estado, "_store", estado.MemoriaStore())
     return llamadas
 
@@ -640,3 +643,157 @@ def test_consolidar_lo_que_cuadra_tambien_vale_para_un_rango_de_semanas(bq):
     svc.aplicar_sugerencia(mes="2026-07", key=KEY, pago_id=PAGO1, cambios_vistos=None, version=0, usuario="ana")
     r = svc.consolidar_lote(desde=date(2026, 6, 27), hasta=date(2026, 7, 10), fila_ids=[FILA_ID], usuario="ana")
     assert r["consolidados"] == 2
+
+
+# ─── 4 SKUs de Botana ────────────────────────────────────────────────────
+
+
+def _con_skus(monkeypatch, monto=300.0, dia=1):
+    """Los cobros del día `dia` incluyen `monto` de los 4 SKUs (la consulta los trae aparte en `comision_4sku`)."""
+    original = svc.run_query
+
+    def fake(sql, nombre, parametros=None):
+        filas = original(sql, nombre, parametros)
+        if "cobros diarios" in nombre:
+            # la consulta principal deja fuera los 4 SKUs: esos `monto` ya no vienen en el día
+            return [{**r, "comision": r["comision"] - (monto if r["fecha"] == D0 + timedelta(days=dia) else 0.0)} for r in filas]
+        if "4 SKUs" in nombre:
+            return [{"sociedad": "DBC", "comisionista_id": LIFNR, "division_code": "H", "fecha": D0 + timedelta(days=dia), "comision_4sku": monto}]
+        return filas
+
+    monkeypatch.setattr(svc, "run_query", fake)
+
+
+def test_los_4_skus_se_separan_del_calculado_y_se_mueven_a_otro_pago(bq, monkeypatch):
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2) - 300.0), _doc(2, 4, 6, _suma(4, 6) + 300.0)])
+    _con_skus(monkeypatch)
+    v = svc.build_fila(mes="2026-07", sociedad="DBC", comisionista_id=LIFNR, division_code="H")
+    assert _fila(v)[PAGO1]["estado"] == "ok" and _fila(v)[PAGO2]["diferencia"] == -300.0
+    (semana,) = v["fila"]["skus"]
+    assert semana["comision"] == 300.0 and semana["pago_id"] is None
+    nuevo = svc.mover_skus(mes="2026-07", key=KEY, bloques_ini=[date.fromisoformat(semana["ini"])], pago_id=PAGO2, version=0, usuario="ana")
+    b = _fila(nuevo)[PAGO2]
+    assert b["estado"] == "ok" and b["skus_incluidos"][0]["comision"] == 300.0
+    assert nuevo["fila"]["skus"][0]["pago_id"] == PAGO2
+    assert svc.build_historial(key=KEY)["eventos"][0]["tipo"] == "mover_skus"
+    # devolverla: vuelve a quedar sin pagar
+    otra = svc.mover_skus(mes="2026-07", key=KEY, bloques_ini=[date.fromisoformat(semana["ini"])], pago_id=None, version=1, usuario="ana")
+    assert otra["fila"]["skus"][0]["pago_id"] is None and _fila(otra)[PAGO2]["diferencia"] == -300.0
+
+
+def test_mover_4_skus_a_un_pago_consolidado_se_rechaza(bq, monkeypatch):
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2) - 300.0), _doc(2, 4, 6, _suma(4, 6))])
+    _con_skus(monkeypatch)
+    svc.consolidar(mes="2026-07", key=KEY, pago_id=PAGO2, version=0, usuario="ana")
+    with pytest.raises(ErrorCorte) as e:
+        svc.mover_skus(mes="2026-07", key=KEY, bloques_ini=[date(2026, 6, 27)], pago_id=PAGO2, version=1, usuario="ana")
+    assert e.value.codigo == "corte_congelado"
+
+
+def test_el_export_de_los_4_skus_solo_va_en_el_pago_que_incluye_esa_semana(bq, monkeypatch):
+    original = svc.run_query
+    filas = [
+        {**_fila_cobro(date(2026, 7, 1), "BO", 100.0), "matnr": "17126"},
+        {**_fila_cobro(date(2026, 7, 1), "BO", 40.0), "matnr": "0000017401"},
+        {**_fila_cobro(date(2026, 7, 1), "BO", 25.0), "matnr": "20000"},
+        {**_fila_cobro(date(2026, 7, 8), "BO", 70.0), "matnr": "17630"},
+    ]
+
+    def fake(sql, nombre, parametros=None):
+        if "detalle diario del pago" in nombre:
+            return filas
+        if "detalle de factura del pago" in nombre:
+            return []
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+    sin = svc.build_export_pago(sociedad="DBC", comisionista_id=LIFNR, division_code="BO", ini=date(2026, 7, 1), fin=date(2026, 7, 3))
+    assert [r["matnr"] for r in sin["diario"]] == ["20000"]
+    con = svc.build_export_pago(sociedad="DBC", comisionista_id=LIFNR, division_code="BO", ini=date(2026, 7, 8), fin=date(2026, 7, 10),
+                                skus=[(date(2026, 6, 27), date(2026, 7, 3))])
+    assert sorted((r["matnr"], r["asignacion"]) for r in con["diario"]) == [
+        ("0000017401", "4 SKUs de la semana 2026-06-27 a 2026-07-03"),
+        ("17126", "4 SKUs de la semana 2026-06-27 a 2026-07-03"),
+    ]
+    assert {(p["semana"], p["periodo_fin"]) for p in con["productos"]} == {("2026-06-27", "2026-07-03")}
+
+
+def test_las_lineas_del_pedido_se_comparan_con_el_calculado_por_familia_solo_en_botana(bq, monkeypatch):
+    original = svc.run_query
+    cobros = [
+        {"fecha": date(2026, 7, 20), "matnr": "17693", "descripcion": "VUALA SORPRESA VAIN C/ 10", "comision": 600.0},
+        {"fecha": date(2026, 7, 21), "matnr": "13101", "descripcion": "VUALA SW CAKE CREM C/14", "comision": 40.0},
+        {"fecha": date(2026, 7, 22), "matnr": "17126", "descripcion": "VUALA SW ROLL PIÑA C/ 14", "comision": 25.0},
+        {"fecha": date(2026, 7, 22), "matnr": "14990", "descripcion": "VUALA BIG CHOC C/ 8", "comision": 30.0},
+    ]
+
+    def fake(sql, nombre, parametros=None):
+        if "líneas del pedido" in nombre:
+            assert parametros["d0"][1] == "DBC|2026|7" and parametros["d1"][1] is None
+            return [{"linea": "01", "pedido": "45", "posicion": "00290", "texto_posicion": "COMISION VUALA SEMANA 18-24 JULIO", "importe": 598.0},
+                    {"linea": "02", "pedido": "45", "posicion": "00290", "texto_posicion": "COMISION VUALA SEMANA 18-24 JULIO", "importe": 41.0},
+                    {"linea": "03", "pedido": "45", "posicion": "00290", "texto_posicion": "COMISION VUALA SEMANA 18-24 JULIO", "importe": 30.0}]
+        if "calculado por familia" in nombre:
+            return cobros
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+    arg = dict(sociedad="DBC", comisionista_id=LIFNR, division_code="BO", docs=["DBC|2026|7"], ini=date(2026, 7, 18), fin=date(2026, 7, 24))
+    r = svc.build_lineas_pago(**arg)
+    # el SKU diferido (17126) no cuenta mientras su semana no se incluya
+    assert [(x["linea"], x["pagado"], x["calculado"], x["diferencia"]) for x in r["lineas"]] == [
+        ("01", 598.0, 600.0, 2.0), ("02", 41.0, 40.0, -1.0), ("03", 30.0, 30.0, 0.0)]
+    r = svc.build_lineas_pago(**arg, skus=[(date(2026, 7, 18), date(2026, 7, 24))])
+    assert r["lineas"][1]["calculado"] == 65.0
+    assert svc.build_lineas_pago(**{**arg, "division_code": "H"}) == {"lineas": []}
+
+
+def test_el_total_del_ano_junta_pagado_y_calculado_por_sociedad_y_division(bq, monkeypatch):
+    original = svc.run_query
+
+    def fake(sql, nombre, parametros=None):
+        if "pagado del año" in nombre:
+            assert parametros["anio"][1] == 2026
+            return [{"sociedad": "DBC", "division_code": "BO", "pagado": 600.0},
+                    {"sociedad": "PAN", "division_code": "H", "pagado": 1000.0}]
+        if "calculado del año" in nombre:
+            return [{"sociedad": "DBC", "division_code": "BO", "calculado": 650.0, "skus": 80.0},
+                    {"sociedad": "DBC", "division_code": "H", "calculado": 0.0, "skus": 0.0}]
+        return original(sql, nombre, parametros)
+
+    monkeypatch.setattr(svc, "run_query", fake)
+    r = svc.build_anio(anio=2026)
+    assert r["filas"] == [
+        {"sociedad": "DBC", "division_code": "BO", "pagado": 600.0, "calculado": 650.0},
+        {"sociedad": "PAN", "division_code": "H", "pagado": 1000.0, "calculado": 0.0},
+    ]
+    assert r["skus_apartados"] == 80.0
+    assert client.post("/v1/comisionesbi/cortes/anio", json={"anio": 1999}).status_code == 422
+
+
+def test_los_dos_documentos_sin_division_ya_no_se_piden():
+    assert svc.DOCS_EXCLUIDOS == ("DBC|2026|5100003892", "DBC|2025|5100019700")
+    for sql in (svc._DOCS_SQL, svc._ANIO_PAGADO_SQL):
+        assert "doc_id NOT IN ('DBC|2026|5100003892', 'DBC|2025|5100019700')" in sql
+
+
+def test_la_ventana_de_un_mes_con_contexto_cabe_en_el_rango_permitido(bq):
+    # enero 2026 con 2 semanas de contexto a cada lado: 6 dic a 13 feb (70 días)
+    ok = client.post("/v1/comisionesbi/cortes/mes", json={"desde": "2025-12-06", "hasta": "2026-02-13"})
+    assert ok.status_code == 200
+    largo = client.post("/v1/comisionesbi/cortes/mes", json={"desde": "2025-10-01", "hasta": "2026-02-13"})
+    assert largo.status_code == 422
+
+
+def test_soltar_el_ultimo_dia_del_pago_anterior_lo_deja_libre_para_sumarlo_al_siguiente(bq, monkeypatch):
+    # A: 27 a 29 jun (el 30 es el cierre, ya asignado a B); B: 1 a 3 jul. Se acorta A un día y el 29 queda libre.
+    _con_docs(monkeypatch, [_doc(1, 0, 3, _suma(0, 2)), _doc(2, 4, 6, _suma(4, 6) + MONTOS[3])])
+    svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 30)], version=0, usuario="ana")
+    v = svc.mover_borde(mes="2026-07", key=KEY, pago_id=PAGO1, borde="fin", fecha=date(2026, 6, 28), version=1, usuario="ana")
+    (hueco,) = v["fila"]["huecos"]
+    assert (hueco["ini"], hueco["fin"], hueco["cierre"]) == ("2026-06-29", "2026-06-30", True)
+    # el 29 se suma a B junto con el 30 que ya tenía
+    v = svc.asignar_dias(mes="2026-07", key=KEY, pago_id=PAGO2, dias=[date(2026, 6, 29), date(2026, 6, 30)], version=2, usuario="ana")
+    assert _fila(v)[PAGO2]["dias_asignados"] == ["2026-06-29", "2026-06-30"] and v["fila"]["huecos"] == []
+    assert _fila(v)[PAGO1]["fin"] == "2026-06-28"
+

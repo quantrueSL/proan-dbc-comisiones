@@ -48,6 +48,17 @@ CONSOLIDADO = "cons"
 
 DIA = timedelta(days=1)
 
+
+def bloque_de(dia: date) -> tuple[date, date]:
+    """La semana (sáb-vie, cortada en fin de mes) que contiene el día: la unidad que se mueve entre pagos en los 4 SKUs de Botana."""
+    ini = dia - timedelta(days=(dia.weekday() - 5) % 7)
+    fin = ini + timedelta(days=6)
+    if ini.month != dia.month:
+        ini = dia.replace(day=1)
+    if fin.month != dia.month:
+        fin = (dia.replace(day=28) + timedelta(days=4)).replace(day=1) - DIA
+    return ini, fin
+
 FilaKey = tuple[str, str, "str | None"]  # (sociedad, comisionista_id, division_code)
 
 
@@ -93,9 +104,18 @@ class SerieDiaria:
     def __init__(self, dias: Mapping[date, float] | None = None):
         dias = dias or {}
         self._fechas = sorted(dias)
+        self._valores = {f: float(dias[f] or 0.0) for f in self._fechas}
         self._acum = [0.0]
         for f in self._fechas:
             self._acum.append(self._acum[-1] + float(dias[f] or 0.0))
+
+    def semanas(self) -> list[tuple[date, date, float]]:
+        """Las semanas (`bloque_de`) con comisión: (ini, fin, comisión), de la más antigua a la más reciente."""
+        acum: dict[date, float] = {}
+        for f, v in self._valores.items():
+            if v > 0:
+                acum[bloque_de(f)[0]] = acum.get(bloque_de(f)[0], 0.0) + v
+        return [(ini, bloque_de(ini)[1], round(m, 2)) for ini, m in sorted(acum.items())]
 
     def suma(self, ini: date | None, fin: date | None) -> float:
         if ini is None or fin is None or ini > fin:
@@ -124,6 +144,8 @@ class EstadoFila:
     descartadas: set[str] = field(default_factory=set)
     # Días sueltos que la persona asignó a un pago, además de su ventana: {pago_id: [fecha, ...]}.
     dias_asignados: dict[str, list[date]] = field(default_factory=dict)
+    # Semana (por su primer día) de los 4 SKUs -> pago al que se movió. Sin entrada = sigue sin pagarse.
+    skus_movidos: dict[date, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -308,6 +330,8 @@ class Sugerencia:
     n_opciones: int
     # Tipo "cierre": los días sueltos que se le asignan al pago (no hay cambios de borde).
     dias_asignar: tuple[date, ...] = ()
+    # Tipo "skus": las semanas de los 4 SKUs (por su primer día) que se le mueven al pago.
+    bloques_asignar: tuple[date, ...] = ()
 
 
 @dataclass
@@ -328,6 +352,9 @@ class PagoResuelto:
     descartada: bool = False  # la persona descartó la sugerencia de este pago
     sugerencia: Sugerencia | None = None
     dias_asignados: tuple[date, ...] = ()
+    # Los 4 SKUs: las semanas que este pago incluye (de la suya o de otra) y las de su propia ventana, con su destino.
+    skus_incluidos: tuple[dict, ...] = ()
+    skus_propios: tuple[dict, ...] = ()
 
     @property
     def ajustado(self) -> bool:
@@ -369,6 +396,8 @@ class FilaResuelta:
     cortes: list[Corte]
     overrides: dict[str, dict[str, date]]
     dias_asignados: dict[str, list[date]] = field(default_factory=dict)
+    # Semanas de 4 SKUs con comisión: {"ini", "fin", "comision", "pago_id" (o None si sigue sin pagarse)}.
+    skus: list[dict] = field(default_factory=list)
 
     def pago(self, pago_id: str) -> PagoResuelto:
         for p in self.pagos:
@@ -479,9 +508,15 @@ class _Ctx:
         descartadas: set[str],
         dias_asignados: Mapping[str, Collection[date]] | None = None,
         cierres_libres: list[list[tuple[date, float]]] | None = None,
+        bloques: Mapping[date, tuple[date, float, str]] | None = None,
+        skus_libres: list[tuple[date, date, float]] | None = None,
     ):
         self.vs = vs
         self.serie = serie
+        # Semanas de 4 SKUs movidas a un pago: {ini: (fin, comisión, pago_id)}.
+        self.bloques = bloques or {}
+        # Semanas de 4 SKUs que ningún pago ha incluido, de la más antigua a la más reciente.
+        self.skus_libres = skus_libres or []
         self.descartadas = descartadas
         self.dias_asignados = dias_asignados or {}
         # Por cada día de cierre: los días seguidos, hasta él, que ningún pago cubre ni tiene asignado,
@@ -492,7 +527,8 @@ class _Ctx:
         if v.cons and v.frozen_calc is not None:
             return v.frozen_calc
         extra = sum(self.serie.suma(d, d) for d in self.dias_asignados.get(v.pago_id, ()))
-        return self.serie.suma(v.ini, v.fin) + extra
+        skus = sum(m for _, m, pid in self.bloques.values() if pid == v.pago_id)
+        return self.serie.suma(v.ini, v.fin) + extra + skus
 
     def dif(self, v: _V) -> float:
         return self.calc(v) - v.pagado
@@ -510,10 +546,15 @@ def resolver_fila(
     estado: EstadoFila | None = None,
     sugerir_en: tuple[date, date] | None = None,
     cierres: Collection[date] | None = None,
+    serie4: SerieDiaria | None = None,
 ) -> FilaResuelta:
     """`sugerir_en`: si se da, solo se buscan sugerencias en los pagos que tocan ese rango; los demás
-    (vecinos cargados de margen) quedan como "sin explicación" sin gastar la búsqueda."""
+    (vecinos cargados de margen) quedan como "sin explicación" sin gastar la búsqueda.
+    `serie4`: la comisión diaria de los 4 SKUs de Botana, que NO va en `serie`: cada semana se mueve entera al pago que la pagó."""
     estado = estado or EstadoFila()
+    semanas4 = serie4.semanas() if serie4 else []
+    destino4 = {ini: estado.skus_movidos.get(ini) for ini, _, _ in semanas4}
+    bloques = {ini: (fin, m, destino4[ini]) for ini, fin, m in semanas4 if destino4[ini]}
     vs: list[_V] = []
     sin_ventana: list[PagoResuelto] = []
     defaults: dict[str, tuple[date | None, date | None]] = {}
@@ -548,7 +589,8 @@ def resolver_fila(
             d -= DIA
         if any(m > 0 for _, m in corrida):
             libres.append(corrida)
-    ctx = _Ctx(vs, serie, estado.descartadas, asignados, libres)
+    skus_libres = [(i, f, m) for i, f, m in semanas4 if not destino4[i]]
+    ctx = _Ctx(vs, serie, estado.descartadas, asignados, libres, bloques, skus_libres)
     docs_de = {p.pago_id: p.docs for p in pagos}
     pagado_vivo = {p.pago_id: p.pagado for p in pagos}
 
@@ -562,6 +604,14 @@ def resolver_fila(
             round(calculado, 2), round(dif, 2), OK, sin_calculo=calculado == 0,
             descartada=v.pago_id in ctx.descartadas,
             dias_asignados=asignados.get(v.pago_id, ()),
+            skus_incluidos=tuple(
+                {"ini": i, "fin": f, "comision": m} for i, (f, m, pid) in sorted(bloques.items()) if pid == v.pago_id
+            ),
+            skus_propios=tuple(
+                {"ini": i, "fin": f, "comision": m, "pago_id": destino4[i]}
+                for i, f, m in semanas4
+                if v.ini <= i <= v.fin
+            ),
         )
         if v.cons:
             r.estado = CONSOLIDADO
@@ -590,6 +640,7 @@ def resolver_fila(
     return FilaResuelta(
         key, resueltos + sin_ventana, huecos, traslapes, cortes, dict(estado.overrides),
         {k: list(v) for k, v in asignados.items()},
+        [{"ini": i, "fin": f, "comision": m, "pago_id": destino4[i]} for i, f, m in semanas4],
     )
 
 
@@ -733,7 +784,41 @@ def sugerir_cierre(ctx: _Ctx, i: int) -> Sugerencia | None:
     return Sugerencia("cierre", v.pago_id, (), (afectado,), len(candidatos) == 1, len(candidatos), dias_asignar=dias)
 
 
-GENERADORES: list[Callable[[_Ctx, int], "Sugerencia | None"]] = [sugerir_cierre, sugerir_borde]
+SKUS_MAX_SEMANAS = 4  # semanas seguidas de 4 SKUs que un solo pago puede estar pagando
+SKUS_SEMANAS_ATRAS = 10  # cuántas semanas hacia atrás se busca
+
+
+def sugerir_skus(ctx: _Ctx, i: int) -> Sugerencia | None:
+    """Un pago que paga de más puede estar cobrando semanas anteriores de los 4 SKUs que nunca se pagaron.
+
+    Se buscan, hacia atrás, tandas de semanas seguidas sin pagar (de una a `SKUS_MAX_SEMANAS`) que sumen justo lo que
+    sobra. Solo tandas seguidas: con combinaciones sueltas el azar acierta demasiado. Se ofrece la más corta; a igual
+    largo, la más cercana al pago."""
+    v = ctx.vs[i]
+    if v.cons or not ctx.skus_libres:
+        return None
+    dif = ctx.dif(v)
+    if dif >= -TOLERANCIA:
+        return None
+    previas = [s for s in ctx.skus_libres if s[0] <= v.fin and s[0] >= v.ini - DIA * 7 * SKUS_SEMANAS_ATRAS]
+    candidatos = []
+    for a in range(len(previas)):
+        total = 0.0
+        for b in range(a, min(a + SKUS_MAX_SEMANAS, len(previas))):
+            if b > a and previas[b][0] > previas[b - 1][1] + DIA:
+                break  # la tanda se parte: entre las dos hay una semana ya movida o sin comisión
+            total = round(total + previas[b][2], 2)
+            if abs(dif + total) <= TOLERANCIA:
+                candidatos.append((b - a + 1, -previas[b][0].toordinal(), tuple(s[0] for s in previas[a : b + 1]), total))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda c: (c[0], c[1]))
+    _, _, inis, total = candidatos[0]
+    afectado = Afectado(v.pago_id, v.ini, v.fin, v.ini, v.fin, round(dif, 2), round(dif + total, 2))
+    return Sugerencia("skus", v.pago_id, (), (afectado,), len(candidatos) == 1, len(candidatos), bloques_asignar=inis)
+
+
+GENERADORES: list[Callable[[_Ctx, int], "Sugerencia | None"]] = [sugerir_cierre, sugerir_skus, sugerir_borde]
 
 
 # ─── Conjunto de filas ───────────────────────────────────────────────────
@@ -750,12 +835,17 @@ def construir_filas(
 ) -> dict[FilaKey, FilaResuelta]:
     """Resuelve todas las filas. `diario`: dicts con sociedad, comisionista_id, division_code, fecha, comision."""
     dias: dict[FilaKey, dict[date, float]] = defaultdict(dict)
+    dias4: dict[FilaKey, dict[date, float]] = defaultdict(dict)
     for r in diario:
         k = (r["sociedad"], r["comisionista_id"], r["division_code"])
         dias[k][r["fecha"]] = dias[k].get(r["fecha"], 0.0) + float(r["comision"] or 0.0)
+        if r.get("comision_4sku"):
+            dias4[k][r["fecha"]] = dias4[k].get(r["fecha"], 0.0) + float(r["comision_4sku"])
 
     estados = estados or {}
     out = {}
     for key, pagos in agrupar_pagos(docs, cierre_de_mes, estandar, cierres).items():
-        out[key] = resolver_fila(key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en, cierres)
+        out[key] = resolver_fila(
+            key, pagos, SerieDiaria(dias.get(key)), estados.get(key), sugerir_en, cierres, SerieDiaria(dias4.get(key))
+        )
     return out

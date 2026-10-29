@@ -127,7 +127,7 @@ export async function getCortesDetalle(filters: CortesDetalleFilters): Promise<C
 
 // ── Edición de cortes ───────────────────────────────────────────────────────
 
-const RUTAS_EDICION: Record<CortesAccion | "historial" | "exportar", string> = {
+const RUTAS_EDICION: Record<CortesAccion | "historial" | "exportar" | "lineas" | "anio", string> = {
   mover: "/v1/comisionesbi/cortes/mover",
   "mover-borde": "/v1/comisionesbi/cortes/mover-borde",
   aplicar: "/v1/comisionesbi/cortes/sugerencia/aplicar",
@@ -139,14 +139,17 @@ const RUTAS_EDICION: Record<CortesAccion | "historial" | "exportar", string> = {
   "consolidar-lote": "/v1/comisionesbi/cortes/consolidar-lote",
   "fijar-ventana": "/v1/comisionesbi/cortes/fijar-ventana",
   "asignar-dias": "/v1/comisionesbi/cortes/asignar-dias",
+  "mover-skus": "/v1/comisionesbi/cortes/mover-skus",
   comentar: "/v1/comisionesbi/cortes/comentar",
   "borrar-comentario": "/v1/comisionesbi/cortes/borrar-comentario",
   "quitar-huerfano": "/v1/comisionesbi/cortes/quitar-huerfano",
   exportar: "/v1/comisionesbi/cortes/exportar",
+  lineas: "/v1/comisionesbi/cortes/lineas",
+  anio: "/v1/comisionesbi/cortes/anio",
   historial: "/v1/comisionesbi/cortes/historial"
 };
 
-export function esAccionDeEdicion(valor: string): valor is CortesAccion | "historial" | "exportar" {
+export function esAccionDeEdicion(valor: string): valor is CortesAccion | "historial" | "exportar" | "lineas" | "anio" {
   return Object.prototype.hasOwnProperty.call(RUTAS_EDICION, valor);
 }
 
@@ -157,7 +160,7 @@ export function esAccionDeEdicion(valor: string): valor is CortesAccion | "histo
  * `usuario` y `rol` salen de la sesión del servidor, nunca del cuerpo de la petición.
  */
 export async function postCortesEdicion(
-  accion: CortesAccion | "historial" | "exportar",
+  accion: CortesAccion | "historial" | "exportar" | "lineas" | "anio",
   cuerpo: unknown,
   sesion: { usuario: string; rol: string }
 ): Promise<{ status: number; payload: unknown }> {

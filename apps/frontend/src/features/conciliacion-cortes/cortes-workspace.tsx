@@ -6,12 +6,14 @@
 // panel a la derecha, fijo mientras se recorre la lista.
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import type { ComisionesCatalog, CortesEstado, CortesFila, CortesMesResponse, CortesPago, DivisionRow } from "@/types/comisiones";
+import type { ComisionesCatalog, CortesAnioResponse, CortesEstado, CortesFila, CortesMesResponse, CortesPago, DivisionRow } from "@/types/comisiones";
 import { CortesPanel } from "./cortes-panel";
 import {
   ETIQUETA_ESTADO,
   ETIQUETA_TOTAL,
   agruparPorComisionista,
+  cierresSinAsignar,
+  skusSinPagar,
   colaDePagos,
   esPendiente,
   etiquetaMes,
@@ -24,6 +26,7 @@ import {
   hayDrift,
   huecosDelMes,
   mesDeVista,
+  rangoDelMes,
   pesos,
   posicionarPagos,
   rangoCorto,
@@ -31,6 +34,7 @@ import {
   semanasDeVista,
   semanasDelMes,
   siguientePendiente,
+  sumarDias,
   textoDiferencia,
   totalesCortes,
   totalesPorColumna,
@@ -54,7 +58,137 @@ type Props = {
 
 type Seleccion = { filaId: string; pagoId: string };
 
-const ESTADOS_ARRIBA: CortesEstado[] = ["cons", "ok", "sug", "sin"];
+const ETIQUETA_KPI: Record<string, string> = { ok: "cuadran", sug: "sugeridos", sin: "sin explicación" };
+const ETIQUETA_DIVISION: Record<string, string> = { BO: "Botana", H: "Huevo", IA: "Croqueta", L: "Leche" };
+
+/** Año del mes elegido: pagado, calculado y diferencia por división. Se pide al montarse y se pliega con un clic. */
+function ResumenAnio({ anio }: { anio: number }) {
+  const [datos, setDatos] = useState<CortesAnioResponse | null>(null);
+  const [fallo, setFallo] = useState(false);
+  useEffect(() => {
+    let vigente = true;
+    setDatos(null);
+    setFallo(false);
+    fetch("/api/comisionesbi/cortes/editar/anio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ anio })
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<CortesAnioResponse>) : Promise.reject(new Error("anio"))))
+      .then((d) => vigente && setDatos(d))
+      .catch(() => vigente && setFallo(true));
+    return () => {
+      vigente = false;
+    };
+  }, [anio]);
+
+  if (fallo) return <p className="cortes-anio-nota">No se pudo cargar el total del año {anio}.</p>;
+  const filas = datos?.filas ?? [];
+  const pagado = filas.reduce((t, f) => t + f.pagado, 0);
+  const calculado = filas.reduce((t, f) => t + f.calculado, 0);
+  const dif = calculado - pagado;
+  return (
+    <details className="cortes-anio" open>
+      <summary>
+        <b>Año {anio}</b>
+        {datos ? (
+          <>
+            <span>
+              Pagado <em>{pesos(pagado)}</em>
+            </span>
+            <span>
+              Calculado <em>{pesos(calculado)}</em>
+            </span>
+            <span>
+              Diferencia <em className={dif < 0 ? "neg" : "pos"}>{textoDiferencia(dif)}</em>
+            </span>
+          </>
+        ) : (
+          <span>Calculando el año…</span>
+        )}
+      </summary>
+      {datos ? (
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>División</th>
+                <th>Pagado</th>
+                <th>Calculado</th>
+                <th>Diferencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f) => {
+                const d = f.calculado - f.pagado;
+                return (
+                  <tr key={`${f.sociedad}|${f.division_code}`}>
+                    <td>
+                      {f.sociedad} · {f.division_code ? (ETIQUETA_DIVISION[f.division_code] ?? f.division_code) : "Sin división"}
+                    </td>
+                    <td>{pesos(f.pagado)}</td>
+                    <td>{pesos(f.calculado)}</td>
+                    <td className={d < 0 ? "neg" : "pos"}>{textoDiferencia(d)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td>Total</td>
+                <td>{pesos(pagado)}</td>
+                <td>{pesos(calculado)}</td>
+                <td className={dif < 0 ? "neg" : "pos"}>{textoDiferencia(dif)}</td>
+              </tr>
+            </tfoot>
+          </table>
+          <p className="cortes-anio-nota">
+            Diferencia = calculado − pagado, por división en neto: lo de más y lo de menos se compensan.
+            {datos.skus_apartados > 0
+              ? ` El calculado de Botana no incluye ${pesos(datos.skus_apartados)} de los 4 SKUs de enero a agosto, que no se pagaron en su semana.`
+              : ""}
+          </p>
+        </>
+      ) : null}
+    </details>
+  );
+}
+
+function sumaSkus(l?: { comision: number }[]): number {
+  return (l ?? []).reduce((t, b) => t + b.comision, 0);
+}
+
+/** Botana hasta agosto: lo calculado sin los 4 SKUs y, aparte, lo de los 4 SKUs de esta semana y dónde quedó. */
+function SubcajasSkus({ pago }: { pago: CortesPago }) {
+  const propios = pago.skus_propios ?? [];
+  const deOtras = (pago.skus_incluidos ?? []).filter((b) => !propios.some((p) => p.ini === b.ini));
+  const sinPagar = propios.filter((b) => !b.pago_id);
+  const aqui = propios.filter((b) => b.pago_id === pago.pago_id);
+  const estado = !propios.length
+    ? ""
+    : sinPagar.length === propios.length
+      ? "sin pagar"
+      : aqui.length === propios.length
+        ? "en esta semana"
+        : "movidos";
+  return (
+    <span className="cortes-celda-skus">
+      <span>
+        <em>Resto</em> {pesos((pago.calculado ?? 0) - sumaSkus(pago.skus_incluidos))}
+      </span>
+      {propios.length ? (
+        <span className={`is-skus${sinPagar.length ? " is-pendiente" : ""}`}>
+          <em>4 SKUs</em> {pesos(sumaSkus(propios))} <small>{estado}</small>
+        </span>
+      ) : null}
+      {deOtras.length ? (
+        <span className="is-skus is-recibe">
+          <em>+ 4 SKUs</em> {pesos(sumaSkus(deOtras))} <small>de otras semanas</small>
+        </span>
+      ) : null}
+    </span>
+  );
+}
 
 function etiquetaDivision(fila: DivisionRow): { codigo: string; nombre: string } {
   const codigo = String(fila.business_area_code ?? "");
@@ -71,7 +205,7 @@ function conFilaNueva(respuesta: CortesMesResponse, nueva: CortesFila): CortesMe
 
 export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResponse, mesInicial, meses, puedeEditar }: Props) {
   // Las semanas que se ven. El selector de mes las coloca y las flechas las desplazan de una en una.
-  const [vista, setVista] = useState<VistaSemanas>(() => vistaDeMes(mesInicial));
+  const [vista, setVista] = useState<VistaSemanas>(() => vistaDeMes(mesInicial, hoy));
   const mes = mesDeVista(vista);
   const [respuesta, setRespuesta] = useState(initialResponse);
   const [error, setError] = useState(initialError);
@@ -117,7 +251,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
     }
   }
 
-  const cargarMes = (nuevo: string) => cargarVista(vistaDeMes(nuevo));
+  const cargarMes = (nuevo: string) => cargarVista(vistaDeMes(nuevo, hoy));
   const primeraSemana = vistaDeMes(meses[meses.length - 1] ?? mesInicial).ini;
   const puedeIrAtras = vista.ini > primeraSemana;
   const puedeIrAdelante = desplazarVista(vista, 1).ini <= hoy;
@@ -131,7 +265,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
       const res = await fetch("/api/comisionesbi/cortes/editar/consolidar-lote", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...cuerpoDe(vista), fila_ids: filasFiltradas.map((f) => f.fila_id) })
+        body: JSON.stringify({ desde: rangoMes.ini, hasta: rangoMes.fin, fila_ids: filasFiltradas.map((f) => f.fila_id) })
       });
       const payload = (await res.json().catch(() => null)) as { consolidados?: number; filas?: number; omitidas?: number; detail?: string } | null;
       if (!res.ok || !payload) throw new Error(payload?.detail || "No se pudo consolidar.");
@@ -156,6 +290,9 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   const desde = respuesta?.desde ?? vista.ini;
   const hasta = respuesta?.hasta ?? finDeVista(vista);
   const semanas = useMemo(() => semanasDeVista(vista), [vista]);
+  // El mes elegido: lo que cuentan los totales y el lote. Las semanas de contexto a cada lado solo se ven.
+  const rangoMes = useMemo(() => rangoDelMes(mes), [mes]);
+  const fueraDelMes = (ini: string, fin: string) => fin < rangoMes.ini || ini > rangoMes.fin;
 
   const nombresDivision = useMemo(() => {
     const mapa: Record<string, string> = {};
@@ -180,9 +317,20 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
     [filas, division, comisionistaId, soloAccion, seleccion]
   );
   const ocultas = filasFiltradas.length - visibles.length;
-  const totales = useMemo(() => totalesCortes(filasFiltradas, desde, hasta), [filasFiltradas, desde, hasta]);
+  const totales = useMemo(() => totalesCortes(filasFiltradas, rangoMes.ini, rangoMes.fin), [filasFiltradas, rangoMes]);
+  const skusPendientes = useMemo(
+    () =>
+      filasFiltradas.reduce(
+        (t, f) => {
+          const s = skusSinPagar(f, rangoMes.ini, rangoMes.fin);
+          return { n: t.n + s.n, comision: t.comision + s.comision };
+        },
+        { n: 0, comision: 0 }
+      ),
+    [filasFiltradas, rangoMes]
+  );
   const grupos = useMemo(() => agruparPorComisionista(visibles), [visibles]);
-  const lote = useMemo(() => resumenLote(filasFiltradas), [filasFiltradas]);
+  const lote = useMemo(() => resumenLote(filasFiltradas, rangoMes), [filasFiltradas, rangoMes]);
 
   const opcionesComisionista = useMemo(() => {
     const vistos = new Map<string, string>();
@@ -388,34 +536,48 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
           ) : null}
         </div>
 
-        <dl className="cortes-kpis">
-          {ESTADOS_ARRIBA.map((estado) => {
-            const t = totales.porEstado[estado];
-            return (
-              <div className={`cortes-kpi is-${estado}`} key={estado}>
-                <dt>{ETIQUETA_TOTAL[estado]}</dt>
-                <dd>{t.n}</dd>
-                <small>{pesos(t.calculado)} calculado</small>
-                {estado === "sug" || estado === "sin" ? <small title="Suma de las diferencias en valor absoluto">Dif. {pesos(t.difAbs)}</small> : null}
-              </div>
-            );
-          })}
-          <div className="cortes-kpi is-sinv">
-            <dt>{ETIQUETA_TOTAL.sinv}</dt>
-            <dd>{totales.porEstado.sinv.n}</dd>
-            <small>{pesos(totales.porEstado.sinv.pagado)} pagado</small>
+        <div className="cortes-kpis">
+          <div className="cortes-kpis-1">
+            {(["ok", "sug", "sin"] as CortesEstado[]).map((estado) => {
+              const t = totales.porEstado[estado];
+              return (
+                <span className={`cortes-chip alto is-${estado}`} key={estado}>
+                  <span className="tot">
+                    <b>{t.n}</b> {ETIQUETA_KPI[estado]}
+                  </span>
+                  <span className="k">calc.</span>
+                  <span className="v">{pesos(t.calculado)}</span>
+                  <span className="k">dif.</span>
+                  <span className="v" title="Suma de las diferencias en valor absoluto">
+                    {pesos(t.difAbs)}
+                  </span>
+                </span>
+              );
+            })}
           </div>
-          <div className="cortes-kpi is-hueco es-ancho">
-            <dt>Comisión calculada sin pago</dt>
-            <dd>{totales.sinPago.n}</dd>
-            <small>{pesos(totales.sinPago.comision)} de comisión</small>
+          <div className="cortes-kpis-2">
+            <span className="cortes-chip is-cons">
+              <b>{totales.porEstado.cons.n}</b> consolidados
+            </span>
+            <span className="cortes-chip is-sinv">
+              <b>{totales.porEstado.sinv.n}</b> sin ventana
+            </span>
+            <span className="cortes-chip is-hueco" title="Comisión calculada que ningún pago cubre">
+              <b>{totales.sinPago.n}</b> sin pago <b>{pesos(totales.sinPago.comision)}</b>
+            </span>
             {totales.cierre.n ? (
-              <small title="Lo cobrado el último día del mes no entra en el pago de su semana y aún no está asignado a otro pago">
-                Cierre de mes: {pesos(totales.cierre.comision)}
-              </small>
+              <span className="cortes-chip is-hueco" title="Lo cobrado el último día del mes no entra en el pago de su semana y aún no está asignado a otro pago">
+                cierre mes sin asignar <b>{pesos(totales.cierre.comision)}</b>
+              </span>
+            ) : null}
+            {skusPendientes.n ? (
+              <span className="cortes-chip is-skus" title="Comisión de los 4 SKUs de Botana de este mes que aún no está incluida en ningún pago">
+                4 SKUs sin pagar <b>{pesos(skusPendientes.comision)}</b>
+              </span>
             ) : null}
           </div>
-        </dl>
+          <ResumenAnio anio={Number(mes.slice(0, 4))} />
+        </div>
       </section>
 
       <div className={`cortes-cuerpo${filaSeleccionada ? " con-panel" : ""}`}>
@@ -431,7 +593,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
               ◀ Semana anterior
             </button>
             <div className="cortes-lista-centro">
-              <h2>Pagos de {etiquetaVista(vista)} por comisionista</h2>
+              <h2>Pagos de {etiquetaVista(vista, hoy)} por comisionista</h2>
               <span>
                 {grupos.length} comisionista(s) · el total muestra pagado y calculado; ábrelo para ver cada división con su diferencia
                 {cargando ? " · cargando…" : ""}
@@ -459,7 +621,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                   {semanas.map((s, i) => {
                     const t = totalesSemana[i];
                     return (
-                      <span className="cortes-cab-col" key={s.ini}>
+                      <span className={`cortes-cab-col${fueraDelMes(s.ini, s.fin) ? " is-fuera" : " is-mes"}`} key={s.ini}>
                         {rangoCorto(s.ini, s.fin)}
                         {t.n ? (
                           <span className="cortes-cab-tot">
@@ -527,6 +689,8 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                             const posicionados = posicionarPagos(fila.pagos, semanas);
                             const sinVentana = fila.pagos.filter((p) => p.estado === "sinv");
                             const hueco = huecosDelMes(fila, desde, hasta);
+                            const skusPend = skusSinPagar(fila, desde, hasta);
+                            const cierresPend = cierresSinAsignar(fila).filter((h) => h.ini <= hasta && h.fin >= desde);
                             const cubiertas = new Set<number>();
                             posicionados.forEach(({ colIni, colFin }) => {
                               for (let c = colIni; c <= colFin; c++) cubiertas.add(c);
@@ -542,6 +706,16 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                     {filaTodoCuadra(fila) ? " · todo cuadra" : ""}
                                   </span>
                                   {hueco.n ? <em>Comisión calculada sin pago: {pesos(hueco.comision)}</em> : null}
+                                  {skusPend.n ? (
+                                    <em className="cortes-quien-skus">
+                                      ● 4 SKUs sin pagar: {pesos(skusPend.comision)} ({skusPend.n} {skusPend.n === 1 ? "semana" : "semanas"})
+                                    </em>
+                                  ) : null}
+                                  {cierresPend.map((h) => (
+                                    <em className="cortes-quien-cierre" key={h.ini}>
+                                      ● Cierre del {h.ini === h.fin ? fechaCorta(h.ini) : rangoCorto(h.ini, h.fin)} sin asignar: {pesos(h.comision)}
+                                    </em>
+                                  ))}
                                   {fila.huerfanos?.length ? <em>⚠ {fila.huerfanos.length} guardado(s) de un documento que ya no está</em> : null}
                                 </div>
                                 {posicionados.map(({ pago, colIni, colFin }) => {
@@ -550,7 +724,7 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                     <button
                                       aria-label={`${grupo.nombre}, ${nombreDeFila(fila)}, pago ${rangoCorto(pago.ini!, pago.fin!)}, ${ETIQUETA_ESTADO[pago.estado]}`}
                                       aria-pressed={elegida}
-                                      className={`cortes-celda is-${pago.estado}${elegida ? " es-seleccion" : ""}`}
+                                      className={`cortes-celda is-${pago.estado}${elegida ? " es-seleccion" : ""}${fueraDelMes(pago.ini!, pago.fin!) ? " is-fuera" : ""}`}
                                       key={pago.pago_id}
                                       onClick={() => elegir({ filaId: fila.fila_id, pagoId: pago.pago_id })}
                                       style={{ gridColumn: `${colIni + 2} / ${colFin + 3}` }}
@@ -580,6 +754,14 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                       <span className="cortes-celda-fila is-dif">
                                         <em>Dif.</em> <b>{textoDiferencia(pago.diferencia)}</b>
                                       </span>
+                                      {pago.skus_propios?.length || pago.skus_incluidos?.length ? <SubcajasSkus pago={pago} /> : null}
+                                      {cierresPend
+                                        .filter((h) => sumarDias(pago.fin!, 1) === h.ini)
+                                        .map((h) => (
+                                          <span className="cortes-celda-cierre" key={h.ini} title="El último día del mes no está asignado a ningún pago">
+                                            ● {h.ini === h.fin ? fechaCorta(h.ini) : rangoCorto(h.ini, h.fin)} sin asignar
+                                          </span>
+                                        ))}
                                     </button>
                                   );
                                 })}

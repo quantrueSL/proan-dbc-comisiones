@@ -145,8 +145,9 @@ class CortesMesQuery(BaseModel):
         if self.desde and self.hasta:
             if self.desde > self.hasta:
                 raise ValueError("desde no puede ser posterior a hasta.")
-            if (self.hasta - self.desde).days > 62:
-                raise ValueError("El rango no puede pasar de 62 días.")
+            # el mes con 2 semanas de contexto a cada lado llega a 70 días
+            if (self.hasta - self.desde).days > 84:
+                raise ValueError("El rango no puede pasar de 84 días.")
         elif not self.mes:
             raise ValueError("Indica el mes (AAAA-MM) o el rango desde/hasta.")
         return self
@@ -191,6 +192,8 @@ class CortesAplicarBody(CortesEdicion):
     cambios: list[CortesCambioBody] | None = None
     # Los días de cierre que la persona vio en una sugerencia de ese tipo.
     dias: list[date] | None = None
+    # Las semanas de 4 SKUs que la persona vio en una sugerencia de ese tipo.
+    bloques: list[date] | None = None
 
 
 class CortesPagoBody(CortesEdicion):
@@ -226,6 +229,22 @@ class CortesLoteBody(BaseModel):
         return self
 
 
+class CortesSemanaSkus(BaseModel):
+    ini: date
+    fin: date
+
+
+class CortesLineasBody(BaseModel):
+    sociedad: str
+    comisionista_id: str
+    division_code: str | None = None
+    docs: list[str] = Field(max_length=4)
+    ini: date
+    fin: date
+    dias: list[date] = Field(default_factory=list, max_length=31)
+    skus: list[CortesSemanaSkus] = Field(default_factory=list, max_length=40)
+
+
 class CortesExportarBody(BaseModel):
     sociedad: str
     comisionista_id: str
@@ -234,6 +253,8 @@ class CortesExportarBody(BaseModel):
     fin: date
     # Días de cierre de mes que el pago tiene asignados (se suman a su ventana).
     dias: list[date] = Field(default_factory=list, max_length=31)
+    # Semanas de los 4 SKUs de Botana que el pago incluye (de la suya o de otra): primer y último día de cada una.
+    skus: list[CortesSemanaSkus] = Field(default_factory=list, max_length=40)
 
 
 class CortesVentanaBody(CortesEdicion):
@@ -245,6 +266,16 @@ class CortesVentanaBody(CortesEdicion):
 class CortesDiasBody(CortesEdicion):
     pago_id: str
     dias: list[date] = Field(max_length=31)
+
+
+class CortesSkusBody(CortesEdicion):
+    bloques_ini: list[date] = Field(min_length=1, max_length=40)
+    # Pago al que se mueve esa semana de 4 SKUs; vacío = vuelve a quedar sin pagar.
+    pago_id: str | None = None
+
+
+class CortesAnioBody(BaseModel):
+    anio: int = Field(ge=2020, le=2100)
 
 
 class CortesHistorialBody(BaseModel):
@@ -445,7 +476,7 @@ def post_cortes_aplicar(body: CortesAplicarBody, usuario: str = Depends(editor))
     return cortes.aplicar_sugerencia(
         mes=body.mes, key=_llave(body), pago_id=body.pago_id,
         cambios_vistos=[c.model_dump() for c in body.cambios] if body.cambios is not None else None,
-        version=body.version, usuario=usuario, dias_vistos=body.dias,
+        version=body.version, usuario=usuario, dias_vistos=body.dias, bloques_vistos=body.bloques,
     )
 
 
@@ -510,6 +541,15 @@ def post_cortes_asignar_dias(body: CortesDiasBody, usuario: str = Depends(editor
     )
 
 
+@app.post("/v1/comisionesbi/cortes/mover-skus")
+def post_cortes_mover_skus(body: CortesSkusBody, usuario: str = Depends(editor)) -> dict:
+    """Mueve una semana de los 4 SKUs de Botana al pago que la pagó (o la deja sin pagar)."""
+    return cortes.mover_skus(
+        mes=body.mes, key=_llave(body), bloques_ini=body.bloques_ini, pago_id=body.pago_id or None,
+        version=body.version, usuario=usuario,
+    )
+
+
 @app.post("/v1/comisionesbi/cortes/comentar")
 def post_cortes_comentar(body: CortesComentarBody, usuario: str = Depends(editor)) -> dict:
     """Deja un comentario en el pago (con quién y cuándo)."""
@@ -543,7 +583,25 @@ def post_cortes_exportar(body: CortesExportarBody) -> dict:
     return cortes.build_export_pago(
         sociedad=body.sociedad, comisionista_id=body.comisionista_id, division_code=body.division_code,
         ini=body.ini, fin=body.fin, dias=body.dias,
+        skus=[(b.ini, b.fin) for b in body.skus],
     )
+
+
+@app.post("/v1/comisionesbi/cortes/lineas")
+def post_cortes_lineas(body: CortesLineasBody) -> dict:
+    """Pagado por línea del pedido contra calculado por familia de un pago de Botana."""
+    if body.fin < body.ini or (body.fin - body.ini).days > 62:
+        raise HTTPException(status_code=422, detail="La ventana del pago no es válida.")
+    return cortes.build_lineas_pago(
+        sociedad=body.sociedad, comisionista_id=body.comisionista_id, division_code=body.division_code,
+        docs=body.docs, ini=body.ini, fin=body.fin, dias=body.dias, skus=[(b.ini, b.fin) for b in body.skus],
+    )
+
+
+@app.post("/v1/comisionesbi/cortes/anio")
+def post_cortes_anio(body: CortesAnioBody) -> dict:
+    """Pagado y calculado del año por división (cualquier rol puede verlo)."""
+    return cortes.build_anio(anio=body.anio)
 
 
 @app.post("/v1/comisionesbi/cortes/historial")

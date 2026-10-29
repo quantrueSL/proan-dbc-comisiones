@@ -547,3 +547,59 @@ def test_el_bloque_de_fin_de_mes_incluye_los_dias_que_la_semana_anterior_suelta(
     fr = resolver_fila(key, pagos, SerieDiaria(dias), EstadoFila(overrides={a_id: {"fin": date(2026, 6, 28)}}, dias_asignados=asignados), cierres=cierres)
     assert fr.huecos == [] and all(p.estado == OK for p in fr.pagos)
     assert fr.pagos[1].dias_asignados == (date(2026, 6, 29), date(2026, 6, 30))
+
+
+# ─── 4 SKUs de Botana: cada semana se mueve entera al pago que la pagó ───
+
+
+def _botana():
+    key = ("DBC", "0000018853", "BO")
+    resto = SerieDiaria({date(2026, 7, 20): 1000.0, date(2026, 7, 27): 1000.0})
+    skus = SerieDiaria({date(2026, 7, 20): 491.25, date(2026, 7, 27): 264.0})
+    docs_ = [
+        DocPago("DBC|2026|A", "DBC", key[1], "BO", date(2026, 7, 18), date(2026, 7, 24), 1000.0),
+        DocPago("DBC|2026|B", "DBC", key[1], "BO", date(2026, 7, 25), date(2026, 7, 31), 1755.25),
+    ]
+    return key, resto, skus, agrupar_pagos(docs_)[key]
+
+
+def test_las_semanas_de_4_skus_se_agrupan_sabado_a_viernes_y_se_cortan_en_fin_de_mes():
+    assert cc.bloque_de(date(2026, 7, 20)) == (date(2026, 7, 18), date(2026, 7, 24))
+    assert cc.bloque_de(date(2026, 8, 30)) == (date(2026, 8, 29), date(2026, 8, 31))
+    assert cc.bloque_de(date(2026, 9, 2)) == (date(2026, 9, 1), date(2026, 9, 4))
+
+
+def test_los_4_skus_no_cuentan_en_su_semana_hasta_que_alguien_los_mueve():
+    key, resto, skus, pagos = _botana()
+    fila = resolver_fila(key, pagos, resto, serie4=skus)
+    a, b = fila.pago("DBC|2026|A"), fila.pago("DBC|2026|B")
+    assert (a.calculado, a.estado) == (1000.0, OK)
+    assert b.calculado == 1000.0 and b.diferencia == -755.25
+    assert [x["comision"] for x in fila.skus] == [491.25, 264.0]
+    assert all(x["pago_id"] is None for x in fila.skus)
+
+
+def test_mover_una_semana_de_4_skus_a_otro_pago_cambia_su_calculado():
+    key, resto, skus, pagos = _botana()
+    estado = EstadoFila(skus_movidos={date(2026, 7, 18): "DBC|2026|B", date(2026, 7, 25): "DBC|2026|B"})
+    fila = resolver_fila(key, pagos, resto, estado, serie4=skus)
+    b = fila.pago("DBC|2026|B")
+    assert b.calculado == 1755.25 and b.estado == OK
+    assert [x["ini"] for x in b.skus_incluidos] == [date(2026, 7, 18), date(2026, 7, 25)]
+    assert fila.pago("DBC|2026|A").calculado == 1000.0
+    assert [x["pago_id"] for x in fila.skus] == ["DBC|2026|B", "DBC|2026|B"]
+
+
+def test_un_pago_que_paga_de_mas_sugiere_las_semanas_de_4_skus_que_suman_el_exceso():
+    key = ("DBC", "0000018853", "BO")
+    semanas = [date(2026, 7, 4), date(2026, 7, 11), date(2026, 7, 18), date(2026, 7, 25)]
+    resto = SerieDiaria({**{s + timedelta(days=2): 1000.0 for s in semanas}, date(2026, 8, 4): 1000.0})
+    skus = SerieDiaria({semanas[0] + timedelta(days=2): 421.5, semanas[1] + timedelta(days=2): 295.5,
+                        semanas[2] + timedelta(days=2): 491.25, semanas[3] + timedelta(days=2): 426.0})
+    docs_ = [DocPago(f"DBC|2026|{n}", "DBC", key[1], "BO", s, s + timedelta(days=6), 1000.0) for n, s in enumerate(semanas)]
+    docs_.append(DocPago("DBC|2026|Z", "DBC", key[1], "BO", date(2026, 8, 1), date(2026, 8, 7), 1000.0 + 295.5 + 491.25))
+    fila = resolver_fila(key, agrupar_pagos(docs_)[key], resto, serie4=skus)
+    z = fila.pago("DBC|2026|Z")
+    assert z.sugerencia and z.sugerencia.tipo == "skus"
+    assert z.sugerencia.bloques_asignar == (date(2026, 7, 11), date(2026, 7, 18))
+    assert z.sugerencia.afectados[0].diferencia_despues == 0.0

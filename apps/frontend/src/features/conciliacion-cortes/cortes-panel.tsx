@@ -12,6 +12,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type {
   CortesAccion,
   CortesDetalleResponse,
+  CortesLineasPagoResponse,
   CortesEvento,
   CortesExportPagoResponse,
   CortesFila,
@@ -24,12 +25,15 @@ import {
   calculadoPorParte,
   cortesMovidos,
   describirCierre,
+  describirSkus,
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
+  etiquetaMes,
   fechaConDia,
   fechaCorta,
   limitesDeCorte,
+  limitesDeFin,
   moverCorteLocal,
   nombreComisionista,
   pagosEnVista,
@@ -238,6 +242,12 @@ function describirEvento(e: CortesEvento): string {
       return `comentó: “${e.detalle?.texto ?? ""}”`;
     case "borrar_comentario":
       return "borró un comentario";
+    case "mover_skus": {
+      const semanas = (e.detalle?.bloques ?? "").split(",").filter(Boolean).map(fechaCorta).join(", ");
+      return e.detalle?.destino
+        ? `movió a este pago los 4 SKUs de las semanas del ${semanas}`
+        : `dejó sin pagar los 4 SKUs de las semanas del ${semanas}`;
+    }
     case "asignar_dias":
       return e.detalle?.dias ? `asignó los días de cierre ${e.detalle.dias.split(",").map(fechaCorta).join(", ")}` : "quitó los días de cierre asignados";
     default:
@@ -266,6 +276,7 @@ export function CortesPanel({
   const [datos, setDatos] = useState<CortesFilaResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<CortesDetalleResponse | null>(null);
+  const [lineasPago, setLineasPago] = useState<CortesLineasPagoResponse | null>(null);
   const [detalleError, setDetalleError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
@@ -278,6 +289,7 @@ export function CortesPanel({
   const [comentario, setComentario] = useState("");
   // Días de cierre de mes que la persona marcó para incluirlos en este pago.
   const [diasElegidos, setDiasElegidos] = useState<string[]>([]);
+  const [skusElegidos, setSkusElegidos] = useState<string[]>([]);
   const temporizador = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ultimaFecha = useRef<{ izqId: string; fecha: string } | null>(null);
 
@@ -322,6 +334,33 @@ export function CortesPanel({
     [filaBase, dias, pendiente]
   );
   const pago = (fila ?? filaResumen).pagos.find((p) => p.pago_id === pagoId) ?? null;
+
+  // Botana: lo pagado por línea del pedido contra lo calculado por familia; se vuelve a pedir si cambia lo que el pago incluye.
+  const lineasKey =
+    pago?.ini && pago.fin && filaResumen.division_code === "BO"
+      ? JSON.stringify([pago.pago_id, pago.ini, pago.fin, pago.dias_asignados ?? [], (pago.skus_incluidos ?? []).map((b) => b.ini)])
+      : null;
+  useEffect(() => {
+    setLineasPago(null);
+    if (!lineasKey || !pago?.ini || !pago.fin) return;
+    let vigente = true;
+    pedir<CortesLineasPagoResponse>("/api/comisionesbi/cortes/editar/lineas", {
+      sociedad: filaResumen.sociedad,
+      comisionista_id: filaResumen.comisionista_id,
+      division_code: filaResumen.division_code,
+      docs: pago.docs,
+      ini: pago.ini,
+      fin: pago.fin,
+      dias: pago.dias_asignados ?? [],
+      skus: (pago.skus_incluidos ?? []).map(({ ini, fin }) => ({ ini, fin }))
+    })
+      .then((r) => vigente && setLineasPago(r))
+      .catch(() => vigente && setLineasPago(null));
+    return () => {
+      vigente = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineasKey]);
 
   // El detalle por producto se pide solo al abrir su pestaña (y otra vez si la ventana cambió).
   const ventanaKey = pago?.ini && pago.fin ? `${pago.ini}|${pago.fin}` : null;
@@ -369,6 +408,7 @@ export function CortesPanel({
         setDatos(payload);
         setHistorial(null);
         setDiasElegidos([]);
+        setSkusElegidos([]);
         onFilaActualizada(payload.fila);
         if (mensajeExito) onAccionHecha(mensajeExito, payload.fila, avanzar);
         return true;
@@ -414,6 +454,52 @@ export function CortesPanel({
     }, PAUSA_PARA_GUARDAR_MS);
   }
 
+  // Mover el fin de un pago que no comparte corte con el siguiente (hay días de cierre en medio): los días que suelta quedan libres.
+  function moverFin(izqId: string, derId: string, delta: number) {
+    if (!filaBase || guardando) return;
+    const izq = filaBase.pagos.find((p) => p.pago_id === izqId);
+    const limites = limitesDeFin(filaBase, izqId, derId);
+    if (!izq?.fin || !limites) return;
+    const nueva = sumarDias(izq.fin, delta);
+    if (nueva < limites.min || nueva > limites.max) return;
+    void editar("mover-borde", { pago_id: izqId, borde: "fin", fecha: nueva }, undefined, false);
+  }
+
+  // Flechas del fin del pago de la izquierda, en el hueco o el salto de fin de mes que lo separa del siguiente.
+  function flechasFin(el: { izq: string; der: string }) {
+    const izq = filaBase?.pagos.find((p) => p.pago_id === el.izq);
+    const limites = filaBase ? limitesDeFin(filaBase, el.izq, el.der) : null;
+    if (!izq?.fin || !limites) return null;
+    const movible = puedeEditar && izq.estado !== "cons";
+    return (
+      <div className="cortes-corte is-salto">
+        <span>Fin del pago anterior</span>
+        <b>{fechaConDia(izq.fin)}</b>
+        {movible ? (
+          <span className="cortes-corte-flechas">
+            <button
+              aria-label="Mover el fin del pago un día antes"
+              disabled={guardando || izq.fin <= limites.min}
+              onClick={() => moverFin(el.izq, el.der, -1)}
+              title="Suelta ese día: queda libre para sumarlo al pago siguiente"
+              type="button"
+            >
+              ◀
+            </button>
+            <button
+              aria-label="Mover el fin del pago un día después"
+              disabled={guardando || izq.fin >= limites.max}
+              onClick={() => moverFin(el.izq, el.der, 1)}
+              type="button"
+            >
+              ▶
+            </button>
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
   // Excel del pago: lo de la pestaña de Conciliación (por producto, por día y por línea de factura) de su ventana.
   async function descargarExcel() {
     if (!pago?.ini || !pago.fin) return;
@@ -426,7 +512,8 @@ export function CortesPanel({
         division_code: filaResumen.division_code,
         ini: pago.ini,
         fin: pago.fin,
-        dias: pago.dias_asignados ?? []
+        dias: pago.dias_asignados ?? [],
+        skus: (pago.skus_incluidos ?? []).map(({ ini, fin }) => ({ ini, fin }))
       });
       // Lo que se tocó a mano en este pago, del historial de la fila (de lo más viejo a lo más nuevo).
       const hist = await pedir<CortesHistorialResponse>("/api/comisionesbi/cortes/editar/historial", {
@@ -436,7 +523,7 @@ export function CortesPanel({
         limite: 100
       }).catch(() => ({ eventos: [] as CortesEvento[] }));
       const modificaciones = hist.eventos
-        .filter((e) => e.pago_id === pago.pago_id || !!e.antes?.[pago.pago_id] || !!e.despues?.[pago.pago_id] || (e.detalle?.pagos ?? "").split(",").includes(pago.pago_id))
+        .filter((e) => e.pago_id === pago.pago_id || !!e.antes?.[pago.pago_id] || !!e.despues?.[pago.pago_id] || (e.detalle?.pagos ?? "").split(",").includes(pago.pago_id) || (e.detalle?.origen ?? "").split(",").includes(pago.pago_id))
         .reverse()
         .map((e) => ({
           cuando: e.ts ? formatoMomento.format(new Date(e.ts)) : "—",
@@ -491,8 +578,17 @@ export function CortesPanel({
   const consolidado = pago.estado === "cons";
   // Cierre de mes a mano: los días libres de los huecos de cierre y los que este pago ya tiene asignados.
   const huecosCierre = puedeEditar && !consolidado && !sinVentana ? filaActual.huecos.filter((h) => h.cierre) : [];
+  // Huecos de cierre ordenados por cercanía al pago: el del mes que se está viendo queda primero.
+  const diasDeDistancia = (h: { ini: string; fin: string }) => {
+    const ref = pago.ini ?? h.ini;
+    const dif = h.fin < ref ? Date.parse(ref) - Date.parse(h.fin) : Date.parse(h.ini) - Date.parse(pago.fin ?? ref);
+    return Math.max(0, Math.round(dif / 86400000));
+  };
+  const huecosCierreOrdenados = [...huecosCierre].sort((a, b) => diasDeDistancia(a) - diasDeDistancia(b));
   const diasPropios = pago.dias_asignados ?? [];
   const asignadosAOtros = new Set(filaActual.pagos.filter((p) => p.pago_id !== pago.pago_id).flatMap((p) => p.dias_asignados ?? []));
+  const semanasSkus = filaActual.skus ?? [];
+  const sumaSkusElegida = semanasSkus.filter((b) => skusElegidos.includes(b.ini)).reduce((t, b) => t + b.comision, 0);
   const sumaElegida = diasElegidos.reduce((t, d) => t + (dias.get(d) ?? 0), 0);
   const alternarDia = (d: string) => setDiasElegidos((previos) => (previos.includes(d) ? previos.filter((x) => x !== d) : [...previos, d].sort()));
   /** Los pagos consolidados a cada lado de un corte (uno o los dos). */
@@ -791,6 +887,9 @@ export function CortesPanel({
                               </div>
                             );
                           }
+                          if (el.tipo === "salto") {
+                            return <Fragment key={`s${i}`}>{flechasFin(el)}</Fragment>;
+                          }
                           if (el.tipo === "traslape") {
                             return (
                               <div className="cortes-corte is-traslape" key={`t${i}`}>
@@ -805,6 +904,7 @@ export function CortesPanel({
                             for (let d = el.ini; d <= el.fin; d = sumarDias(d, 1)) dd.push(d);
                             return (
                               <div className={`cortes-tramo is-hueco${el.cierre ? " is-cierre" : ""}`} key={`h${i}`}>
+                                {flechasFin(el)}
                                 <div className="cortes-tramo-cab">
                                   <b>{el.cierre ? "Cierre de mes" : "Sin pago"}</b>
                                   <span className={`cortes-pastilla ${el.cierre ? "is-cons" : "is-sinv"}`}>
@@ -850,21 +950,22 @@ export function CortesPanel({
                               </div>
                               <Cifras pago={p} />
                               <div className="cortes-dias">
-                                {dd.map((d) => (
-                                  <div
-                                    className={`cortes-dia c${indice % 3}${marcados.has(d) ? " is-mv" : ""}`}
-                                    key={d}
-                                  >
-                                    <small>{fechaConDia(d).replace(" ", "\n")}</small>
-                                    {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
-                                  </div>
-                                ))}
-                                {(p.dias_asignados ?? []).map((d) => (
-                                  <div className="cortes-dia is-asignado" key={`a${d}`} title="Día de cierre asignado a este pago">
-                                    <small>{fechaConDia(d).replace(" ", "\n")}</small>
-                                    {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
-                                  </div>
-                                ))}
+                                {/* los días asignados van en su lugar: a la izquierda si son anteriores a la ventana, a la derecha si son posteriores */}
+                                {[...(p.dias_asignados ?? []).map((d) => ({ d, asignado: true })), ...dd.map((d) => ({ d, asignado: false }))]
+                                  .sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : 0))
+                                  .map(({ d, asignado }) =>
+                                    asignado ? (
+                                      <div className="cortes-dia is-asignado" key={`a${d}`} title="Día de cierre asignado a este pago">
+                                        <small>{fechaConDia(d).replace(" ", "\n")}</small>
+                                        {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
+                                      </div>
+                                    ) : (
+                                      <div className={`cortes-dia c${indice % 3}${marcados.has(d) ? " is-mv" : ""}`} key={d}>
+                                        <small>{fechaConDia(d).replace(" ", "\n")}</small>
+                                        {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
+                                      </div>
+                                    )
+                                  )}
                               </div>
                               {(p.dias_asignados ?? []).length ? (
                                 <small className="cortes-incluye">
@@ -919,7 +1020,11 @@ export function CortesPanel({
                     </div>
                     <h3>
                       Sugerencia:{" "}
-                      {sugerencia.tipo === "cierre" ? describirCierre(sugerencia) : cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}
+                      {sugerencia.tipo === "cierre"
+                        ? describirCierre(sugerencia)
+                        : sugerencia.tipo === "skus"
+                          ? describirSkus(sugerencia, filaActual.skus ?? [])
+                          : cortesMovidos(sugerencia).map(describirMovimiento).join(" y ")}
                     </h3>
                     <div className="cortes-antes-despues">
                       {sugerencia.afectados.map((a) => (
@@ -939,7 +1044,12 @@ export function CortesPanel({
                           onClick={() =>
                             void editar(
                               "aplicar",
-                              { pago_id: pago.pago_id, cambios: sugerencia.cambios, dias: sugerencia.dias_asignar ?? [] },
+                              {
+                                pago_id: pago.pago_id,
+                                cambios: sugerencia.cambios,
+                                dias: sugerencia.dias_asignar ?? [],
+                                bloques: sugerencia.bloques_asignar ?? []
+                              },
                               "Sugerencia aplicada."
                             )
                           }
@@ -979,31 +1089,37 @@ export function CortesPanel({
                         </button>
                       </p>
                     ) : null}
-                    {huecosCierre.map((h) => {
-                      const dd: string[] = [];
-                      for (let d = h.ini; d <= h.fin; d = sumarDias(d, 1)) dd.push(d);
-                      return (
-                        <div className="cortes-dias" key={h.ini}>
-                          {dd.map((d) => {
-                            const ocupado = asignadosAOtros.has(d) || diasPropios.includes(d);
-                            return (
-                              <button
-                                aria-pressed={diasElegidos.includes(d)}
-                                className={`cortes-dia${diasElegidos.includes(d) ? " is-mv" : ""}${ocupado ? " is-asignado" : ""}`}
-                                disabled={!puedeActuar || ocupado}
-                                key={d}
-                                onClick={() => alternarDia(d)}
-                                title={ocupado ? "Ya está asignado a un pago" : "Marcar para incluirlo en este pago"}
-                                type="button"
-                              >
-                                <small>{fechaConDia(d).replace(" ", "\n")}</small>
-                                {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
+                    <div className="cortes-cierres">
+                      {huecosCierreOrdenados.map((h, i) => {
+                        const dd: string[] = [];
+                        for (let d = h.ini; d <= h.fin; d = sumarDias(d, 1)) dd.push(d);
+                        return (
+                          <div className={`cortes-cierre${i === 0 ? " is-cercano" : ""}`} key={h.ini}>
+                            <b>Cierre de {etiquetaMes(h.ini.slice(0, 7))}</b>
+                            <small>{i === 0 ? "El más cercano a este pago" : `A ${diasDeDistancia(h)} días de este pago`}</small>
+                            <div className="cortes-dias">
+                              {dd.map((d) => {
+                                const ocupado = asignadosAOtros.has(d) || diasPropios.includes(d);
+                                return (
+                                  <button
+                                    aria-pressed={diasElegidos.includes(d)}
+                                    className={`cortes-dia${diasElegidos.includes(d) ? " is-mv" : ""}${ocupado ? " is-asignado" : ""}`}
+                                    disabled={!puedeActuar || ocupado}
+                                    key={d}
+                                    onClick={() => alternarDia(d)}
+                                    title={ocupado ? "Ya está asignado a un pago" : "Marcar para incluirlo en este pago"}
+                                    type="button"
+                                  >
+                                    <small>{fechaConDia(d).replace(" ", "\n")}</small>
+                                    {dias.get(d) ? `${(dias.get(d)! / 1000).toFixed(1)}k` : "—"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                     {diasElegidos.length ? (
                       <>
                         <p>
@@ -1033,6 +1149,126 @@ export function CortesPanel({
                       </>
                     ) : huecosCierre.length ? (
                       <p className="hydro-muted">Marca los días que quieras sumar a este pago.</p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {lineasPago?.lineas.length ? (
+                <div className="cortes-bloque">
+                  <div className="cortes-caja">
+                    <h3>Pagado por línea del pedido</h3>
+                    <p className="hydro-muted">
+                      {lineasPago.posicion ? `${lineasPago.posicion}. ` : ""}Cada línea de pasivo temporal de SAP es una familia de producto.
+                    </p>
+                    <table className="cortes-lineas">
+                      <thead>
+                        <tr>
+                          <th>Línea</th>
+                          <th>Pagado</th>
+                          <th>Calculado</th>
+                          <th>Dif.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lineasPago.lineas.map((l) => (
+                          <tr className={Math.abs(l.diferencia) > 10 ? "is-dif" : ""} key={l.linea}>
+                            <td>
+                              {l.linea} · {l.familia}
+                            </td>
+                            <td>{pesos(l.pagado)}</td>
+                            <td>{pesos(l.calculado)}</td>
+                            <td>{textoDiferencia(l.diferencia)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              {(filaActual.skus ?? []).length ? (
+                <div className="cortes-bloque">
+                  <div className="cortes-caja">
+                    <h3>4 SKUs de Botana</h3>
+                    <p className="hydro-muted">
+                      Hasta agosto estos 4 materiales no se pagaron en su semana. Marca las semanas que este pago sí incluyó y verás cómo se reduce la diferencia.
+                    </p>
+                    <div className="cortes-skus">
+                      {semanasSkus.map((b) => {
+                        const aqui = b.pago_id === pago.pago_id;
+                        const destino = b.pago_id ? filaActual.pagos.find((p) => p.pago_id === b.pago_id) : null;
+                        const elegida = skusElegidos.includes(b.ini);
+                        const editable = puedeEditar && !consolidado;
+                        return (
+                          <div className={`cortes-sku${aqui ? " is-aqui" : ""}${elegida ? " is-elegida" : ""}`} key={b.ini}>
+                            {editable && !aqui ? (
+                              <input
+                                aria-label={`Incluir la semana ${rangoCorto(b.ini, b.fin)}`}
+                                checked={elegida}
+                                disabled={!puedeActuar}
+                                onChange={() => setSkusElegidos((l) => (l.includes(b.ini) ? l.filter((x) => x !== b.ini) : [...l, b.ini]))}
+                                type="checkbox"
+                              />
+                            ) : (
+                              <span />
+                            )}
+                            <b>{rangoCorto(b.ini, b.fin)}</b>
+                            <span>{pesos(b.comision)}</span>
+                            <small>
+                              {aqui
+                                ? "En este pago"
+                                : !b.pago_id
+                                  ? "Sin pagar"
+                                  : destino?.ini && destino.fin
+                                    ? `En el pago ${rangoCorto(destino.ini, destino.fin)}`
+                                    : "En otro pago"}
+                            </small>
+                            {editable && aqui ? (
+                              <button
+                                className="cortes-ir"
+                                disabled={!puedeActuar}
+                                onClick={() =>
+                                  void editar("mover-skus", { bloques_ini: [b.ini], pago_id: null }, "Semana de 4 SKUs quitada de este pago.", false)
+                                }
+                                type="button"
+                              >
+                                Quitar
+                              </button>
+                            ) : (
+                              <span />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {skusElegidos.length ? (
+                      <>
+                        <p>
+                          Marcaste {skusElegidos.length} semana(s), {pesos(sumaSkusElegida)}. La diferencia pasa de{" "}
+                          <b>{textoDiferencia(pago.diferencia)}</b> a <b>{textoDiferencia((pago.diferencia ?? 0) + sumaSkusElegida)}</b>.
+                        </p>
+                        <div className="cortes-acciones">
+                          <button
+                            className="cortes-boton is-primario"
+                            disabled={!puedeActuar}
+                            onClick={() =>
+                              void editar(
+                                "mover-skus",
+                                { bloques_ini: skusElegidos, pago_id: pago.pago_id },
+                                "Semanas de 4 SKUs incluidas en este pago.",
+                                false
+                              )
+                            }
+                            type="button"
+                          >
+                            Incluir en este pago
+                          </button>
+                          <button className="cortes-boton" onClick={() => setSkusElegidos([])} type="button">
+                            Limpiar
+                          </button>
+                        </div>
+                      </>
                     ) : null}
                   </div>
                 </div>
@@ -1105,6 +1341,11 @@ export function CortesPanel({
                       : "Consolidar este pago"}
                   </button>
                   <span>{puedeEditar ? "Congela los dos cortes de este pago." : "Solo lectura: tu rol no puede editar los cortes."}</span>
+                  {(pago.skus_propios ?? []).some((b) => !b.pago_id) ? (
+                    <span className="cortes-aviso-skus">
+                      Esta semana tiene {pesos((pago.skus_propios ?? []).filter((b) => !b.pago_id).reduce((t, b) => t + b.comision, 0))} de 4 SKUs sin pagar.
+                    </span>
+                  ) : null}
                 </div>
               )}
 

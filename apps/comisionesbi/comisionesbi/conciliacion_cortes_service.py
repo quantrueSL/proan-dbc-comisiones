@@ -52,8 +52,15 @@ from comisionesbi.conciliacion_engine import cobertura
 from comisionesbi.db import run_query
 
 _TABLA_PAGO_DOC = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_documento`"
+
+# Documentos que no se muestran: su texto no sigue el patrón de las comisiones semanales y quedaban sin división ni ventana
+# ("COMISION DE LECHE", $575; "COMISION RUTA ESPECIALIZADA CROQUETA", $5,105). Igual que el filtro de la tabla, que al
+# recargarse ya no los trae; aquí se quitan para que desaparezcan sin esperar la recarga.
+DOCS_EXCLUIDOS = ("DBC|2026|5100003892", "DBC|2025|5100019700")
+_FILTRO_DOCS_EXCLUIDOS = "doc_id NOT IN (" + ", ".join(f"'{d}'" for d in DOCS_EXCLUIDOS) + ")"
 _TABLA_DIARIA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_producto_diario`"
 _TABLA_VENDORS = "`proan-quantrue.D20_DIMENSION.dm_vendors`"
+_TABLA_LINEA = "`proan-quantrue.D60_REPORTING.DBC_gold_conciliacion_pago_linea`"
 
 # Divisiones que se pagan en el mismo documento que otra: el pago de Huevo de DBC cubre también Abarrotes
 # (confirmado con el cliente; con Abarrotes sumado cuadran 339 de 807 pagos en vez de 192). Se calcula en bloque.
@@ -77,6 +84,7 @@ LEFT JOIN (
 WHERE (@sociedad IS NULL OR d.sociedad = @sociedad)
   AND (@division IS NULL OR d.division_code = @division)
   AND (@comisionista_id IS NULL OR d.comisionista_id = @comisionista_id)
+  AND d.{_FILTRO_DOCS_EXCLUIDOS}
   AND (
     (d.ventana_valida AND d.desde_texto <= @fin_ext AND d.hasta_texto >= @ini_ext)
     OR (NOT d.ventana_valida AND d.fecha_pago BETWEEN @ini AND @fin_pago)
@@ -86,15 +94,38 @@ WHERE (@sociedad IS NULL OR d.sociedad = @sociedad)
 # `division_pago` es la división con la que se paga: Abarrotes de DBC se cobra junto con Huevo.
 _DIVISION_PAGO_SQL = "IF(sociedad = 'DBC' AND division_code = 'A', 'H', division_code)"
 
+# Botana hasta agosto: la comisión de estos 4 materiales no se pagó en su semana (se paga aparte, poco a poco);
+# se separa del cálculo de la semana y cada semana se mueve entera al pago que la pagó.
+SKUS_DIFERIDOS = ("17126", "17401", "17402", "17630")
+SKUS_DIFERIDOS_HASTA = date(2026, 8, 31)
+_ES_SKU_DIFERIDO_SQL = (
+    "(division_code = 'BO' AND LTRIM(matnr, '0') IN ("
+    + ", ".join(f"'{m}'" for m in SKUS_DIFERIDOS)
+    + f") AND fecha <= DATE '{SKUS_DIFERIDOS_HASTA.isoformat()}')"
+)
+
 _DIARIO_SQL = f"""
 SELECT sociedad, comisionista_id, {_DIVISION_PAGO_SQL} AS division_code, division_code AS origen,
-       fecha, SUM(comision_total) AS comision
+       fecha, SUM(IF({_ES_SKU_DIFERIDO_SQL}, 0, comision_total)) AS comision
 FROM {_TABLA_DIARIA}
 WHERE fecha BETWEEN @ini_ext AND @fin_ext
   AND (@sociedad IS NULL OR sociedad = @sociedad)
   AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
   AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
 GROUP BY 1, 2, 3, 4, 5
+"""
+
+# La comisión diaria de los 4 SKUs de enero al corte, sin importar el rango pedido: una semana de julio se puede mover a un pago de octubre.
+_SKUS_SQL = f"""
+SELECT sociedad, comisionista_id, {_DIVISION_PAGO_SQL} AS division_code, fecha, SUM(comision_total) AS comision_4sku
+FROM {_TABLA_DIARIA}
+WHERE fecha BETWEEN DATE '2026-01-01' AND DATE '{SKUS_DIFERIDOS_HASTA.isoformat()}'
+  AND {_ES_SKU_DIFERIDO_SQL}
+  AND (@sociedad IS NULL OR sociedad = @sociedad)
+  AND (@division IS NULL OR {_DIVISION_PAGO_SQL} = @division)
+  AND (@comisionista_id IS NULL OR comisionista_id = @comisionista_id)
+GROUP BY 1, 2, 3, 4
+HAVING SUM(comision_total) > 0
 """
 
 # Total de comisión por día de todos los comisionistas: de ahí sale el último día con cobros de cada mes.
@@ -222,7 +253,7 @@ def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, 
         "comisionista_id": ("STRING", comisionista_id),
     }
     # Las consultas son independientes: en paralelo, la espera es la de la más lenta.
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         f_docs = pool.submit(run_query, _DOCS_SQL, "los pagos por documento", params)
         f_diario = pool.submit(
             run_query,
@@ -231,7 +262,13 @@ def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, 
             {k: v for k, v in params.items() if k not in ("ini", "fin_pago")},
         )
         f_cobertura = pool.submit(cobertura) if con_cobertura else None
-        filas_docs, filas_diario = f_docs.result(), f_diario.result()
+        f_skus = pool.submit(
+            run_query,
+            _SKUS_SQL,
+            "la comisión de los 4 SKUs",
+            {k: v for k, v in params.items() if k in ("sociedad", "division", "comisionista_id")},
+        )
+        filas_docs, filas_diario, filas_skus = f_docs.result(), f_diario.result(), f_skus.result()
         cobertura_datos = f_cobertura.result() if f_cobertura else None
     nombres = {r["comisionista_id"]: r.get("comisionista") for r in filas_docs}
     info_docs = {
@@ -246,6 +283,7 @@ def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, 
     }
     docs = [DocPago.desde_fila(r) for r in filas_docs]
     suma: dict[tuple, float] = {}
+    suma4: dict[tuple, float] = {}
     partes: dict[FilaKey, dict[str, dict]] = {}
     for r in filas_diario:
         comision = float(r["comision"] or 0.0)
@@ -254,9 +292,13 @@ def _datos(mes: "str | tuple[date, date]", sociedad, division, comisionista_id, 
         origen = r.get("origen") or r["division_code"]
         por_fecha = partes.setdefault(fila_key, {}).setdefault(origen, {})
         por_fecha[r["fecha"]] = por_fecha.get(r["fecha"], 0.0) + comision
+    for r in filas_skus:
+        k = (r["sociedad"], r["comisionista_id"], r["division_code"], r["fecha"])
+        suma4[k] = suma4.get(k, 0.0) + float(r["comision_4sku"] or 0.0)
     diario = [
-        {"sociedad": s, "comisionista_id": c, "division_code": d, "fecha": f, "comision": m}
-        for (s, c, d, f), m in suma.items()
+        {"sociedad": s, "comisionista_id": c, "division_code": d, "fecha": f, "comision": suma.get((s, c, d, f), 0.0),
+         "comision_4sku": suma4.get((s, c, d, f), 0.0)}
+        for (s, c, d, f) in {*suma, *suma4}
     ]
     datos = (ini, fin, docs, diario, nombres, cobertura_datos, partes, info_docs)
     if ttl:
@@ -291,6 +333,7 @@ def _sugerencia_json(s: Sugerencia | None) -> dict | None:
             {"pago_id": c.pago_id, "borde": c.borde, "de": _iso(c.de), "a": _iso(c.a)} for c in s.cambios
         ],
         "dias_asignar": [_iso(d) for d in s.dias_asignar],
+        "bloques_asignar": [_iso(d) for d in s.bloques_asignar],
         "afectados": [
             {
                 "pago_id": a.pago_id,
@@ -304,6 +347,10 @@ def _sugerencia_json(s: Sugerencia | None) -> dict | None:
             for a in s.afectados
         ],
     }
+
+
+def _sku_json(b: dict) -> dict:
+    return {**b, "ini": _iso(b["ini"]), "fin": _iso(b["fin"])}
 
 
 def _pago_json(p: PagoResuelto, info_docs: dict | None = None, doc: DocFila | None = None) -> dict:
@@ -324,6 +371,8 @@ def _pago_json(p: PagoResuelto, info_docs: dict | None = None, doc: DocFila | No
         "estado": p.estado,
         "sin_calculo": p.sin_calculo,
         "dias_asignados": [_iso(d) for d in p.dias_asignados],
+        "skus_incluidos": [_sku_json(b) for b in p.skus_incluidos],
+        "skus_propios": [_sku_json(b) for b in p.skus_propios],
         "drift": p.drift,
         "drift_pagado": p.drift_pagado,
         "comentarios": (doc.comentarios.get(p.pago_id, []) if doc else []),
@@ -406,6 +455,7 @@ def _fila_json(
         # Divisiones que este pago cubre además de la suya (Huevo de DBC paga también Abarrotes).
         "junta_con": list(DIVISIONES_JUNTAS.get((sociedad, division_code), ())),
         "pagos": [_pago_json(p, info_docs, doc) for p in pagos],
+        "skus": [_sku_json(b) for b in fila.skus],
         "huerfanos": _huerfanos(fila, doc, rango),
         "lote": lote or [],
         "huecos": [
@@ -464,13 +514,14 @@ def _num(v):
 _SUMAS_PRODUCTO = ("num_lineas", "cantidad_venta_total", "monto_total", "cantidad_base_total", "comision_total", "lineas_sin_comision")
 
 
-def _productos(diario: list[dict], ini: date, fin: date) -> list[dict]:
+def _productos(diario: list[dict], ini: date, fin: date, bloques: list[tuple[date, date]] | None = None) -> list[dict]:
     """El diario sumado por periodo y producto (la hoja "Conciliación" de la pestaña vigente): la ventana del pago es un
     periodo y cada día de cierre asignado a mano, otro."""
     grupos: dict[tuple, dict] = {}
     for r in diario:
         dia = date.fromisoformat(r["fecha"])
-        desde, hasta = (ini, fin) if ini <= dia <= fin else (dia, dia)
+        bloque = next(((a, b) for a, b in (bloques or ()) if a <= dia <= b), None) if r.get("sku_diferido") else None
+        desde, hasta = bloque or ((ini, fin) if ini <= dia <= fin else (dia, dia))
         llave = (desde, hasta) + tuple(r.get(c) for c in ("division_code", "cedis", "oficina", "tipo_venta", "matnr", "descripcion", "unidad_venta", "unidad_tarifa"))
         g = grupos.setdefault(
             llave,
@@ -483,14 +534,16 @@ def _productos(diario: list[dict], ini: date, fin: date) -> list[dict]:
 
 
 def build_export_pago(
-    *, sociedad: str, comisionista_id: str, division_code: str | None, ini: date, fin: date, dias: list[date] | None = None
+    *, sociedad: str, comisionista_id: str, division_code: str | None, ini: date, fin: date, dias: list[date] | None = None,
+    skus: list[tuple[date, date]] | None = None,
 ) -> dict:
     """Todo lo que lleva el Excel de UN pago: los cobros de su ventana (más los días de cierre que tenga asignados)
     por producto, por día y por línea de factura, con su división de origen (Huevo y Abarrotes juntos)."""
     asignados = sorted(set(dias or ()))
+    bloques = sorted(set(skus or ()))
     params = {
-        "ini": ("DATE", min([ini, *asignados])),
-        "fin": ("DATE", max([fin, *asignados])),
+        "ini": ("DATE", min([ini, *asignados, *(a for a, _ in bloques)])),
+        "fin": ("DATE", max([fin, *asignados, *(b for _, b in bloques)])),
         "sociedad": ("STRING", sociedad),
         "comisionista_id": ("STRING", comisionista_id),
         "division": ("STRING", division_code),
@@ -500,16 +553,29 @@ def build_export_pago(
         f_factura = pool.submit(run_query, _FACTURA_PAGO_SQL, "el detalle de factura del pago", params)
         diario, factura = f_diario.result(), f_factura.result()
 
-    def motivo(dia: date) -> str | None:
+    def es_sku(r: dict, campo: str) -> bool:
+        return (
+            r.get("division_code") == "BO"
+            and str(r.get("matnr") or "").lstrip("0") in SKUS_DIFERIDOS
+            and r[campo] <= SKUS_DIFERIDOS_HASTA
+        )
+
+    def motivo(dia: date, sku: bool) -> str | None:
+        if sku:
+            # Los 4 SKUs solo van con la semana que se movió a este pago, esté o no dentro de su ventana.
+            b = next(((a, z) for a, z in bloques if a <= dia <= z), None)
+            return f"4 SKUs de la semana {b[0].isoformat()} a {b[1].isoformat()}" if b else None
         if ini <= dia <= fin:
             return "Ventana del pago"
         return "Cierre de mes asignado" if dia in asignados else None
 
     def limpio(r: dict, campo: str) -> dict | None:
-        m = motivo(r[campo]) if r.get(campo) else None
+        sku = bool(r.get(campo)) and es_sku(r, campo)
+        m = motivo(r[campo], sku) if r.get(campo) else None
         if m is None:
             return None
         salida = {k: _num(v) for k, v in r.items()}
+        salida["sku_diferido"] = sku
         for c in ("fecha", "fecha_cobro"):
             if c in salida:
                 salida[c] = _iso(salida[c])
@@ -524,10 +590,142 @@ def build_export_pago(
         "ini": ini.isoformat(),
         "fin": fin.isoformat(),
         "dias": [_iso(d) for d in asignados],
-        "productos": _productos(diario_p, ini, fin),
+        "skus": [{"ini": a.isoformat(), "fin": b.isoformat()} for a, b in bloques],
+        "productos": _productos(diario_p, ini, fin, bloques),
         "diario": diario_p,
         "factura": factura_p,
     }
+
+
+# Lo que SAP pagó en cada línea de pasivo temporal del documento (detalle del pedido de la comisión).
+_LINEAS_SQL = f"""
+SELECT linea, pedido, posicion, texto_posicion, SUM(importe) AS importe
+FROM {_TABLA_LINEA}
+WHERE doc_id IN (@d0, @d1, @d2, @d3)
+GROUP BY 1, 2, 3, 4
+ORDER BY linea
+"""
+
+_FAMILIAS_SQL = f"""
+SELECT fecha, LTRIM(matnr, '0') AS matnr, descripcion, SUM(comision_total) AS comision
+FROM {_TABLA_DIARIA}
+WHERE fecha BETWEEN @ini AND @fin AND sociedad = @sociedad AND comisionista_id = @comisionista_id AND division_code = 'BO'
+GROUP BY 1, 2, 3
+"""
+
+# Botana: la línea 01 del pedido es VUALA en tira, la 02 SW (cake y roll) y la 03 BIG (medido con José, 2026-10-29).
+FAMILIAS_BOTANA = {"01": "VUALA en tira", "02": "SW (cake y roll)", "03": "BIG"}
+
+
+def _familia_botana(descripcion: str | None) -> str:
+    d = (descripcion or "").upper()
+    return "03" if "BIG " in d else "02" if "SW " in d else "01"
+
+
+def build_lineas_pago(
+    *, sociedad: str, comisionista_id: str, division_code: str | None, docs: list[str], ini: date, fin: date,
+    dias: list[date] | None = None, skus: list[tuple[date, date]] | None = None,
+) -> dict:
+    """Pagado por línea del pedido contra calculado por familia de producto (solo Botana, que es donde las
+    líneas son familias). El calculado cubre lo mismo que el pago: su ventana, los días de cierre asignados y
+    las semanas de 4 SKUs que incluye."""
+    if division_code != "BO" or not docs:
+        return {"lineas": []}
+    asignados, bloques = set(dias or ()), sorted(set(skus or ()))
+    ids = (list(docs) + [None] * 4)[:4]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_lineas = pool.submit(
+            run_query, _LINEAS_SQL, "las líneas del pedido del pago", {f"d{i}": ("STRING", d) for i, d in enumerate(ids)}
+        )
+        f_calc = pool.submit(
+            run_query,
+            _FAMILIAS_SQL,
+            "el calculado por familia del pago",
+            {
+                "ini": ("DATE", min([ini, *asignados, *(a for a, _ in bloques)])),
+                "fin": ("DATE", max([fin, *asignados, *(b for _, b in bloques)])),
+                "sociedad": ("STRING", sociedad),
+                "comisionista_id": ("STRING", comisionista_id),
+            },
+        )
+        lineas, calc = f_lineas.result(), f_calc.result()
+    calculado: dict[str, float] = {}
+    for r in calc:
+        dia = r["fecha"]
+        if r["matnr"] in SKUS_DIFERIDOS and dia <= SKUS_DIFERIDOS_HASTA:
+            incluida = any(a <= dia <= b for a, b in bloques)
+        else:
+            incluida = ini <= dia <= fin or dia in asignados
+        if incluida:
+            f = _familia_botana(r["descripcion"])
+            calculado[f] = calculado.get(f, 0.0) + float(r["comision"] or 0.0)
+    pagado = {r["linea"]: float(r["importe"] or 0.0) for r in lineas}
+    posicion = next((r["texto_posicion"] for r in lineas if r.get("texto_posicion")), None)
+    filas = [
+        {
+            "linea": f,
+            "familia": FAMILIAS_BOTANA.get(f, f),
+            "pagado": round(pagado.get(f, 0.0), 2),
+            "calculado": round(calculado.get(f, 0.0), 2),
+            "diferencia": round(calculado.get(f, 0.0) - pagado.get(f, 0.0), 2),
+        }
+        for f in sorted(set(pagado) | set(calculado) | set(FAMILIAS_BOTANA))
+    ]
+    return {"posicion": posicion, "lineas": filas if pagado else []}
+
+
+# Lo pagado y lo calculado del año por sociedad y división, sin resolver pago por pago (rápido). Pagado: los pagos cuya
+# ventana cae en el año (los sin ventana, por la fecha en que se pagaron). Calculado: la comisión de los cobros del año
+# (Abarrotes de DBC dentro de Huevo, y los 4 SKUs de Botana aparte hasta el corte, que no se pagaron en su semana).
+_ANIO_PAGADO_SQL = f"""
+SELECT sociedad, division_code, SUM(pagado) AS pagado
+FROM {_TABLA_PAGO_DOC}
+WHERE IF(ventana_valida, EXTRACT(YEAR FROM desde_texto), EXTRACT(YEAR FROM fecha_pago)) = @anio
+  AND {_FILTRO_DOCS_EXCLUIDOS}
+GROUP BY 1, 2
+"""
+
+_ANIO_CALCULADO_SQL = f"""
+SELECT sociedad, {_DIVISION_PAGO_SQL} AS division_code,
+  SUM(IF({_ES_SKU_DIFERIDO_SQL}, 0, comision_total)) AS calculado,
+  SUM(IF({_ES_SKU_DIFERIDO_SQL}, comision_total, 0)) AS skus
+FROM {_TABLA_DIARIA}
+WHERE EXTRACT(YEAR FROM fecha) = @anio
+GROUP BY 1, 2
+"""
+
+
+_ANIO_CACHE: dict[int, tuple[float, dict]] = {}
+
+
+def build_anio(*, anio: int) -> dict:
+    """Pagado y calculado del año por sociedad y división, y lo que quedó apartado de los 4 SKUs de Botana."""
+    hit = _ANIO_CACHE.get(anio)
+    ttl = _cache_ttl_seconds()
+    if ttl and hit and hit[0] > time.monotonic():
+        return hit[1]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_pagado = pool.submit(run_query, _ANIO_PAGADO_SQL, "el pagado del año", {"anio": ("INT64", anio)})
+        f_calc = pool.submit(run_query, _ANIO_CALCULADO_SQL, "el calculado del año", {"anio": ("INT64", anio)})
+        pagado, calculado = f_pagado.result(), f_calc.result()
+    filas: dict[tuple, dict] = {}
+    skus = 0.0
+    for r in pagado:
+        f = filas.setdefault((r["sociedad"], r["division_code"]), {"pagado": 0.0, "calculado": 0.0})
+        f["pagado"] += float(r["pagado"] or 0.0)
+    for r in calculado:
+        f = filas.setdefault((r["sociedad"], r["division_code"]), {"pagado": 0.0, "calculado": 0.0})
+        f["calculado"] += float(r["calculado"] or 0.0)
+        skus += float(r["skus"] or 0.0)
+    salida = [
+        {"sociedad": s, "division_code": d, "pagado": round(v["pagado"], 2), "calculado": round(v["calculado"], 2)}
+        for (s, d), v in sorted(filas.items(), key=lambda x: (x[0][0], x[0][1] or ""))
+        if v["pagado"] or v["calculado"]
+    ]
+    resultado = {"anio": anio, "filas": salida, "skus_apartados": round(skus, 2)}
+    if ttl:
+        _ANIO_CACHE[anio] = (time.monotonic() + 5 * ttl, resultado)
+    return resultado
 
 
 def _vista_fila(mes: str, key: FilaKey, doc: DocFila) -> dict:
@@ -539,7 +737,8 @@ def _vista_fila(mes: str, key: FilaKey, doc: DocFila) -> dict:
     if not pagos:
         return {"mes": mes, "fila": None, "dias": [], "dias_partes": {}}
     dias = {r["fecha"]: r["comision"] for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key}
-    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado(), cierres=cierres)
+    serie, serie4 = _series(diario, key)
+    fila = resolver_fila(key, pagos, serie, doc.a_estado(), cierres=cierres, serie4=serie4)
     return {
         "mes": mes,
         "fila": _fila_json(
@@ -601,9 +800,18 @@ def _contexto_edicion(mes: str, key: FilaKey, version: int):
     pagos = agrupar_pagos(docs, cierres=cierres).get(key)
     if not pagos:
         raise ErrorCorte("fila_inexistente", "No hay pagos de esa fila en el rango cargado.")
-    dias = {r["fecha"]: r["comision"] for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key}
-    fila = resolver_fila(key, pagos, SerieDiaria(dias), doc.a_estado(), cierres=cierres)
+    serie, serie4 = _series(diario, key)
+    fila = resolver_fila(key, pagos, serie, doc.a_estado(), cierres=cierres, serie4=serie4)
     return doc, fila
+
+
+def _series(diario: list[dict], key: FilaKey) -> tuple[SerieDiaria, SerieDiaria]:
+    """Comisión diaria de la fila (sin los 4 SKUs diferidos) y la de esos 4 SKUs."""
+    propios = [r for r in diario if (r["sociedad"], r["comisionista_id"], r["division_code"]) == key]
+    return (
+        SerieDiaria({r["fecha"]: r["comision"] for r in propios if r["comision"]}),
+        SerieDiaria({r["fecha"]: r.get("comision_4sku") or 0.0 for r in propios}),
+    )
 
 
 def _pago(fila: FilaResuelta, pago_id: str) -> PagoResuelto:
@@ -623,7 +831,7 @@ def _ov_json(overrides: dict, ids=None) -> dict:
 
 def _escribir(
     mes, key, doc, usuario, tipo, *, pago_id, overrides=None, descartadas=None, consolidados=None,
-    consolidados_info=None, dias_asignados=None, comentarios=None, detalle=None,
+    consolidados_info=None, dias_asignados=None, comentarios=None, skus_movidos=None, detalle=None,
 ) -> DocFila:
     """Guarda el nuevo estado de la fila (transacción con la versión que se leyó) y su evento en el historial."""
     nuevo = DocFila(
@@ -634,6 +842,7 @@ def _escribir(
         consolidados_info=doc.consolidados_info if consolidados_info is None else consolidados_info,
         dias_asignados=doc.dias_asignados if dias_asignados is None else dias_asignados,
         comentarios=doc.comentarios if comentarios is None else comentarios,
+        skus_movidos=doc.skus_movidos if skus_movidos is None else skus_movidos,
     )
     cambiados = {
         pid for pid in set(doc.overrides) | set(nuevo.overrides) if doc.overrides.get(pid) != nuevo.overrides.get(pid)
@@ -681,7 +890,7 @@ def _firma(cambios) -> set:
     }
 
 
-def aplicar_sugerencia(*, mes, key, pago_id, cambios_vistos, version, usuario, dias_vistos=None) -> dict:
+def aplicar_sugerencia(*, mes, key, pago_id, cambios_vistos, version, usuario, dias_vistos=None, bloques_vistos=None) -> dict:
     doc, fila = _contexto_edicion(mes, key, version)
     sugerencia = _pago(fila, pago_id).sugerencia
     if sugerencia is None:
@@ -690,7 +899,14 @@ def aplicar_sugerencia(*, mes, key, pago_id, cambios_vistos, version, usuario, d
         raise ErrorCorte("sugerencia_distinta", "La sugerencia cambió desde que la viste. Revisa la nueva.")
     if dias_vistos is not None and {_iso(d) for d in dias_vistos} != {_iso(d) for d in sugerencia.dias_asignar}:
         raise ErrorCorte("sugerencia_distinta", "La sugerencia cambió desde que la viste. Revisa la nueva.")
+    if bloques_vistos is not None and {_iso(d) for d in bloques_vistos} != {_iso(d) for d in sugerencia.bloques_asignar}:
+        raise ErrorCorte("sugerencia_distinta", "La sugerencia cambió desde que la viste. Revisa la nueva.")
     descartadas = {k: v for k, v in doc.descartadas.items() if k != pago_id}
+    if sugerencia.tipo == "skus":
+        nuevo = {**doc.skus_movidos, **{ini: pago_id for ini in sugerencia.bloques_asignar}}
+        return _guardar(mes, key, doc, usuario, "aplicar_sugerencia", pago_id=pago_id, skus_movidos=nuevo,
+                        descartadas=descartadas,
+                        detalle={"bloques": ",".join(_iso(d) for d in sugerencia.bloques_asignar)})
     if sugerencia.tipo == "cierre":
         return _guardar(mes, key, doc, usuario, "aplicar_sugerencia", pago_id=pago_id,
                         dias_asignados=fila.con_dias(sugerencia), descartadas=descartadas,
@@ -737,6 +953,32 @@ def asignar_dias(*, mes, key, pago_id, dias: list[date], version, usuario) -> di
         nuevo[pago_id] = sorted(set(dias))
     return _guardar(mes, key, doc, usuario, "asignar_dias", pago_id=pago_id, dias_asignados=nuevo,
                     detalle={"dias": ",".join(_iso(d) for d in sorted(set(dias)))})
+
+
+def mover_skus(*, mes, key, bloques_ini: list[date], pago_id: str | None, version, usuario) -> dict:
+    """Mueve las semanas de los 4 SKUs que empiezan en `bloques_ini` al pago dado; sin pago, vuelven a quedar sin pagar."""
+    doc, fila = _contexto_edicion(mes, key, version)
+    inis = sorted(set(bloques_ini))
+    if not inis:
+        raise ErrorCorte("bloque_inexistente", "Elige al menos una semana.")
+    actuales = {}
+    for ini in inis:
+        bloque = next((b for b in fila.skus if b["ini"] == ini), None)
+        if bloque is None:
+            raise ErrorCorte("bloque_inexistente", "Esa semana ya no tiene comisión de los 4 SKUs.")
+        actuales[ini] = bloque["pago_id"]
+    for pid in {pago_id, *actuales.values()} - {None}:
+        if _pago(fila, pid).estado == CONSOLIDADO:
+            raise ErrorCorte("corte_congelado", "El pago está consolidado.")
+    if pago_id and _pago(fila, pago_id).ini is None:
+        raise ErrorCorte("sin_ventana", "El pago no tiene ventana.")
+    nuevo = {k: v for k, v in doc.skus_movidos.items() if k not in inis}
+    if pago_id:
+        nuevo.update({ini: pago_id for ini in inis})
+    origenes = sorted({p for p in actuales.values() if p})
+    return _guardar(mes, key, doc, usuario, "mover_skus", pago_id=pago_id or (origenes[0] if origenes else ""),
+                    skus_movidos=nuevo,
+                    detalle={"bloques": ",".join(i.isoformat() for i in inis), "destino": pago_id or "", "origen": ",".join(origenes)})
 
 
 MAX_COMENTARIO = 1000
