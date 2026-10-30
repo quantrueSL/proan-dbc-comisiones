@@ -1,25 +1,31 @@
 import type { Metadata } from "next";
-import { Bodoni_Moda, Montserrat, Raleway } from "next/font/google";
+import localFont from "next/font/local";
 import type { ReactNode } from "react";
 import "./globals.css";
 import { SkinStyles, skinBranding } from "@/skin";
 
-const montserrat = Montserrat({
-  subsets: ["latin"],
+// Fuentes guardadas en el repo (subconjunto latino de Google Fonts, variables: un archivo cubre todos los pesos).
+// Con next/font/google el build las descargaba cada vez y fallaba cuando Google respondía raro a Cloud Build.
+const montserrat = localFont({
+  src: "./fonts/montserrat-latin.woff2",
   variable: "--font-torrecid-sans",
-  weight: ["300", "400", "500", "600", "700"]
+  weight: "300 700",
+  display: "swap"
 });
 
-const bodoniModa = Bodoni_Moda({
-  subsets: ["latin"],
+const bodoniModa = localFont({
+  src: "./fonts/bodoni-moda-latin.woff2",
   variable: "--font-torrecid-serif",
+  weight: "400 900",
+  display: "swap",
   adjustFontFallback: false
 });
 
-const raleway = Raleway({
-  subsets: ["latin"],
+const raleway = localFont({
+  src: "./fonts/raleway-latin.woff2",
   variable: "--font-nutrex-sans",
-  weight: ["400", "500", "600", "700"]
+  weight: "400 700",
+  display: "swap"
 });
 
 export const metadata: Metadata = {
