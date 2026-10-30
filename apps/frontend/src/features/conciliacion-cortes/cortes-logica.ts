@@ -206,6 +206,28 @@ export function totalesPorColumna(filas: CortesFila[], semanas: SemanaColumna[])
 }
 
 /**
+ * Columnas que se dibujan juntas con la siguiente: aquellas donde hay más pagos que las cruzan y terminan en la de al lado
+ * (p. ej. "22-31 ago" cubre 22-28 y 29-31) que pagos que terminan en ella misma. Los totales de la columna unida suman las dos.
+ * Devuelve el índice de la primera de cada par.
+ */
+export function columnasUnidas(filas: CortesFila[], semanas: SemanaColumna[]): Set<number> {
+  const cruzan = Array.from({ length: semanas.length }, () => 0);
+  const terminan = Array.from({ length: semanas.length }, () => 0);
+  for (const fila of filas) {
+    for (const { colIni, colFin } of posicionarPagos(fila.pagos, semanas)) {
+      terminan[colFin] += 1;
+      if (colFin > colIni) cruzan[colFin - 1] += 1; // lo que cruza hacia la siguiente, contado en la columna de antes
+    }
+  }
+  const unidas = new Set<number>();
+  for (let i = 0; i < semanas.length - 1; i++) {
+    if (unidas.has(i - 1)) continue; // la segunda de un par no se vuelve a unir con la siguiente
+    if (cruzan[i] > terminan[i]) unidas.add(i);
+  }
+  return unidas;
+}
+
+/**
  * Lo que enseñan, atenuado, las columnas que cubre un pago que termina en otra: el pagado y calculado de esos pagos.
  * No se suma a los totales (cada pago cuenta una vez, donde termina); es para que la columna no salga vacía.
  */

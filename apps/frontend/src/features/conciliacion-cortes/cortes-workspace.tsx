@@ -13,6 +13,7 @@ import {
   ETIQUETA_TOTAL,
   agruparPorComisionista,
   cierresSinAsignar,
+  columnasUnidas,
   totalesCubiertos,
   skusSinPagar,
   colaDePagos,
@@ -157,6 +158,10 @@ function ResumenAnio({ anio, division, comisionistaId }: { anio: number; divisio
       ) : null}
     </details>
   );
+}
+
+function sumaColumnas(a: { n: number; pagado: number; calculado: number }, b: { n: number; pagado: number; calculado: number }) {
+  return { n: a.n + b.n, pagado: a.pagado + b.pagado, calculado: a.calculado + b.calculado };
 }
 
 function sumaSkus(l?: { comision: number }[]): number {
@@ -420,6 +425,8 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
   // Total de cada semana de todos los comisionistas a la vista, para el encabezado.
   const totalesSemana = useMemo(() => totalesPorColumna(visibles, semanas), [visibles, semanas]);
   const cubiertasTodas = useMemo(() => totalesCubiertos(visibles, semanas), [visibles, semanas]);
+  // Columnas que se dibujan como una sola (el pago "22-31 ago" cubre 22-28 y 29-31).
+  const unidas = useMemo(() => columnasUnidas(visibles, semanas), [visibles, semanas]);
   const plantilla = { gridTemplateColumns: `minmax(210px, 270px) repeat(${columnas}, minmax(116px, 1fr))` };
 
   const filaSeleccionada = seleccion ? filas.find((f) => f.fila_id === seleccion.filaId) ?? null : null;
@@ -691,11 +698,18 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                 <div className="cortes-fila cortes-fila-cab" style={plantilla}>
                   <span className="cortes-cab-quien">Comisionista / división</span>
                   {semanas.map((s, i) => {
-                    const t = totalesSemana[i];
+                    if (i > 0 && unidas.has(i - 1)) return null;
+                    const j = unidas.has(i) ? i + 1 : i;
+                    const fin = semanas[j].fin;
+                    const t = j === i ? totalesSemana[i] : sumaColumnas(totalesSemana[i], totalesSemana[j]);
                     return (
-                      <span className={`cortes-cab-col${fueraDelMes(s.ini, s.fin) ? " is-fuera" : " is-mes"}`} key={s.ini}>
-                        {rangoCorto(s.ini, s.fin)}
-                        {!t.n && cubiertasTodas[i].n ? (
+                      <span
+                        className={`cortes-cab-col${fueraDelMes(s.ini, fin) ? " is-fuera" : " is-mes"}`}
+                        key={s.ini}
+                        style={j !== i ? { gridColumn: "span 2" } : undefined}
+                      >
+                        {rangoCorto(s.ini, fin)}
+                        {j === i && !t.n && cubiertasTodas[i].n ? (
                           <span
                             className="cortes-cab-tot is-cubierto"
                             title={`Su pago cubre esta semana y se cuenta en ${rangoCorto(semanas[cubiertasTodas[i].hasta].ini, semanas[cubiertasTodas[i].hasta].fin)}`}
@@ -754,9 +768,13 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                             {nDivisiones} {nDivisiones === 1 ? "división" : "divisiones"} · {porRevisar ? `${porRevisar} pago(s) por revisar` : "todo cuadra"}
                           </span>
                         </div>
-                        {totalesCol.slice(0, columnasSemanas).map((c, i) =>
-                          c.n ? (
-                            <div className="cortes-total-col" key={i}>
+                        {totalesCol.slice(0, columnasSemanas).map((c0, i) => {
+                          if (i > 0 && unidas.has(i - 1)) return null;
+                          const j = i < semanas.length && unidas.has(i) ? i + 1 : i;
+                          const c = j === i ? totalesCol[i] : sumaColumnas(totalesCol[i], totalesCol[j]);
+                          const unida = j !== i ? { gridColumn: "span 2" } : undefined;
+                          return c.n ? (
+                            <div className="cortes-total-col" key={i} style={unida}>
                               <span>
                                 <em>Pag.</em> {pesos(c.pagado)}
                               </span>
@@ -789,8 +807,8 @@ export function CortesWorkspace({ hoy, initialCatalog, initialError, initialResp
                                 "—"
                               )}
                             </div>
-                          )
-                        )}
+                          );
+                        })}
                         {haySinAsignar ? <div className="cortes-total-col cortes-asignar">{celdaSinAsignar(sumaSinAsignar(grupo.filas))}</div> : null}
                       </div>
 

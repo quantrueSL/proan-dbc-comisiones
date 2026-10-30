@@ -9,6 +9,7 @@ import {
   describirMovimiento,
   diasQueCambian,
   elementosDeLinea,
+  columnasUnidas,
   totalesCubiertos,
   limitesDeFin,
   esPendiente,
@@ -583,5 +584,28 @@ describe("columnas cubiertas por un pago que termina en otra", () => {
     const t = totalesCubiertos([f], semanas);
     expect(t.map((c) => c.n)).toEqual([0, 1, 0, 0]);
     expect(t[1].hasta).toBe(2);
+  });
+});
+
+describe("columnas que se dibujan juntas", () => {
+  const semanas = [
+    { ini: "2026-08-15", fin: "2026-08-21" },
+    { ini: "2026-08-22", fin: "2026-08-28" },
+    { ini: "2026-08-29", fin: "2026-08-31" },
+    { ini: "2026-09-01", fin: "2026-09-04" }
+  ];
+  it("el pago 22 a 30 ago une la semana 22-28 con la cola 29-31", () => {
+    const f = fila("1", [pago("a", "2026-08-15", "2026-08-21"), pago("b", "2026-08-22", "2026-08-30"), pago("c", "2026-09-01", "2026-09-04")]);
+    expect([...columnasUnidas([f], semanas)]).toEqual([1]);
+  });
+  it("con unos pocos pagos que terminan en 22-28 se unen igual, si la mayoría cruza", () => {
+    const largos = [1, 2, 3].map((n) => fila(`l${n}`, [pago(`a${n}`, "2026-08-22", "2026-08-30")]));
+    const corto = fila("c", [pago("b", "2026-08-22", "2026-08-28"), pago("c", "2026-08-29", "2026-08-31")]);
+    expect([...columnasUnidas([...largos, corto], semanas)]).toEqual([1]);
+  });
+  it("si la mayoría termina en 22-28, no se unen", () => {
+    const cortos = [1, 2].map((n) => fila(`k${n}`, [pago(`b${n}`, "2026-08-22", "2026-08-28"), pago(`c${n}`, "2026-08-29", "2026-08-31")]));
+    const largo = fila("l", [pago("a", "2026-08-22", "2026-08-30")]);
+    expect(columnasUnidas([...cortos, largo], semanas).size).toBe(0);
   });
 });
